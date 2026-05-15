@@ -66,12 +66,11 @@ void setup()
     /*
     ENABLE DEL DRIVER
     --------------------------------------------
-    En muchos DM556:
-    LOW = habilitado
-    HIGH = deshabilitado
+    En nuestro DM556:
+    LOW = deshabilitado
+    HIGH = habilitado
     */
-
-    //digitalWrite(PIN_ENA, LOW);
+    
     digitalWrite(PIN_ENA, HIGH);
     /*
     --------------------------------------------

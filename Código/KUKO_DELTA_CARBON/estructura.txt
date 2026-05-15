@@ -1,0 +1,47 @@
+KUKO_DELTA_CARBON/
+│
+├── include/
+│   ├── Config.h
+│   ├── Pinout.h
+│   ├── Types.h
+│   ├── Constants.h
+│
+├── src/
+│   ├── main.cpp
+│   │
+│   ├── hardware/
+│   │   ├── Motors.cpp
+│   │   ├── Motors.h
+│   │   ├── Encoders.cpp
+│   │   ├── Encoders.h
+│   │   ├── Endstops.cpp
+│   │   ├── Endstops.h
+│   │   ├── Pneumatics.cpp
+│   │   ├── Pneumatics.h
+│   │   ├── Conveyor.cpp
+│   │   ├── Conveyor.h
+│   │
+│   ├── kinematics/
+│   │   ├── DeltaKinematics.cpp
+│   │   ├── DeltaKinematics.h
+│   │
+│   ├── motion/
+│   │   ├── MotionPlanner.cpp
+│   │   ├── MotionPlanner.h
+│   │   ├── Trajectory.cpp
+│   │   ├── Trajectory.h
+│   │
+│   │
+│   ├── robot/
+│   │   ├── Robot.cpp
+│   │   ├── Robot.h
+│   │
+│   ├── tasks/
+│   │   ├── TaskManager.cpp
+│   │   ├── TaskManager.h
+│   │
+│   ├── vision/
+│   │   ├── Vision.cpp
+│   │   ├── Vision.h
+│
+├── platformio.ini
