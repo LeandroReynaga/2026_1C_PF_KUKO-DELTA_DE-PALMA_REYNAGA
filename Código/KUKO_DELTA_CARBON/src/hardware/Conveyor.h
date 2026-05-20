@@ -1,16 +1,13 @@
 #ifndef CONVEYOR_H
 #define CONVEYOR_H
 
+#include "Arduino.h"
+
 class Conveyor
 {
 private:
 
     int pinPWM; // Pin para la cinta transportadora
-
-    int pwmChannel;
-    int pwmFreq;
-    int pwmResolution;
-
     int currentSpeed; // 0-255
 
 public:

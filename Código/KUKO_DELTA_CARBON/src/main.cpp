@@ -2,8 +2,8 @@
 #include "Pinout.h"
 #include "hardware/Conveyor.h"
 
-// Crear objeto cint
-Conveyor conveyor(CINTAPWM);
+
+Conveyor conveyor(CINTAPWM); // Le pasamos el pin de la cinta transportadora definido en Pinout.h
 
 void setup()
 {

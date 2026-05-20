@@ -3,20 +3,13 @@
 Conveyor::Conveyor(int pwmPin)
 {
     pinPWM = pwmPin;
-
-    pwmFreq = 20000;
-    pwmResolution = 8;
-
     currentSpeed = 0;
 }
 
 void Conveyor::begin()
 {
-    // Nueva API ESP32
-    ledcAttach(pinPWM, pwmFreq, pwmResolution);
-
-    // Arranca al 50%
-    setSpeedPercent(50.0);
+    pinMode(pinPWM, OUTPUT);
+    setSpeedPercent(50.0); // Iniciamos la cinta al 50% de su velocidad
 }
 
 void Conveyor::setSpeedPercent(float percent)
@@ -26,15 +19,14 @@ void Conveyor::setSpeedPercent(float percent)
 
     currentSpeed = (percent / 100.0) * 255.0;
 
-    // Nueva API
-    ledcWrite(pinPWM, currentSpeed);
+    analogWrite(pinPWM, currentSpeed);
 }
 
 void Conveyor::stop()
 {
     currentSpeed = 0;
 
-    ledcWrite(pinPWM, 0);
+    analogWrite(pinPWM,0);
 }
 
 int Conveyor::getSpeed()
