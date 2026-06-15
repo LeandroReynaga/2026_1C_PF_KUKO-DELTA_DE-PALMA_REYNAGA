@@ -9,7 +9,7 @@ Conveyor::Conveyor(int pwmPin)
 void Conveyor::begin()
 {
     pinMode(pinPWM, OUTPUT);
-    setSpeedPercent(50.0); // Iniciamos la cinta al 50% de su velocidad
+    setSpeedPercent(60.0); // Iniciamos la cinta al 60% de su velocidad
 }
 
 void Conveyor::setSpeedPercent(float percent)
