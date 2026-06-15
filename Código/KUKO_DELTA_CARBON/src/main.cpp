@@ -2,20 +2,59 @@
 #include "Pinout.h"
 #include "hardware/Conveyor.h"
 #include "hardware/Encoders.h"
+#include "hardware/Pneumatics.h"
+#include "hardware/Endstops.h"
+//#include "hardware/Motors.h"
 
 
 Conveyor conveyor(CINTAPWM); // Le pasamos el pin de la cinta transportadora definido en Pinout.h
 Encoders encoders;
+Pneumatics pneumatics;
+Endstops endstops;
+//Motors motors;
+
 void setup()
 {
     Serial.begin(115200);
 
     conveyor.begin();
-    encoders.begin();
+    //encoders.begin();
+    //pneumatics.begin();
+    //endstops.begin();
+    //motors.begin();
+
 }
 
 void loop(){
 
+
+
+
+    /*
+    Serial.print("FC1: ");
+    Serial.print(endstops.readMotor1());
+
+    Serial.print(" | FC2: ");
+    Serial.print(endstops.readMotor2());
+
+    Serial.print(" | FC3: ");
+    Serial.print(endstops.readMotor3());
+
+    Serial.print(" | ALL: ");
+    Serial.println(endstops.allPressed());
+
+    delay(200);
+    */
+
+    /*
+    //la bomba se activa durante 2 segundos y luego se libera
+    pneumatics.grab();
+    delay(2000);
+    pneumatics.release();
+    delay(2000);
+    */
+
+    /*
     Serial.print("E1: ");
     Serial.print(encoders.leerGrados(4));
 
@@ -24,7 +63,6 @@ void loop(){
 
     Serial.print(" | E3: ");
     Serial.println(encoders.leerGrados(6));
-
-    delay(200);
+*/
 
 }

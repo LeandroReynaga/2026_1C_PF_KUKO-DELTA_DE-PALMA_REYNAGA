@@ -1,0 +1,110 @@
+
+// PRUEBA DE ENCODERS
+
+#include <Arduino.h>     // Librerías básicas de Arduino
+#include <Wire.h>        // Librería para comunicación I2C
+
+#define SDA_PIN 21       // GPIO SDA del ESP32
+#define SCL_PIN 22       // GPIO SCL del ESP32
+
+#define TCA_ADDR 0x70    // Dirección I2C del TCA9548A (A0=A1=A2=GND)
+#define AS5600_ADDR 0x36 // Dirección fija del encoder AS5600
+
+// Canales del multiplexor
+#define ENC1_CH 4        // Encoder 1 conectado al canal 4
+#define ENC2_CH 5        // Encoder 2 conectado al canal 5
+#define ENC3_CH 6        // Encoder 3 conectado al canal 6
+
+// Registro ANGLE del AS5600
+#define AS5600_ANGLE_H 0x0E  // Byte alto del ángulo
+#define AS5600_ANGLE_L 0x0F  // Byte bajo del ángulo
+
+void seleccionarCanalTCA(uint8_t canal) {
+  if (canal > 7) return;     // Verifica que el canal sea válido
+
+  Wire.beginTransmission(TCA_ADDR); // Inicia comunicación con el TCA9548A
+  Wire.write(1 << canal);           // Habilita únicamente el canal seleccionado
+  Wire.endTransmission();           // Finaliza transmisión
+}
+
+uint16_t leerAS5600Raw(uint8_t canal) {
+  seleccionarCanalTCA(canal);   // Selecciona el encoder deseado
+  delayMicroseconds(300);       // Pequeña espera para estabilizar el bus
+
+  Wire.beginTransmission(AS5600_ADDR); // Inicia comunicación con AS5600
+  Wire.write(AS5600_ANGLE_H);          // Apunta al registro de ángulo
+  if (Wire.endTransmission(false) != 0) {
+    return 0xFFFF;                     // Error de comunicación
+  }
+
+  Wire.requestFrom(AS5600_ADDR, 2);    // Solicita 2 bytes
+
+  if (Wire.available() < 2) {
+    return 0xFFFF;                     // Error si no recibe ambos bytes
+  }
+
+  uint8_t highByte = Wire.read();      // Lee byte alto
+  uint8_t lowByte  = Wire.read();      // Lee byte bajo
+
+  uint16_t angle = ((highByte & 0x0F) << 8) | lowByte; // Une ambos bytes
+
+  return angle;                        // Retorna valor entre 0 y 4095
+}
+
+float convertirGrados(uint16_t raw) {
+  return (raw * 360.0) / 4096.0;       // Convierte lectura a grados
+}
+
+void setup() {
+  Serial.begin(115200);                // Inicializa puerto serie
+  delay(1000);                         // Espera inicial
+
+  Wire.begin(SDA_PIN, SCL_PIN);        // Inicializa I2C en pines 21 y 22
+  Wire.setClock(400000);               // Velocidad I2C = 400 kHz
+
+  Serial.println("Lectura de 3 encoders AS5600 mediante TCA9548A");
+}
+
+void loop() {
+
+  uint16_t raw1 = leerAS5600Raw(ENC1_CH); // Lee encoder 1
+  uint16_t raw2 = leerAS5600Raw(ENC2_CH); // Lee encoder 2
+  uint16_t raw3 = leerAS5600Raw(ENC3_CH); // Lee encoder 3
+
+  Serial.print("Encoder 1: ");
+
+  if (raw1 == 0xFFFF) {
+    Serial.print("Error");             // Error de comunicación
+  } else {
+    Serial.print(raw1);                // Valor bruto (0-4095)
+    Serial.print(" | ");
+    Serial.print(convertirGrados(raw1), 2); // Valor convertido a grados
+    Serial.print("°");
+  }
+
+  Serial.print("   Encoder 2: ");
+
+  if (raw2 == 0xFFFF) {
+    Serial.print("Error");
+  } else {
+    Serial.print(raw2);
+    Serial.print(" | ");
+    Serial.print(convertirGrados(raw2), 2);
+    Serial.print("°");
+  }
+
+  Serial.print("   Encoder 3: ");
+
+  if (raw3 == 0xFFFF) {
+    Serial.print("Error");
+  } else {
+    Serial.print(raw3);
+    Serial.print(" | ");
+    Serial.print(convertirGrados(raw3), 2);
+    Serial.print("°");
+  }
+
+  Serial.println();                    // Salto de línea
+
+  delay(200);                          // Actualización cada 200 ms
+}
