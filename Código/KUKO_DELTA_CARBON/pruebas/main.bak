@@ -1,0 +1,68 @@
+#include <Arduino.h>
+#include "Pinout.h"
+#include "hardware/Conveyor.h"
+#include "hardware/Encoders.h"
+#include "hardware/Pneumatics.h"
+#include "hardware/Endstops.h"
+#include "hardware/Motors.h"
+
+Conveyor conveyor(CINTAPWM); 
+Encoders encoders;           
+Pneumatics pneumatics;       
+Endstops endstops;           
+Motors motors;               
+
+void setup()
+{
+    Serial.begin(115200); // Inicializa la comunicación con el monitor serie
+
+    //conveyor.begin();
+    //encoders.begin();
+    //pneumatics.begin();
+    //endstops.begin();
+    motors.begin();
+
+}
+
+void loop()
+{
+
+    //pneumatics.update(); // Activa y desactiva la bomba cada 2 segundos
+
+
+
+    /*
+    Serial.print("FC1: ");
+    Serial.print(endstops.readMotor1());
+
+    Serial.print(" | FC2: ");
+    Serial.print(endstops.readMotor2());
+
+    Serial.print(" | FC3: ");
+    Serial.print(endstops.readMotor3());
+
+    Serial.print(" | ALL: ");
+    Serial.println(endstops.allPressed());
+
+    delay(200);
+    */
+
+    /*
+    //la bomba se activa durante 2 segundos y luego se libera
+    pneumatics.grab();
+    delay(2000);
+    pneumatics.release();
+    delay(2000);
+    */
+
+    
+    Serial.print("E1: ");
+    Serial.print(encoders.leerGrados(4));
+
+    Serial.print(" | E2: ");
+    Serial.print(encoders.leerGrados(3));
+
+    Serial.print(" | E3: ");
+    Serial.println(encoders.leerGrados(6));
+
+}

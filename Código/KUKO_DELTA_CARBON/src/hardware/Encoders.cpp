@@ -6,7 +6,7 @@
 void Encoders::begin()
 {
     Wire.begin(SDA_PIN, SCL_PIN);
-    Wire.setClock(400000);
+    Wire.setClock(300000);
 } 
 
 void Encoders::seleccionarCanal(uint8_t canal)

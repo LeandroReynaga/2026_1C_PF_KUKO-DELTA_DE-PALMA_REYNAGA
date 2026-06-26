@@ -7,7 +7,11 @@ class Pneumatics
 {
 private:
 
-    bool state;
+    bool pumpState;
+
+    unsigned long previousMillis = 0;
+
+    const unsigned long interval = 2000;
 
 public:
 
@@ -17,6 +21,8 @@ public:
     void release();
 
     bool isActive();
+
+    void update();
 };
 
 #endif

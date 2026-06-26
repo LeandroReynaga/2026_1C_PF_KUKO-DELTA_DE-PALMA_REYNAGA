@@ -35,6 +35,9 @@ KUKO_DELTA_CARBON/
 │   ├── robot/
 │   │   ├── Robot.cpp
 │   │   ├── Robot.h
+│   │   ├── Stepper.cpp
+│   │   ├── Stepper.h
+
 │   │
 │   ├── tasks/
 │   │   ├── TaskManager.cpp

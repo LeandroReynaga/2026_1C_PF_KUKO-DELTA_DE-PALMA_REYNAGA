@@ -7,8 +7,38 @@ void Pneumatics::begin()
 
     digitalWrite(BOMBA, LOW);
 
-    state = false;
+    pumpState = false;
+
+    previousMillis = millis();
+
 }
+
+void Pneumatics::update()
+{
+    unsigned long currentMillis = millis();
+
+    if(currentMillis - previousMillis >= interval)
+    {
+        previousMillis = currentMillis;
+
+        pumpState = !pumpState;
+
+        digitalWrite(BOMBA, pumpState);
+
+        Serial.print("Bomba: ");
+
+        if(pumpState)
+        {
+            Serial.println("ON");
+        }
+        else
+        {
+            Serial.println("OFF");
+        }
+    }
+}
+
+/*
 
 void Pneumatics::grab()
 {
@@ -24,7 +54,9 @@ void Pneumatics::release()
     state = false;
 }
 
+
 bool Pneumatics::isActive()
 {
     return state;
 }
+*/
