@@ -11,7 +11,8 @@ Conveyor conveyor(CINTAPWM);
 Encoders encoders;           
 Pneumatics pneumatics;       
 Motors motors;           
-Robot robot;    
+Robot robot;
+Endstops endstops;
 
 void setup()
 {
@@ -20,23 +21,33 @@ void setup()
     //conveyor.begin();
     //encoders.begin();
     //pneumatics.begin();
-    //endstops.begin();
+    endstops.begin();
     //motors.begin();
-    robot.begin();
-    robot.startHoming();
+    //robot.begin();
+    //robot.startHoming();
+    //robot.testMotor1();
 }
 
 void loop()
 {
 
-    robot.update();
+    //robot.update();
 
- if(robot.homingFinished())
-    {
-        Serial.println("HOME OK");
-    }
-    
-Serial.println(digitalRead(FC1));
+Serial.println(endstops.readMotor1());
+delay(10);
+
+    /*
+    Serial.print("E1: ");
+    Serial.print(encoders.leerGrados(4));
+
+    Serial.print(" | E2: ");
+    Serial.print(encoders.leerGrados(3));
+
+    Serial.print(" | E3: ");
+    Serial.println(encoders.leerGrados(6));
+*/
+   
+
 
 
 }

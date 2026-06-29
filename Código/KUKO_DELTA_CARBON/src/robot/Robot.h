@@ -27,6 +27,8 @@ public:
 
     void update();
 
+    void testMotor1();
+    
     void startHoming();
 
     bool homingFinished() const;

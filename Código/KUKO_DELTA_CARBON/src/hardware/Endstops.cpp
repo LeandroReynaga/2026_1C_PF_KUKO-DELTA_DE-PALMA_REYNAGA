@@ -10,7 +10,12 @@ void Endstops::begin()
 
 bool Endstops::readMotor1()
 {
-    return !digitalRead(FC1);
+    bool state = !digitalRead(FC1);
+
+    Serial.print("FC1 = ");
+    Serial.println(state);
+
+    return state;
 }
 
 bool Endstops::readMotor2()

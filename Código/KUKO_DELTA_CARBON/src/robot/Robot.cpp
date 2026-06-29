@@ -45,7 +45,22 @@ void Robot::update()
 
             break;
     }
+        
+if(endstops.readMotor1())
+{
+    Serial.println("PRESIONADO");
 }
+
+}
+
+
+void Robot::testMotor1()
+{
+    motor1.setSpeed(1200);
+
+    motor1.moveContinuous(false);
+}
+
 
 void Robot::startHoming()
 {

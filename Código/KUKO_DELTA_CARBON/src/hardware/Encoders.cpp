@@ -6,14 +6,14 @@
 void Encoders::begin()
 {
     Wire.begin(SDA_PIN, SCL_PIN);
-    Wire.setClock(300000);
+    Wire.setClock(30000);
 } 
 
 void Encoders::seleccionarCanal(uint8_t canal)
 {
     if(canal > 7)
     {
-        return;
+        return;  
     }
 
     Wire.beginTransmission(TCA_ADDR);
