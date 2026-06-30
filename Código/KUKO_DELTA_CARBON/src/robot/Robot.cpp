@@ -29,9 +29,6 @@ void Robot::begin()
 
 void Robot::update()
 {
-    motor1.update();
-    motor2.update();
-    motor3.update();
 
     switch(state)
     {
@@ -41,16 +38,25 @@ void Robot::update()
 
             break;
 
+        case GO_ZERO:
+
+        if(motor1.targetReached() &&
+        motor2.targetReached() &&
+        motor3.targetReached())
+        {
+            state = READY;
+        }
+
+    break;
+
         default:
 
             break;
     }
         
-if(endstops.readMotor1())
-{
-    Serial.println("PRESIONADO");
-}
-
+    motor1.update();
+    motor2.update();
+    motor3.update();
 }
 
 
@@ -89,7 +95,7 @@ void Robot::updateHoming()
         {
             motor1.stop();
 
-            motor1.setPosition(0);
+            motor1.setPosition(angleToSteps(HOME_ANGLE_M1));
 
             axis1Homed = true;
         }
@@ -103,7 +109,7 @@ void Robot::updateHoming()
         {
             motor2.stop();
 
-            motor2.setPosition(0);
+            motor2.setPosition(angleToSteps(HOME_ANGLE_M2));
 
             axis2Homed = true;
         }
@@ -117,7 +123,7 @@ void Robot::updateHoming()
         {
             motor3.stop();
 
-            motor3.setPosition(0);
+            motor3.setPosition(angleToSteps(HOME_ANGLE_M3));
 
             axis3Homed = true;
         }
@@ -130,7 +136,11 @@ void Robot::updateHoming()
        axis3Homed
        )
     {
-        state = READY;
+        motor1.moveTo(0);
+        motor2.moveTo(0);
+        motor3.moveTo(0);
+
+        state = GO_ZERO;
     }
 }
 

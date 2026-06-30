@@ -24,17 +24,8 @@ void Pneumatics::update()
         pumpState = !pumpState;
 
         digitalWrite(BOMBA, pumpState);
+        
 
-        Serial.print("Bomba: ");
-
-        if(pumpState)
-        {
-            Serial.println("ON");
-        }
-        else
-        {
-            Serial.println("OFF");
-        }
     }
 }
 

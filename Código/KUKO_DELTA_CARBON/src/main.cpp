@@ -18,25 +18,28 @@ void setup()
 {
     Serial.begin(115200); // Inicializa la comunicación con el monitor serie
 
-    //conveyor.begin();
-    //encoders.begin();
-    //pneumatics.begin();
+    conveyor.begin();
+    encoders.begin();
+    pneumatics.begin();
     endstops.begin();
     //motors.begin();
-    //robot.begin();
-    //robot.startHoming();
+    robot.begin();
+    robot.startHoming();
     //robot.testMotor1();
 }
 
 void loop()
 {
 
-    //robot.update();
 
-Serial.println(endstops.readMotor1());
-delay(10);
+    robot.update();
+    pneumatics.update();
+//Serial.println(endstops.readMotor1());
+//Serial.println(endstops.readMotor2());
+//Serial.println(endstops.readMotor3());
+//delay(10);
 
-    /*
+    
     Serial.print("E1: ");
     Serial.print(encoders.leerGrados(4));
 
@@ -45,9 +48,7 @@ delay(10);
 
     Serial.print(" | E3: ");
     Serial.println(encoders.leerGrados(6));
-*/
-   
-
+    delay(10);
 
 
 }

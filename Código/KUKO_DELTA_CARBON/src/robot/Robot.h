@@ -17,6 +17,15 @@ public:
     {
         IDLE,
         HOMING,
+        GO_ZERO,
+        GO_POSITION,
+        GRAB,
+        GO_UP,
+        CONVEYOR_RUN,
+        GO_DOWN,
+        RELEASE,
+        //GO_ZERO,
+        CONVEYOR_STOP,
         READY,
         ERROR
     };
@@ -55,6 +64,18 @@ private:
 
     // Rutina privada
     void updateHoming();
+
+    static constexpr long MICROPASOS = 20000;
+    static constexpr float HOME_ANGLE_M1 = -46.08f;
+    static constexpr float HOME_ANGLE_M2 = -46.26f;
+    static constexpr float HOME_ANGLE_M3 = -46.44f;
+
+    static long angleToSteps(float angle)
+{
+    return lround(angle * MICROPASOS / 360.0f);
+}
+
+
 };
 
 #endif
