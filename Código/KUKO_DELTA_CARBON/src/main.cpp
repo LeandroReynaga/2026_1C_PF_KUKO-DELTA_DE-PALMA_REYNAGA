@@ -7,10 +7,10 @@
 #include "hardware/Motors.h"
 #include "robot/Robot.h"
 
-Conveyor conveyor(CINTAPWM); 
-Encoders encoders;           
-Pneumatics pneumatics;       
-Motors motors;           
+//Conveyor conveyor(CINTAPWM); 
+//Encoders encoders;           
+//Pneumatics pneumatics;       
+//Motors motors;           
 Robot robot;
 Endstops endstops;
 
@@ -18,9 +18,9 @@ void setup()
 {
     Serial.begin(115200); // Inicializa la comunicación con el monitor serie
 
-    conveyor.begin();
-    encoders.begin();
-    pneumatics.begin();
+    //conveyor.begin();
+    //encoders.begin();
+    //pneumatics.begin();
     endstops.begin();
     //motors.begin();
     robot.begin();
@@ -33,13 +33,13 @@ void loop()
 
 
     robot.update();
-    pneumatics.update();
+    //pneumatics.update();
 //Serial.println(endstops.readMotor1());
 //Serial.println(endstops.readMotor2());
 //Serial.println(endstops.readMotor3());
 //delay(10);
 
-    
+    /*
     Serial.print("E1: ");
     Serial.print(encoders.leerGrados(4));
 
@@ -49,6 +49,6 @@ void loop()
     Serial.print(" | E3: ");
     Serial.println(encoders.leerGrados(6));
     delay(10);
-
+*/
 
 }

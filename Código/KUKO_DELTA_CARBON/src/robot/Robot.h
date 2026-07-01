@@ -24,7 +24,7 @@ public:
         CONVEYOR_RUN,
         GO_DOWN,
         RELEASE,
-        //GO_ZERO,
+        GO_ZERO2,
         CONVEYOR_STOP,
         READY,
         ERROR
@@ -64,6 +64,15 @@ private:
 
     // Rutina privada
     void updateHoming();
+    void updateGoZero();
+    void updateGoPosition();
+    void updateGrab();
+    void updateGoUp();
+    void updateConveyorRun();
+    void updateGoDown();
+    void updateRelease();
+    void updateGoZero2();
+    void updateConveyorStop();
 
     static constexpr long MICROPASOS = 20000;
     static constexpr float HOME_ANGLE_M1 = -46.08f;

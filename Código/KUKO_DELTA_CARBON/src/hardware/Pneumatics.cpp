@@ -24,30 +24,28 @@ void Pneumatics::update()
         pumpState = !pumpState;
 
         digitalWrite(BOMBA, pumpState);
-        
+
 
     }
 }
-
-/*
 
 void Pneumatics::grab()
 {
     digitalWrite(BOMBA, HIGH);
 
-    state = true;
+    pumpState = true;
 }
 
 void Pneumatics::release()
 {
     digitalWrite(BOMBA, LOW);
 
-    state = false;
+    pumpState = false;
 }
 
 
 bool Pneumatics::isActive()
 {
-    return state;
+    return pumpState;
 }
-*/
+

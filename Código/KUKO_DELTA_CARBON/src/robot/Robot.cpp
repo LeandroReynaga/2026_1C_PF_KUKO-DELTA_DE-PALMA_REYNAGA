@@ -1,5 +1,10 @@
 #include "Robot.h"
+#include "Pinout.h"
+#include "hardware/Pneumatics.h"
+#include "hardware/Conveyor.h"
 
+Pneumatics pneumatics;
+Conveyor conveyor(CINTAPWM);
 Robot::Robot() :
 
 motor1(PUL1, DIR1, ENA),
@@ -16,13 +21,16 @@ motor3(PUL3, DIR3, ENA)
 
 void Robot::begin()
 {
+    pneumatics.begin();
+
+
     motor1.begin();
     motor2.begin();
     motor3.begin();
 
-    motor1.setSpeed(1200);
-    motor2.setSpeed(1200);
-    motor3.setSpeed(1200);
+    motor1.setSpeed(2000);
+    motor2.setSpeed(2000);
+    motor3.setSpeed(2000);
 
     endstops.begin();
 }
@@ -40,14 +48,51 @@ void Robot::update()
 
         case GO_ZERO:
 
-        if(motor1.targetReached() &&
-        motor2.targetReached() &&
-        motor3.targetReached())
-        {
-            state = READY;
-        }
+            updateGoZero();
 
-    break;
+            break;
+        
+        case GO_POSITION:
+        
+            updateGoPosition();
+
+            break;
+
+        case GRAB:
+            updateGrab();
+
+            break;
+
+        case GO_UP:
+            updateGoUp();
+
+            break;
+
+        case CONVEYOR_RUN:
+            updateConveyorRun();
+
+            break;
+        
+        case GO_DOWN:
+            updateGoDown();
+
+            break;
+
+        case RELEASE:
+            updateRelease();
+
+            break;
+
+        case GO_ZERO2:
+            updateGoZero2();
+
+            break;
+
+        case CONVEYOR_STOP:
+            updateConveyorStop();
+
+            break;
+        
 
         default:
 
@@ -136,10 +181,6 @@ void Robot::updateHoming()
        axis3Homed
        )
     {
-        motor1.moveTo(0);
-        motor2.moveTo(0);
-        motor3.moveTo(0);
-
         state = GO_ZERO;
     }
 }
@@ -152,4 +193,123 @@ bool Robot::homingFinished() const
 Robot::RobotState Robot::getState() const
 {
     return state;
+}
+
+void Robot::updateGoZero()
+{
+
+        motor1.moveTo(0);
+        motor2.moveTo(0);
+        motor3.moveTo(0);
+
+      if(motor1.targetReached() &&
+        motor2.targetReached() &&
+        motor3.targetReached())
+        {
+
+            state = GO_POSITION;
+        }
+
+}
+
+void Robot::updateGoPosition()
+{
+
+        motor1.moveTo(350); //cuanto mas bajo el valor, mas arriba va a estar el brazo
+        motor2.moveTo(350);
+        motor3.moveTo(350);
+
+      if(motor1.targetReached() &&
+        motor2.targetReached() &&
+        motor3.targetReached())
+        {
+            state = GRAB;
+        }
+
+}
+
+void Robot::updateGrab()
+{
+        // Activar la bomba para agarrar el objeto
+        pneumatics.grab();
+        {
+            state = GO_UP;
+        }
+
+}
+
+void Robot::updateGoUp()
+{
+        motor1.moveTo(-1000);
+        motor2.moveTo(-1000);
+        motor3.moveTo(-1000);
+
+      if(motor1.targetReached() &&
+        motor2.targetReached() &&
+        motor3.targetReached())
+        {
+            state = CONVEYOR_RUN;
+        }
+
+}
+
+void Robot::updateConveyorRun()
+{
+        conveyor.begin();
+        {
+            state = GO_DOWN;
+        }
+
+}
+
+void Robot::updateGoDown()
+{
+
+        motor1.moveTo(200);
+        motor2.moveTo(200);
+        motor3.moveTo(200);
+
+      if(motor1.targetReached() &&
+        motor2.targetReached() &&
+        motor3.targetReached())
+        {
+            state = RELEASE;
+        }
+
+}
+
+void Robot::updateRelease()
+{
+        pneumatics.release();
+        delay(10000); //delay 10 segundos
+        {
+            state = GO_ZERO2;
+        }
+
+}
+
+void Robot::updateGoZero2()
+{
+        motor1.moveTo(-500);
+        motor2.moveTo(-500);
+        motor3.moveTo(-500);
+
+      if(motor1.targetReached() &&
+        motor2.targetReached() &&
+        motor3.targetReached())
+        {
+            state = CONVEYOR_STOP;
+        }
+
+}
+
+void Robot::updateConveyorStop()
+{
+        delay(3000); //delay 5 segundos    
+        conveyor.stop();
+
+        {
+            state = READY;
+        }
+
 }
