@@ -6,6 +6,7 @@
 #include "hardware/Endstops.h"
 #include "hardware/Motors.h"
 #include "robot/Robot.h"
+#include "kinematics/DeltaKinematics.h"
 
 Encoders encoders;
 Robot robot;
@@ -16,6 +17,7 @@ Endstops endstops;
 // segundo, ilegible y con costo real de tiempo de CPU/UART).
 uint32_t ultimoPrint_ms = 0;
 const uint32_t INTERVALO_PRINT_MS = 200; // 5 Hz, suficiente para ver la evolución en vivo
+
 
 void setup()
 {
