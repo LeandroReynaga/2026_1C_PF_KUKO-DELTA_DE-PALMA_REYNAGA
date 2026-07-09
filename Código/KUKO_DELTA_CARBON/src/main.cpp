@@ -7,48 +7,46 @@
 #include "hardware/Motors.h"
 #include "robot/Robot.h"
 
-//Conveyor conveyor(CINTAPWM); 
-//Encoders encoders;           
-//Pneumatics pneumatics;       
-//Motors motors;           
+Encoders encoders;
 Robot robot;
 Endstops endstops;
 
+// Impresión de diagnóstico no bloqueante: se muestra a intervalos fijos
+// en lugar de en cada vuelta del loop (que sería miles de veces por
+// segundo, ilegible y con costo real de tiempo de CPU/UART).
+uint32_t ultimoPrint_ms = 0;
+const uint32_t INTERVALO_PRINT_MS = 200; // 5 Hz, suficiente para ver la evolución en vivo
+
 void setup()
 {
-    Serial.begin(115200); // Inicializa la comunicación con el monitor serie
+    Serial.begin(115200);
 
-    //conveyor.begin();
-    //encoders.begin();
-    //pneumatics.begin();
+    encoders.begin();
     endstops.begin();
-    //motors.begin();
     robot.begin();
     robot.startHoming();
-    //robot.testMotor1();
 }
 
 void loop()
 {
-
+    // Debe llamarse SIEMPRE, en cada vuelta del loop: es lo que hace avanzar
+    // la máquina de estados no bloqueante de los encoders.
+    encoders.update();
 
     robot.update();
-    //pneumatics.update();
-//Serial.println(endstops.readMotor1());
-//Serial.println(endstops.readMotor2());
-//Serial.println(endstops.readMotor3());
-//delay(10);
 
-    /*
-    Serial.print("E1: ");
-    Serial.print(encoders.leerGrados(4));
+    uint32_t ahora = millis();
+    if (ahora - ultimoPrint_ms >= INTERVALO_PRINT_MS)
+    {
+        ultimoPrint_ms = ahora;
 
-    Serial.print(" | E2: ");
-    Serial.print(encoders.leerGrados(3));
+        Serial.print("M1: ");
+        Serial.print(encoders.esValido(0) ? String(encoders.leerGrados(0), 1) : "ERR");
 
-    Serial.print(" | E3: ");
-    Serial.println(encoders.leerGrados(6));
-    delay(10);
-*/
+        Serial.print(" | M2: ");
+        Serial.print(encoders.esValido(1) ? String(encoders.leerGrados(1), 1) : "ERR");
 
+        Serial.print(" | M3: ");
+        Serial.println(encoders.esValido(2) ? String(encoders.leerGrados(2), 1) : "ERR");
+    }
 }

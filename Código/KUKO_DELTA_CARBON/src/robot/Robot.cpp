@@ -5,11 +5,16 @@
 
 Pneumatics pneumatics;
 Conveyor conveyor(CINTAPWM);
+
+// Duraciones de espera no bloqueante (antes eran delay(10000) y delay(3000))
+static const uint32_t RELEASE_WAIT_MS        = 10000;
+static const uint32_t CONVEYOR_STOP_WAIT_MS  = 3000;
+
 Robot::Robot() :
 
-motor1(PUL1, DIR1, ENA),
-motor2(PUL2, DIR2, ENA),
-motor3(PUL3, DIR3, ENA)
+motor1(PUL1, DIR1, ENA, 0),
+motor2(PUL2, DIR2, ENA, 1),
+motor3(PUL3, DIR3, ENA, 2)
 
 {
     state = IDLE;
@@ -215,9 +220,9 @@ void Robot::updateGoZero()
 void Robot::updateGoPosition()
 {
 
-        motor1.moveTo(350); //cuanto mas bajo el valor, mas arriba va a estar el brazo
-        motor2.moveTo(350);
-        motor3.moveTo(350);
+        motor1.moveTo(360); //cuanto mas bajo el valor, mas arriba va a estar el brazo
+        motor2.moveTo(360);
+        motor3.moveTo(360);
 
       if(motor1.targetReached() &&
         motor2.targetReached() &&
@@ -280,12 +285,25 @@ void Robot::updateGoDown()
 
 void Robot::updateRelease()
 {
-        pneumatics.release();
-        delay(10000); //delay 10 segundos
-        {
-            state = GO_ZERO2;
-        }
+    // Antes: pneumatics.release(); delay(10000);
+    // El delay() congelaba TODO el sistema durante 10s: los motores no
+    // podían actualizarse, los encoders no podían leer, y el homing/loop
+    // completo quedaba bloqueado. Reemplazado por una espera no bloqueante
+    // basada en millis().
 
+    if (releaseWaitStart_ms == 0)
+    {
+        // Primera vuelta en este estado: soltamos la pieza y arrancamos el conteo
+        pneumatics.release();
+        releaseWaitStart_ms = millis();
+        return;
+    }
+
+    if (millis() - releaseWaitStart_ms >= RELEASE_WAIT_MS)
+    {
+        releaseWaitStart_ms = 0; // listo para la próxima vez que se entre a este estado
+        state = GO_ZERO2;
+    }
 }
 
 void Robot::updateGoZero2()
@@ -305,11 +323,19 @@ void Robot::updateGoZero2()
 
 void Robot::updateConveyorStop()
 {
-        delay(3000); //delay 5 segundos    
+    // Antes: delay(3000); conveyor.stop();
+    // Mismo problema que en updateRelease(): bloqueaba todo el sistema.
+
+    if (conveyorStopWaitStart_ms == 0)
+    {
+        conveyorStopWaitStart_ms = millis();
+        return;
+    }
+
+    if (millis() - conveyorStopWaitStart_ms >= CONVEYOR_STOP_WAIT_MS)
+    {
         conveyor.stop();
-
-        {
-            state = READY;
-        }
-
+        conveyorStopWaitStart_ms = 0;
+        state = READY;
+    }
 }

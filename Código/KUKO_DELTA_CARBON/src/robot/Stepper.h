@@ -3,150 +3,82 @@
 
 #include <Arduino.h>
 
+// Modo de movimiento (idéntico al original)
+enum MotionMode : uint8_t
+{
+    IDLE,
+    CONTINUOUS,
+    POSITION
+};
+
 class Stepper
 {
 public:
-
-    // ===========================
-    // Estados del motor
-    // ===========================
-
-    enum MotionMode
-    {
-        IDLE,           // Motor detenido
-        CONTINUOUS,     // Movimiento continuo
-        POSITION        // Movimiento hacia una posición
-    };
-
-    // ===========================
-    // Constructor
-    // ===========================
-
-    Stepper(uint8_t stepPin,
-            uint8_t dirPin,
-            uint8_t enablePin);
-
-    // ===========================
-    // Inicialización
-    // ===========================
+    // timerIndex: 0, 1 o 2 (uno distinto por motor). El ESP32 tiene 4
+    // timers de hardware disponibles (0-3), así que alcanzan para los 3 ejes.
+    Stepper(uint8_t stepPin, uint8_t dirPin, uint8_t enablePin, uint8_t timerIndex);
 
     void begin();
 
-    // ===========================
-    // Driver
-    // ===========================
-
     void enable();
-
     void disable();
-
     bool isEnabled() const;
 
-    // ===========================
-    // Configuración
-    // ===========================
-
     void setDirection(bool direction);
-
     void setSpeed(float stepsPerSecond);
-
-    void setAcceleration(float acceleration);      // Se implementará más adelante
-
-    // ===========================
-    // Movimiento
-    // ===========================
+    void setAcceleration(float acceleration);
 
     void moveContinuous(bool direction);
-
     void moveSteps(long steps);
-
-    void moveTo(long targetPosition);
-
+    void moveTo(long position);
     void stop();
 
     bool isMoving() const;
-
     bool targetReached() const;
 
-    // ===========================
-    // Posición
-    // ===========================
-
     long getPosition() const;
-
     void setPosition(long position);
 
-    // ===========================
-    // Actualización (NO bloqueante)
-    // ===========================
-
+    // Ya NO genera los pulsos (eso lo hace la interrupción de hardware).
+    // Se conserva únicamente por compatibilidad con el Robot.cpp existente
+    // (que la sigue llamando en cada vuelta de loop); no hace nada crítico.
     void update();
 
 private:
-
-    // ===========================
-    // Pines
-    // ===========================
+    static const uint16_t STEP_PULSE_US = 5; // ancho de pulso; ajustar si el DM556 necesita otro valor
 
     uint8_t stepPin;
-
     uint8_t dirPin;
-
     uint8_t enablePin;
+    uint8_t timerIndex;
 
-    // ===========================
-    // Estado del driver
-    // ===========================
-
-    bool enabled;
-
-    bool direction;
-
-    MotionMode motionMode;
-
-    // ===========================
-    // Posición
-    // ===========================
-
-    volatile long currentPosition;
-
-    volatile long targetPosition;
-
-    // ===========================
-    // Velocidad
-    // ===========================
+    // Compartidas entre el loop() (que las lee/escribe) y la ISR (que las
+    // escribe). volatile + sección crítica -> acceso seguro entre núcleos.
+    volatile bool        enabled;
+    volatile bool        direction;
+    volatile MotionMode  motionMode;
+    volatile long        currentPosition;
+    volatile long        targetPosition;
 
     float speed;
-
     float acceleration;
+    uint32_t stepInterval; // microsegundos entre pasos, calculado a partir de speed
 
-    uint32_t stepInterval;
+    hw_timer_t *timer;
+    portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 
-    // ===========================
-    // Generador de pulsos
-    // ===========================
+    void aplicarFrecuenciaTimer();
 
-    enum PulseState
-    {
-        STEP_LOW,
-        STEP_HIGH
-    };
+    // Lógica real de generación de pulso; corre en contexto de interrupción.
+    void IRAM_ATTR onTimerTick();
 
-    PulseState pulseState;
-
-    uint32_t lastStepTime;
-
-    uint32_t pulseStartTime;
-
-    static constexpr uint8_t STEP_PULSE_US = 5;
-
-    // ===========================
-    // Funciones privadas
-    // ===========================
-
-    void startPulse();
-
-    void finishPulse();
+    // Punteros estáticos para que las ISR (funciones libres, requeridas por
+    // el API de timers de hardware) encuentren la instancia correspondiente.
+    static Stepper *instancias[4];
+    static void IRAM_ATTR isrTimer0();
+    static void IRAM_ATTR isrTimer1();
+    static void IRAM_ATTR isrTimer2();
+    static void IRAM_ATTR isrTimer3();
 };
 
 #endif

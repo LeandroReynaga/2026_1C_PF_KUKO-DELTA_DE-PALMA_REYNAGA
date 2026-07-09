@@ -74,6 +74,9 @@ private:
     void updateGoZero2();
     void updateConveyorStop();
 
+    uint32_t releaseWaitStart_ms      = 0;
+    uint32_t conveyorStopWaitStart_ms = 0;
+
     static constexpr long MICROPASOS = 20000;
     static constexpr float HOME_ANGLE_M1 = -46.08f;
     static constexpr float HOME_ANGLE_M2 = -46.26f;
