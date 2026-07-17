@@ -41,7 +41,7 @@ void loop()
     if (ahora - ultimoPrint_ms >= INTERVALO_PRINT_MS)
     {
         ultimoPrint_ms = ahora;
-
+        
         Serial.print("M1: ");
         Serial.print(encoders.esValido(0) ? String(encoders.leerGrados(0), 1) : "ERR");
 
@@ -50,5 +50,9 @@ void loop()
 
         Serial.print(" | M3: ");
         Serial.println(encoders.esValido(2) ? String(encoders.leerGrados(2), 1) : "ERR");
+        
+
+
     }
+
 }

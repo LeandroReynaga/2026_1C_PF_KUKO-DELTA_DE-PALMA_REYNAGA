@@ -1,179 +1,55 @@
 #include "Encoders.h"
 
-#define SDA_PIN 21
-#define SCL_PIN 22
-
 constexpr float Encoders::ALFA_FILTRO;
 constexpr float Encoders::SALTO_MAX_DEG_POR_CICLO;
 
-// Motor lógico -> canal físico del TCA9548A. Cableado fijo del robot:
-//   índice 0 (motor1) -> canal 4
-//   índice 1 (motor2) -> canal 3
-//   índice 2 (motor3) -> canal 6
-const uint8_t Encoders::canalesFisicos[NUM_ENCODERS] = {4, 3, 6};
+const uint8_t Encoders::pinesADC[NUM_ENCODERS] = {35, 34, 39};
 
 // ------------------------------------------------------------------
 void Encoders::begin()
 {
-    Wire.begin(SDA_PIN, SCL_PIN);
-
-    // 100 kHz en lugar de 300-400 kHz: el modo "fast" es mucho más sensible
-    // al ruido inducido por los drivers/fuente de 48V. A 100 kHz los flancos
-    // son más largos y el bus tolera mucho mejor el acoplamiento capacitivo.
-    Wire.setClock(500);
+    analogReadResolution(12); // 0-4095
 
     for (uint8_t i = 0; i < NUM_ENCODERS; i++)
     {
+        // ADC_11db habilita el rango completo hasta ~3.3V.
+        analogSetPinAttenuation(pinesADC[i], ADC_11db);
         canales[i] = CanalEncoder();
     }
-
-    estado = EstadoLectura::SELECCIONAR_CANAL;
-    motorActivo = 0;
-    canalFisicoEnMux = 0xFF;
 }
 
 // ------------------------------------------------------------------
-// Máquina de estados no bloqueante. Cada llamada avanza un único paso.
-// El asentamiento del mux y el timeout de lectura se resuelven comparando
-// micros(), nunca deteniendo la CPU con delay().
+// Lee los 3 motores en el mismo ciclo, uno inmediatamente después del
+// otro (el ADC del ESP32 es único y secuencial a nivel de hardware, así
+// que "simultáneo" real no existe, pero el desfasaje entre motores queda
+// en el orden de microsegundos en lugar de repartirse en varias vueltas
+// de loop como en un esquema round-robin).
 // ------------------------------------------------------------------
 void Encoders::update()
 {
-    switch (estado)
+    for (uint8_t i = 0; i < NUM_ENCODERS; i++)
     {
-        case EstadoLectura::SELECCIONAR_CANAL:
-        {
-            if (!seleccionarCanalMux(motorActivo))
-            {
-                registrarError(motorActivo);
-                avanzarAlSiguienteMotor();
-                return;
-            }
-            marcaTiempo_us = micros();
-            estado = EstadoLectura::ESPERAR_ASENTAMIENTO;
-            break;
-        }
-
-        case EstadoLectura::ESPERAR_ASENTAMIENTO:
-        {
-            if ((uint32_t)(micros() - marcaTiempo_us) < TIEMPO_ASENTAMIENTO_US)
-            {
-                return; // todavía no pasó el tiempo de asentamiento, no bloqueamos
-            }
-            estado = EstadoLectura::SOLICITAR_ANGULO;
-            break;
-        }
-
-        case EstadoLectura::SOLICITAR_ANGULO:
-        {
-            if (!iniciarSolicitudAngulo())
-            {
-                registrarError(motorActivo);
-                avanzarAlSiguienteMotor();
-                return;
-            }
-            marcaTiempo_us = micros();
-            estado = EstadoLectura::ESPERAR_Y_LEER;
-            break;
-        }
-
-        case EstadoLectura::ESPERAR_Y_LEER:
-        {
-            uint16_t raw;
-            bool listo = leerRespuestaAngulo(raw);
-
-            if (!listo)
-            {
-                if ((uint32_t)(micros() - marcaTiempo_us) > TIMEOUT_LECTURA_US)
-                {
-                    // el sensor no respondió a tiempo (típico síntoma de ruido)
-                    registrarError(motorActivo);
-                    avanzarAlSiguienteMotor();
-                }
-                return; // seguimos esperando, sin bloquear
-            }
-
-            if (raw == 0xFFFF)
-            {
-                registrarError(motorActivo);
-            }
-            else
-            {
-                procesarLecturaValida(motorActivo, raw);
-            }
-
-            avanzarAlSiguienteMotor();
-            break;
-        }
+        uint16_t raw = leerRawPromediado(i);
+        procesarLecturaValida(i, raw);
     }
 }
 
 // ------------------------------------------------------------------
-void Encoders::avanzarAlSiguienteMotor()
-{
-    motorActivo = (motorActivo + 1) % NUM_ENCODERS;
-    estado = EstadoLectura::SELECCIONAR_CANAL;
-}
-
+// Oversampling reducido a propósito: prioriza velocidad/latencia baja.
+// El filtrado principal de ruido ya lo hace el capacitor en hardware,
+// más el filtro exponencial (ALFA_FILTRO) a continuación.
 // ------------------------------------------------------------------
-bool Encoders::seleccionarCanalMux(uint8_t indiceMotor)
+uint16_t Encoders::leerRawPromediado(uint8_t indiceMotor)
 {
-    if (indiceMotor >= NUM_ENCODERS) return false;
+    uint8_t pin = pinesADC[indiceMotor];
+    uint32_t suma = 0;
 
-    uint8_t canalFisico = canalesFisicos[indiceMotor];
-
-    // Evitamos reescribir el mux si ya está en el canal correcto: menos
-    // tráfico I2C, menos oportunidades de que el ruido corrompa una transacción.
-    if (canalFisicoEnMux == canalFisico) return true;
-
-    Wire.beginTransmission(TCA_ADDR);
-    Wire.write((uint8_t)(1 << canalFisico));
-    if (Wire.endTransmission() != 0)
+    for (uint8_t i = 0; i < MUESTRAS_OVERSAMPLING; i++)
     {
-        canalFisicoEnMux = 0xFF; // estado del mux desconocido, forzar reselección la próxima vez
-        return false;
+        suma += analogRead(pin);
     }
 
-    canalFisicoEnMux = canalFisico;
-    return true;
-}
-
-// ------------------------------------------------------------------
-bool Encoders::iniciarSolicitudAngulo()
-{
-    Wire.beginTransmission(AS5600_ADDR);
-    Wire.write(AS5600_ANGLE_H);
-
-    if (Wire.endTransmission(false) != 0)
-    {
-        return false;
-    }
-
-    if (Wire.requestFrom((int)AS5600_ADDR, 2) != 2)
-    {
-        return false;
-    }
-
-    solicitudEnCurso = true;
-    return true;
-}
-
-// ------------------------------------------------------------------
-bool Encoders::leerRespuestaAngulo(uint16_t &rawOut)
-{
-    // Wire.requestFrom ya dejó los bytes en el buffer interno; los
-    // consumimos apenas estén disponibles, sin sondear con delay.
-    if (Wire.available() < 2)
-    {
-        return false;
-    }
-
-    uint8_t highByte = Wire.read();
-    uint8_t lowByte  = Wire.read();
-    solicitudEnCurso = false;
-
-    rawOut = ((highByte & 0x0F) << 8) | lowByte;
-    return true;
+    return (uint16_t)(suma / MUESTRAS_OVERSAMPLING);
 }
 
 // ------------------------------------------------------------------
@@ -300,4 +176,3 @@ void Encoders::resetearCanal(uint8_t motor)
     if (motor >= NUM_ENCODERS) return;
     canales[motor] = CanalEncoder();
 }
-

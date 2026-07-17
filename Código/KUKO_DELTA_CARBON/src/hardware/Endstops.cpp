@@ -37,6 +37,7 @@ bool Endstops::readMotor1()
     Serial.print(state);
     Serial.print(" | Contador = ");
     Serial.println(counterMotor1);
+
     */
     return state;
 }
@@ -59,7 +60,8 @@ bool Endstops::readMotor2()
     Serial.print(state);
     Serial.print(" | Contador = ");
     Serial.println(counterMotor2);
-*/
+    */
+
     return state;
 }
 
@@ -79,7 +81,8 @@ bool Endstops::readMotor3()
     Serial.print(state);
     Serial.print(" | Contador = ");
     Serial.println(counterMotor3);
-*/
+    */
+   
     return state;
 }
 
