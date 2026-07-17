@@ -2,6 +2,7 @@
 #include "Pinout.h"
 #include "hardware/Pneumatics.h"
 #include "hardware/Conveyor.h"
+#include "hardware/Encoders.h"
 
 Pneumatics pneumatics;
 Conveyor conveyor(CINTAPWM);
@@ -186,6 +187,8 @@ void Robot::updateHoming()
        axis3Homed
        )
     {
+        // Cuando cada eje llegó a su endstop físico (posición de home real):
+        encoders.calibrarHoming(HOME_ANGLE_M1, HOME_ANGLE_M2, HOME_ANGLE_M3);
         state = GO_ZERO;
     }
 }

@@ -8,7 +8,6 @@
 #include "robot/Robot.h"
 #include "kinematics/DeltaKinematics.h"
 
-Encoders encoders;
 Robot robot;
 Endstops endstops;
 
