@@ -30,11 +30,6 @@ private:
     static const uint8_t pinesADC[NUM_ENCODERS];
 
     // --- Corrección de escala (ganancia) por VCC real ---
-    // El AS5600 satura su OUT proporcional a su VCC real, que medimos en
-    // 3.14V (no los 3.3V nominales que asume el ADC del ESP32 a 11dB).
-    // Sin esta corrección, raw nunca alcanza 4095 en la vuelta física
-    // completa y el cálculo con /4096 queda sistemáticamente "corto"
-    // cerca de 360°.
     static constexpr float VCC_ALIMENTACION_ENCODERS = 3.14f; // medido en la práctica
     static constexpr float VCC_REFERENCIA_ADC        = 3.30f; // referencia asumida por el ADC a 11dB
     static constexpr float RAW_MAX_EFECTIVO =
@@ -42,17 +37,25 @@ private:
 
     // --- Parámetros de robustez (ajustables) ---
     static const uint8_t  MAX_ERRORES_CONSECUTIVOS = 8;     // luego de esto el canal se marca "no válido" (pero conserva el último valor)
-    static const uint8_t  MUESTRAS_OVERSAMPLING     = 16;   // promediado por lectura
+    static const uint8_t  MUESTRAS_OVERSAMPLING     = 16;   // promediado por lectura (dentro de un mismo update())
     static constexpr float ALFA_FILTRO             = 0.15f; // suavizado exponencial (más bajo = más filtrado, más retardo)
     static constexpr float SALTO_MAX_DEG_POR_CICLO = 40.0f; // salto máximo plausible entre lecturas consecutivas -> rechaza ruido
 
     CanalEncoder canales[NUM_ENCODERS];
 
-    // Offset de calibración de home, por motor: se suma a anguloContinuo/
-    // anguloFiltrado al leerlos, para expresar el ángulo en el marco de
-    // referencia del robot en vez del marco crudo del sensor.
+    // Offset de calibración de home, por motor.
     float offsetHoming[NUM_ENCODERS]      = {0.0f, 0.0f, 0.0f};
     bool  homingCalibrado[NUM_ENCODERS]   = {false, false, false};
+
+    // --- Media móvil para calibración de home ---
+    // Mientras está activa, cada update() suma anguloContinuo al
+    // acumulador de cada canal. Al calibrar, se usa el PROMEDIO de todas
+    // las muestras juntadas durante la ventana (ej. el segundo de espera
+    // en el endstop) en vez de una única lectura puntual -- mucho más
+    // robusto ante ruido residual o micro-vibración al frenar.
+    bool     acumulandoHoming = false;
+    double   sumaAnguloContinuoHoming[NUM_ENCODERS] = {0.0, 0.0, 0.0};
+    uint32_t muestrasHoming[NUM_ENCODERS]           = {0, 0, 0};
 
     uint16_t leerRawPromediado(uint8_t indiceMotor);
     void     procesarLecturaValida(uint8_t indiceMotor, uint16_t raw);
@@ -67,38 +70,34 @@ public:
 
     // "motor" es el índice lógico: 0 = motor1, 1 = motor2, 2 = motor3
     // (mapeado internamente a GPIO35, GPIO34 y GPIO39).
-    // leerGrados() y leerGradosContinuo() devuelven el ángulo YA
-    // desplazado por el offset de home (si fue calibrado); si todavía
-    // no se calibró home, el offset es 0 y devuelven el marco crudo.
     float    leerGrados(uint8_t motor) const;         // último ángulo filtrado válido, en marco del robot
     float    leerGradosContinuo(uint8_t motor) const; // ángulo acumulado sin discontinuidad, en marco del robot
     uint16_t leerRaw(uint8_t motor) const;
-    bool     esValido(uint8_t motor) const;            // false si el motor superó el máximo de errores consecutivos
+    bool     esValido(uint8_t motor) const;
     bool     estaInicializado(uint8_t motor) const;
-    bool     estaCalibradoHoming(uint8_t motor) const;  // false si nunca se llamó a calibrarHomingMotor() para este canal
+    bool     estaCalibradoHoming(uint8_t motor) const;
     uint8_t  erroresConsecutivos(uint8_t motor) const;
     uint32_t tiempoDesdeUltimaLecturaOk_ms(uint8_t motor) const;
     float    leerVelocidad(uint8_t motor) const;
 
-    // Calibración de home: alinea el ángulo actual de un motor (o los 3)
-    // con el ángulo de home conocido del mecanismo. Debe llamarse una vez
-    // que el eje llegó físicamente a su posición de home (ej. al terminar
-    // la rutina de homing en Robot), y luego de que encoders.update() ya
-    // haya generado al menos una lectura válida para ese canal en esta
-    // sesión (estaInicializado(motor) == true).
+    // Arranca la ventana de acumulación para calibración de home: resetea
+    // los acumuladores de media móvil de los 3 canales. Llamar UNA vez,
+    // justo cuando los 3 ejes acaban de llegar a su endstop (arranque del
+    // segundo de espera en Robot).
+    void iniciarAsentamientoHoming();
+
+    // Calibra un motor usando el PROMEDIO acumulado desde
+    // iniciarAsentamientoHoming() (si hay muestras); si no se inició una
+    // ventana de asentamiento, cae a usar la lectura instantánea de
+    // anguloContinuo (comportamiento anterior, por compatibilidad).
     void calibrarHomingMotor(uint8_t motor, float anguloHome);
+
+    // Calibra los 3 motores usando la media acumulada.
     void calibrarHoming(float anguloHomeM1, float anguloHomeM2, float anguloHomeM3);
 
-    // fuerza a olvidar el histórico de un canal (por ejemplo tras perder
-    // la lectura). También borra su calibración de home: hay que volver
-    // a llamar calibrarHomingMotor() para ese canal antes de confiar en
-    // leerGrados()/leerGradosContinuo() otra vez.
     void resetearCanal(uint8_t motor);
 };
-// Instancia global única, definida en Encoders.cpp. Cualquier archivo
-// que incluya este header (main.cpp, Robot.cpp, etc.) referencia la
-// MISMA instancia — evita el error de "multiple definition" y asegura
-// que todos vean el mismo estado (calibración de home incluida).
+
 extern Encoders encoders;
 
 #endif

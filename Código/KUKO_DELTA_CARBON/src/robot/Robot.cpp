@@ -7,7 +7,8 @@
 Pneumatics pneumatics;
 Conveyor conveyor(CINTAPWM);
 
-// Duraciones de espera no bloqueante (antes eran delay(10000) y delay(3000))
+// Duraciones de espera no bloqueante (antes eran delay(2500), delay(10000) y delay(3000))
+static const uint32_t HOMING_SETTLE_WAIT_MS = 2500;
 static const uint32_t RELEASE_WAIT_MS        = 10000;
 static const uint32_t CONVEYOR_STOP_WAIT_MS  = 3000;
 
@@ -134,6 +135,11 @@ void Robot::startHoming()
     motor1.moveContinuous(false);
     motor2.moveContinuous(false);
     motor3.moveContinuous(false);
+
+    motor1.setSpeed(1000);
+    motor2.setSpeed(1000);
+    motor3.setSpeed(1000);
+
 }
 
 void Robot::updateHoming()
@@ -187,8 +193,31 @@ void Robot::updateHoming()
        axis3Homed
        )
     {
-        // Cuando cada eje llegó a su endstop físico (posición de home real):
+        
+                if (homingSettleStart_ms == 0)
+        {
+            // Arranca la ventana de acumulación de media móvil por canal,
+            // durante todo el segundo de espera.
+            encoders.iniciarAsentamientoHoming();
+            homingSettleStart_ms = millis();
+            return;
+        }
+
+        if (millis() - homingSettleStart_ms < HOMING_SETTLE_WAIT_MS)
+        {
+            return; // seguimos acumulando muestras, sin bloquear el resto del sistema
+        }
+
+        homingSettleStart_ms = 0;
+
+        // Calibra usando el PROMEDIO de todas las muestras del segundo
+        // de espera (no una lectura puntual).
         encoders.calibrarHoming(HOME_ANGLE_M1, HOME_ANGLE_M2, HOME_ANGLE_M3);
+
+        motor1.setSpeed(2000);
+        motor2.setSpeed(2000);
+        motor3.setSpeed(2000);
+
         state = GO_ZERO;
     }
 }
@@ -215,7 +244,8 @@ void Robot::updateGoZero()
         motor3.targetReached())
         {
 
-            state = GO_POSITION;
+            //state = GO_POSITION;
+            state = READY;
         }
 
 }

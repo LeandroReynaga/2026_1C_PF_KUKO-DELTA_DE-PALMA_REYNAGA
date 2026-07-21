@@ -8,7 +8,6 @@ constexpr float Encoders::RAW_MAX_EFECTIVO;
 
 const uint8_t Encoders::pinesADC[NUM_ENCODERS] = {35, 34, 39};
 
-// Definición real de la instancia global (reserva la memoria).
 Encoders encoders;
 
 // ------------------------------------------------------------------
@@ -18,12 +17,15 @@ void Encoders::begin()
 
     for (uint8_t i = 0; i < NUM_ENCODERS; i++)
     {
-        // ADC_11db habilita el rango completo hasta ~3.3V.
         analogSetPinAttenuation(pinesADC[i], ADC_11db);
         canales[i] = CanalEncoder();
         offsetHoming[i] = 0.0f;
         homingCalibrado[i] = false;
+        sumaAnguloContinuoHoming[i] = 0.0;
+        muestrasHoming[i] = 0;
     }
+
+    acumulandoHoming = false;
 }
 
 // ------------------------------------------------------------------
@@ -33,6 +35,16 @@ void Encoders::update()
     {
         uint16_t raw = leerRawPromediado(i);
         procesarLecturaValida(i, raw);
+
+        // Acumulación para la media móvil de calibración de homing.
+        // No importa si esta muestra puntual fue rechazada por el filtro
+        // de plausibilidad: en ese caso anguloContinuo conserva el último
+        // valor válido, y acumularlo de nuevo no introduce sesgo.
+        if (acumulandoHoming && canales[i].inicializado)
+        {
+            sumaAnguloContinuoHoming[i] += canales[i].anguloContinuo;
+            muestrasHoming[i]++;
+        }
     }
 }
 
@@ -55,11 +67,8 @@ void Encoders::procesarLecturaValida(uint8_t indiceMotor, uint16_t raw)
 {
     CanalEncoder &c = canales[indiceMotor];
 
-    // Escala corregida por VCC real (RAW_MAX_EFECTIVO ≈ 3896.7 en vez de
-    // 4096), para que 360° corresponda al raw que el sensor realmente
-    // alcanza con su alimentación de 3.14V.
     float anguloNuevo = (raw * 360.0f) / RAW_MAX_EFECTIVO;
-    if (anguloNuevo >= 360.0f) anguloNuevo -= 360.0f; // margen si el ruido supera levemente el calibrado
+    if (anguloNuevo >= 360.0f) anguloNuevo -= 360.0f;
 
     if (!c.inicializado)
     {
@@ -178,24 +187,49 @@ float Encoders::leerVelocidad(uint8_t motor) const
 }
 
 // ------------------------------------------------------------------
+void Encoders::iniciarAsentamientoHoming()
+{
+    acumulandoHoming = true;
+    for (uint8_t i = 0; i < NUM_ENCODERS; i++)
+    {
+        sumaAnguloContinuoHoming[i] = 0.0;
+        muestrasHoming[i] = 0;
+    }
+}
+
+// ------------------------------------------------------------------
 void Encoders::calibrarHomingMotor(uint8_t motor, float anguloHome)
 {
     if (motor >= NUM_ENCODERS) return;
-    if (!canales[motor].inicializado) return; // no calibrar sin al menos una lectura válida
+    if (!canales[motor].inicializado) return;
 
-    // Desplaza el marco de referencia: la posición física actual del eje
-    // pasa a valer "anguloHome" en el sistema de coordenadas del robot,
-    // sin alterar la lectura cruda del sensor (base de detección de
-    // saltos por ruido, que sigue en 0-360).
-    offsetHoming[motor] = anguloHome - canales[motor].anguloContinuo;
+    float referencia;
+
+    if (muestrasHoming[motor] > 0)
+    {
+        // Media móvil real: promedio de TODAS las muestras acumuladas
+        // desde iniciarAsentamientoHoming() -> mucho más robusto ante
+        // ruido residual que una lectura puntual.
+        referencia = (float)(sumaAnguloContinuoHoming[motor] / (double)muestrasHoming[motor]);
+    }
+    else
+    {
+        // Fallback: sin ventana de asentamiento activa, usa la lectura
+        // instantánea (comportamiento anterior).
+        referencia = canales[motor].anguloContinuo;
+    }
+
+    offsetHoming[motor] = anguloHome - referencia;
     homingCalibrado[motor] = true;
 }
 
 void Encoders::calibrarHoming(float anguloHomeM1, float anguloHomeM2, float anguloHomeM3)
 {
-    calibrarHomingMotor(0, anguloHomeM1);
-    calibrarHomingMotor(1, anguloHomeM2);
-    calibrarHomingMotor(2, anguloHomeM3);
+    calibrarHomingMotor(0, anguloHomeM1 - 4.0f);
+    calibrarHomingMotor(1, anguloHomeM2 - 4.0f);
+    calibrarHomingMotor(2, anguloHomeM3 - 4.5f);
+
+    acumulandoHoming = false;
 }
 
 // ------------------------------------------------------------------
@@ -205,4 +239,6 @@ void Encoders::resetearCanal(uint8_t motor)
     canales[motor] = CanalEncoder();
     offsetHoming[motor] = 0.0f;
     homingCalibrado[motor] = false;
+    sumaAnguloContinuoHoming[motor] = 0.0;
+    muestrasHoming[motor] = 0;
 }
