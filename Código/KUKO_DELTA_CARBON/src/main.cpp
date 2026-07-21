@@ -51,7 +51,6 @@ void loop()
         Serial.println(encoders.esValido(2) ? String(encoders.leerGrados(2), 1) : "ERR");
         
 
-
     }
 
 }

@@ -244,8 +244,8 @@ void Robot::updateGoZero()
         motor3.targetReached())
         {
 
-            //state = GO_POSITION;
-            state = READY;
+        //state = GO_POSITION;
+        state = READY; // Que quede en 0 y termine la secuencia
         }
 
 }
@@ -253,15 +253,16 @@ void Robot::updateGoZero()
 void Robot::updateGoPosition()
 {
 
-        motor1.moveTo(360); //cuanto mas bajo el valor, mas arriba va a estar el brazo
-        motor2.moveTo(360);
-        motor3.moveTo(360);
+        motor1.moveTo(365); //cuanto mas bajo el valor, mas arriba va a estar el brazo
+        motor2.moveTo(365);
+        motor3.moveTo(365);
 
       if(motor1.targetReached() &&
         motor2.targetReached() &&
         motor3.targetReached())
         {
             state = GRAB;
+            //state = READY; // Que quede en 90 y termine la secuencia
         }
 
 }
@@ -278,9 +279,9 @@ void Robot::updateGrab()
 
 void Robot::updateGoUp()
 {
-        motor1.moveTo(-1000);
-        motor2.moveTo(-1000);
-        motor3.moveTo(-1000);
+        motor1.moveTo(-1300);
+        motor2.moveTo(-1300);
+        motor3.moveTo(-1300);
 
       if(motor1.targetReached() &&
         motor2.targetReached() &&

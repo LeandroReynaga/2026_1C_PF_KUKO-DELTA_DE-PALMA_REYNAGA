@@ -30,7 +30,7 @@ private:
     static const uint8_t pinesADC[NUM_ENCODERS];
 
     // --- Corrección de escala (ganancia) por VCC real ---
-    static constexpr float VCC_ALIMENTACION_ENCODERS = 3.14f; // medido en la práctica
+    static constexpr float VCC_ALIMENTACION_ENCODERS = 3.46f; // medido en la práctica
     static constexpr float VCC_REFERENCIA_ADC        = 3.30f; // referencia asumida por el ADC a 11dB
     static constexpr float RAW_MAX_EFECTIVO =
         4095.0f * (VCC_ALIMENTACION_ENCODERS / VCC_REFERENCIA_ADC); // ≈ 3896.7

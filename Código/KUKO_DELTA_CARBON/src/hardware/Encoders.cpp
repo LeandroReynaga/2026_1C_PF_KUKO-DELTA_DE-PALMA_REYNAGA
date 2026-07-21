@@ -225,9 +225,9 @@ void Encoders::calibrarHomingMotor(uint8_t motor, float anguloHome)
 
 void Encoders::calibrarHoming(float anguloHomeM1, float anguloHomeM2, float anguloHomeM3)
 {
-    calibrarHomingMotor(0, anguloHomeM1 - 4.0f);
-    calibrarHomingMotor(1, anguloHomeM2 - 4.0f);
-    calibrarHomingMotor(2, anguloHomeM3 - 4.5f);
+    calibrarHomingMotor(0, anguloHomeM1 - 1.2f);
+    calibrarHomingMotor(1, anguloHomeM2 - 0.7f);
+    calibrarHomingMotor(2, anguloHomeM3 - 1.1f);
 
     acumulandoHoming = false;
 }
