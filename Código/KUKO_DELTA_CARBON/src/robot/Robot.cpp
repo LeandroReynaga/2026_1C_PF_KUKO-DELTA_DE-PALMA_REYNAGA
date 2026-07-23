@@ -3,6 +3,7 @@
 #include "hardware/Pneumatics.h"
 #include "hardware/Conveyor.h"
 #include "hardware/Encoders.h"
+#include "kinematics/DeltaKinematics.h"
 
 Pneumatics pneumatics;
 Conveyor conveyor(CINTAPWM);
@@ -244,8 +245,8 @@ void Robot::updateGoZero()
         motor3.targetReached())
         {
 
-        //state = GO_POSITION;
-        state = READY; // Que quede en 0 y termine la secuencia
+        state = GO_POSITION;
+        //state = READY; // Que quede en 0 y termine la secuencia
         }
 
 }
@@ -253,16 +254,31 @@ void Robot::updateGoZero()
 void Robot::updateGoPosition()
 {
 
-        motor1.moveTo(365); //cuanto mas bajo el valor, mas arriba va a estar el brazo
-        motor2.moveTo(365);
-        motor3.moveTo(365);
+// Coordenada objetivo del efector (cm), mismo sistema que DeltaKinematics.
+        // Ajustar acá el punto de recogida.
+        constexpr float TARGET_X = 2.0f;
+        constexpr float TARGET_Y = -7.7f;
+        constexpr float TARGET_Z = -31.0f;
+
+        DeltaKinematics::DeltaAngles pose = DeltaKinematics::solveIK(TARGET_X, TARGET_Y, TARGET_Z);
+
+        if (!pose.success)
+        {
+            // Punto inalcanzable o fuera de los topes articulares: no se comanda nada,
+            // el robot se queda esperando en vez de moverse a un target inválido.
+            return;
+        }
+
+        motor1.moveTo(pose.steps1);
+        motor2.moveTo(pose.steps2);
+        motor3.moveTo(pose.steps3);
 
       if(motor1.targetReached() &&
         motor2.targetReached() &&
         motor3.targetReached())
         {
-            state = GRAB;
-            //state = READY; // Que quede en 90 y termine la secuencia
+            //state = GRAB;
+            state = READY; // Que termine la secuencia en la posicion indicada
         }
 
 }

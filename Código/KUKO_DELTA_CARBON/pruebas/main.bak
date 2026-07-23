@@ -5,64 +5,52 @@
 #include "hardware/Pneumatics.h"
 #include "hardware/Endstops.h"
 #include "hardware/Motors.h"
+#include "robot/Robot.h"
+#include "kinematics/DeltaKinematics.h"
 
-Conveyor conveyor(CINTAPWM); 
-Encoders encoders;           
-Pneumatics pneumatics;       
-Endstops endstops;           
-Motors motors;               
+Robot robot;
+Endstops endstops;
+
+// Impresión de diagnóstico no bloqueante: se muestra a intervalos fijos
+// en lugar de en cada vuelta del loop (que sería miles de veces por
+// segundo, ilegible y con costo real de tiempo de CPU/UART).
+uint32_t ultimoPrint_ms = 0;
+const uint32_t INTERVALO_PRINT_MS = 200; // 5 Hz, suficiente para ver la evolución en vivo
+
 
 void setup()
 {
-    Serial.begin(115200); // Inicializa la comunicación con el monitor serie
+    Serial.begin(115200);
 
-    //conveyor.begin();
-    //encoders.begin();
-    //pneumatics.begin();
-    //endstops.begin();
-    motors.begin();
-
+    encoders.begin();
+    endstops.begin();
+    robot.begin();
+    robot.startHoming();
 }
 
 void loop()
 {
+    // Debe llamarse SIEMPRE, en cada vuelta del loop: es lo que hace avanzar
+    // la máquina de estados no bloqueante de los encoders.
+    encoders.update();
 
-    //pneumatics.update(); // Activa y desactiva la bomba cada 2 segundos
+    robot.update();
 
+    uint32_t ahora = millis();
+    if (ahora - ultimoPrint_ms >= INTERVALO_PRINT_MS)
+    {
+        ultimoPrint_ms = ahora;
+        
+        Serial.print("M1: ");
+        Serial.print(encoders.esValido(0) ? String(encoders.leerGrados(0), 1) : "ERR");
 
+        Serial.print(" | M2: ");
+        Serial.print(encoders.esValido(1) ? String(encoders.leerGrados(1), 1) : "ERR");
 
-    /*
-    Serial.print("FC1: ");
-    Serial.print(endstops.readMotor1());
+        Serial.print(" | M3: ");
+        Serial.println(encoders.esValido(2) ? String(encoders.leerGrados(2), 1) : "ERR");
+        
 
-    Serial.print(" | FC2: ");
-    Serial.print(endstops.readMotor2());
-
-    Serial.print(" | FC3: ");
-    Serial.print(endstops.readMotor3());
-
-    Serial.print(" | ALL: ");
-    Serial.println(endstops.allPressed());
-
-    delay(200);
-    */
-
-    /*
-    //la bomba se activa durante 2 segundos y luego se libera
-    pneumatics.grab();
-    delay(2000);
-    pneumatics.release();
-    delay(2000);
-    */
-
-    
-    Serial.print("E1: ");
-    Serial.print(encoders.leerGrados(4));
-
-    Serial.print(" | E2: ");
-    Serial.print(encoders.leerGrados(3));
-
-    Serial.print(" | E3: ");
-    Serial.println(encoders.leerGrados(6));
+    }
 
 }

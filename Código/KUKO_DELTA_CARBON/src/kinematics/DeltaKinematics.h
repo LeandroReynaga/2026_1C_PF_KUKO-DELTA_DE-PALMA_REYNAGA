@@ -34,6 +34,20 @@ constexpr float THETA_MIN = -90.0f;
 constexpr float THETA_MAX = 90.0f;
 
 // ============================================================
+//  CONFIGURACIÓN DEL DRIVER (conversión grados -> pasos)
+//  Driver de los NEMA23 configurado a 20000 micropasos por vuelta.
+//  El robot ya está calibrado con 0 pasos = 0°, no se aplica offset.
+// ============================================================
+constexpr long STEPS_PER_REV    = 20000;                    // micropasos por vuelta completa (360°)
+constexpr float STEPS_PER_DEGREE = STEPS_PER_REV / 360.0f;
+
+// Si al probar un motor gira al revés de lo esperado, invertir acá
+// (mucho más simple que recablear o invertir el driver).
+constexpr bool INVERT_MOTOR1 = false;
+constexpr bool INVERT_MOTOR2 = false;
+constexpr bool INVERT_MOTOR3 = false;
+
+// ============================================================
 //  Resultado de la cinemática inversa
 // ============================================================
 enum class IKStatus : uint8_t {
@@ -47,6 +61,9 @@ struct DeltaAngles {
     float theta1 = 0.0f;
     float theta2 = 0.0f;
     float theta3 = 0.0f;
+    long steps1 = 0;   // Posición objetivo del motor 1, en micropasos (para AccelStepper::moveTo)
+    long steps2 = 0;
+    long steps3 = 0;
     IKStatus status = IKStatus::INVALID_INPUT;
     bool success = false; // Atajo equivalente a (status == IKStatus::OK)
 };
