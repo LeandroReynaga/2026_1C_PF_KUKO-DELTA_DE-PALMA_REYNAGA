@@ -24,7 +24,7 @@ namespace DeltaKinematics {
 // ============================================================
 constexpr float BICEP_LENGTH    = 18.0f;   // L1: brazo superior, motor -> codo
 constexpr float FOREARM_LENGTH  = 35.2f;   // L2: brazo inferior, varilla libre codo -> efector
-constexpr float BASE_RADIUS     = 7.075f;  // Centro de la base al eje del motor (141.5 mm / 2)
+constexpr float BASE_RADIUS     = 8.275f; //7.075f;  // Centro de la base al eje del motor (141.5 mm / 2)
 constexpr float EFFECTOR_RADIUS = 3.83f;   // Centro del efector al eje de articulación (76.6 mm / 2)
 
 // Límites articulares de seguridad (grados), medidos desde la horizontal del brazo.

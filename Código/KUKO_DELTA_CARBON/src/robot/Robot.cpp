@@ -256,16 +256,14 @@ void Robot::updateGoPosition()
 
 // Coordenada objetivo del efector (cm), mismo sistema que DeltaKinematics.
         // Ajustar acá el punto de recogida.
-        constexpr float TARGET_X = 2.0f;
-        constexpr float TARGET_Y = -7.7f;
-        constexpr float TARGET_Z = -31.0f;
+        constexpr float TARGET_X = -12.5f;
+        constexpr float TARGET_Y = -3.5f;
+        constexpr float TARGET_Z = -30.0f;//-30.45f;
 
         DeltaKinematics::DeltaAngles pose = DeltaKinematics::solveIK(TARGET_X, TARGET_Y, TARGET_Z);
 
         if (!pose.success)
         {
-            // Punto inalcanzable o fuera de los topes articulares: no se comanda nada,
-            // el robot se queda esperando en vez de moverse a un target inválido.
             return;
         }
 
@@ -277,8 +275,9 @@ void Robot::updateGoPosition()
         motor2.targetReached() &&
         motor3.targetReached())
         {
-            //state = GRAB;
+        //state = GRAB;
             state = READY; // Que termine la secuencia en la posicion indicada
+            
         }
 
 }
