@@ -256,9 +256,9 @@ void Robot::updateGoPosition()
 
 // Coordenada objetivo del efector (cm), mismo sistema que DeltaKinematics.
         // Ajustar acá el punto de recogida.
-        constexpr float TARGET_X = -12.5f;
-        constexpr float TARGET_Y = -3.5f;
-        constexpr float TARGET_Z = -30.0f;//-30.45f;
+        constexpr float TARGET_X = 1.0f;
+        constexpr float TARGET_Y = 1.0f;
+        constexpr float TARGET_Z = -29.0f;//-30.45f;
 
         DeltaKinematics::DeltaAngles pose = DeltaKinematics::solveIK(TARGET_X, TARGET_Y, TARGET_Z);
 

@@ -85,9 +85,9 @@ private:
     //static constexpr float HOME_ANGLE_M2 = -46.26f; //-3;//-46.26f;
     //static constexpr float HOME_ANGLE_M3 = -46.40f; //-2.5;//-46.44f;
 
-    static constexpr float HOME_ANGLE_M1 = -45.08f; //-2.35f;
-    static constexpr float HOME_ANGLE_M2 = -44.3f; //-2.35f;
-    static constexpr float HOME_ANGLE_M3 = -46.5f; //-2.35f;
+    static constexpr float HOME_ANGLE_M1 = -45.1f;//-44.1f; //-2.35f;
+    static constexpr float HOME_ANGLE_M2 = -44.3f;//-43.3f; //-2.35f;
+    static constexpr float HOME_ANGLE_M3 = -44.5f;//-46.5f; //-2.35f;
 
     static long angleToSteps(float angle)
 {

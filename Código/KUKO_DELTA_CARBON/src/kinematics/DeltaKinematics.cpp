@@ -73,6 +73,9 @@ const char *toString(IKStatus status) {
 DeltaAngles solveIK(float x, float y, float z) {
     DeltaAngles result;
 
+    x = x * 1.02f; // Ganancia para ajustar coordenada X, medida en el robot real
+    y = y * 0.98f; // Ganancia para ajustar coordenada Y, medida en el robot real
+
     // Sistema de coordenadas del robot (vista superior):
     //
     //            Y+
