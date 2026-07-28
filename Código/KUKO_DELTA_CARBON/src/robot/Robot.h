@@ -2,12 +2,10 @@
 #define ROBOT_H
 
 #include <Arduino.h>
-
 #include "Stepper.h"
-
 #include "../hardware/Endstops.h"
-
 #include "Pinout.h"
+#include "../hardware/Motors.h"
 
 class Robot
 {
@@ -44,6 +42,7 @@ public:
 
     RobotState getState() const;
 
+    bool goToPositionIK(float x, float y, float z, const Motors::MotionLimits &limits = Motors::DEFAULT_LIMITS);
 
 private:
 
@@ -78,6 +77,8 @@ private:
     uint32_t homingSettleStart_ms = 0;
     uint32_t releaseWaitStart_ms      = 0;
     uint32_t conveyorStopWaitStart_ms = 0;
+    
+    bool positionMoveIssued = false;
 
     static constexpr long MICROPASOS = 20000;
 

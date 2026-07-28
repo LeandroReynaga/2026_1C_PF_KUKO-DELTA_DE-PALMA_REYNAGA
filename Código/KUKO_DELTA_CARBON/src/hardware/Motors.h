@@ -1,34 +1,48 @@
-#ifndef MOTORS_H
-#define MOTORS_H
+#pragma once
+#include <Arduino.h>
 
-#include <AccelStepper.h>
+class Stepper; // forward declaration: Motors.h solo necesita referencias,
+                // no la definicion completa (eso lo incluye Motors.cpp)
 
-#define PULSOS_POR_VUELTA 20000  // SW5 OFF, SW6 ON, SW7 OFF, SW8 OFF = 10000 pulsos/vuelta
+/**
+ * Motors
+ * ------
+ * Utilidades para coordinar VARIOS Stepper a la vez. No dependen de ninguna
+ * cinematica particular (delta, cartesiana, etc.), solo de posiciones en pasos.
+ *
+ * La clase que controla cada eje individual sigue siendo Stepper
+ * (Stepper.h/.cpp, generacion de pulsos por interrupcion de hardware).
+ * Este archivo NO redefine esa clase, solo agrega logica para coordinar
+ * 3 instancias juntas.
+ */
+namespace Motors {
 
-class Motors
-{
-private:
-    AccelStepper motor1;     // Objeto para controlar el motor 1
-    AccelStepper motor2;     // Objeto para controlar el motor 2
-    AccelStepper motor3;     // Objeto para controlar el motor 3
-
-public:
-    Motors();                // Constructor de la clase Motors
-
-    void begin();            // Inicializa motores y drivers
-    void run();              // Ejecuta los movimientos pendientes
-
-    void habilitar();        // Habilita los drivers DM556
-    void deshabilitar();     // Deshabilita los drivers DM556
-
-    void moverMotorAPulsos(uint8_t motor, long pulsos);   // Mueve un motor a una posición absoluta en pulsos
-    void moverMotorRelativo(uint8_t motor, long pulsos);  // Mueve un motor cierta cantidad de pulsos desde su posición actual
-    void moverMotorAGrados(uint8_t motor, float grados);  // Mueve un motor a una posición expresada en grados
-
-    long posicionPulsos(uint8_t motor);     // Devuelve la posición teórica actual en pulsos
-    float posicionGrados(uint8_t motor);    // Devuelve la posición teórica actual en grados
-
-    bool motorEnMovimiento(uint8_t motor);  // Indica si el motor todavía tiene movimiento pendiente
+struct MotionLimits {
+    float maxSpeed;        // pasos/seg
+    float maxAcceleration; // pasos/seg^2 (Stepper::setAcceleration aun no implementa rampa real)
 };
 
-#endif
+// ============================================================
+//  LIMITES FISICOS DEL SISTEMA (driver + microstepping + mecanica)
+//  Unico lugar a tocar para subir/bajar el techo de velocidad global.
+// ============================================================
+constexpr float MAX_SPEED = 4000.0f;         // pasos/seg
+constexpr float MAX_ACCELERATION = 500.0f;  // pasos/seg^2 (reservado a futuro), antes 3000
+constexpr MotionLimits DEFAULT_LIMITS = {MAX_SPEED, MAX_ACCELERATION};
+
+/**
+ * Mueve 3 motores en simultaneo, escalando la velocidad de cada uno segun
+ * cuanto tiene que recorrer respecto al que mas recorre. Sin rampa de
+ * aceleracion (Stepper hoy es velocidad constante), esto sincroniza la
+ * llegada de forma EXACTA: tiempo = distancia/velocidad, y al escalar
+ * velocidad proporcional a distancia, ese tiempo queda igual para los 3.
+ *
+ * limits: techo de velocidad/aceleracion para el movimiento (por defecto,
+ * el maximo del sistema). Pasar un MotionLimits mas chico para probar
+ * a velocidad reducida sin tocar MAX_SPEED/MAX_ACCELERATION globales.
+ */
+void moveSynchronized(Stepper &m1, Stepper &m2, Stepper &m3,
+                       long target1, long target2, long target3,
+                       const MotionLimits &limits = DEFAULT_LIMITS);
+
+} // namespace Motors

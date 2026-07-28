@@ -219,7 +219,7 @@ void Robot::updateHoming()
         motor2.setSpeed(2000);
         motor3.setSpeed(2000);
 
-        state = GO_ZERO;
+        state = GO_POSITION; // vamos a la posición objetivo de recogida
     }
 }
 
@@ -245,33 +245,46 @@ void Robot::updateGoZero()
         motor3.targetReached())
         {
 
+        positionMoveIssued = false; // el proximo GO_POSITION tiene que volver a comandar el movimiento
         state = GO_POSITION;
         //state = READY; // Que quede en 0 y termine la secuencia
         }
 
 }
 
+bool Robot::goToPositionIK(float x, float y, float z, const Motors::MotionLimits &limits)
+{
+    DeltaKinematics::DeltaAngles pose = DeltaKinematics::solveIK(x, y, z);
+    if (!pose.success)
+    {
+        return false;
+    }
+    Motors::moveSynchronized(motor1, motor2, motor3, pose.steps1, pose.steps2, pose.steps3, limits);
+    return true;
+}
+
 void Robot::updateGoPosition()
 {
+    // Coordenada objetivo del efector (cm), mismo sistema que DeltaKinematics.
+    // Ajustar acá el punto de recogida.
+    constexpr float TARGET_X = 5.0f;
+    constexpr float TARGET_Y = -10.0f;
+    constexpr float TARGET_Z = -25.0f;
 
-// Coordenada objetivo del efector (cm), mismo sistema que DeltaKinematics.
-        // Ajustar acá el punto de recogida.
-        constexpr float TARGET_X = 1.0f;
-        constexpr float TARGET_Y = 1.0f;
-        constexpr float TARGET_Z = -29.0f;//-30.45f;
-
-        DeltaKinematics::DeltaAngles pose = DeltaKinematics::solveIK(TARGET_X, TARGET_Y, TARGET_Z);
-
-        if (!pose.success)
+    // El movimiento se comanda UNA sola vez al entrar al estado (no en cada
+    // vuelta de loop): Motors::moveSynchronized calcula velocidad segun la
+    // distancia restante, asi que llamarlo repetidas veces reconfiguraria
+    // el timer de cada Stepper en cada tick sin necesidad.
+    if (!positionMoveIssued)
+    {
+        if (!goToPositionIK(TARGET_X, TARGET_Y, TARGET_Z))
         {
-            return;
+            return; // punto invalido: no se comanda nada, se reintenta el siguiente tick
         }
+        positionMoveIssued = true;
+    }
 
-        motor1.moveTo(pose.steps1);
-        motor2.moveTo(pose.steps2);
-        motor3.moveTo(pose.steps3);
-
-      if(motor1.targetReached() &&
+    if(motor1.targetReached() &&
         motor2.targetReached() &&
         motor3.targetReached())
         {
