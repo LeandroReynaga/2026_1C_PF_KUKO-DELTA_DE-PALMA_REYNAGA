@@ -25,8 +25,8 @@ public:
     bool isEnabled() const;
 
     void setDirection(bool direction);
-    void setSpeed(float stepsPerSecond);
-    void setAcceleration(float acceleration);
+    void setSpeed(float stepsPerSecond);         // techo de velocidad (velocidad de crucero)
+    void setAcceleration(float stepsPerSecond2); // pasos/seg^2, define que tan rapido rampea
 
     void moveContinuous(bool direction);
     void moveSteps(long steps);
@@ -60,16 +60,49 @@ private:
     volatile long        currentPosition;
     volatile long        targetPosition;
 
-    float speed;
-    float acceleration;
-    uint32_t stepInterval; // microsegundos entre pasos, calculado a partir de speed
+    // ------------------------------------------------------------------
+    // Rampa trapezoidal (algoritmo de D. Austin 2004 / el mismo que usa
+    // AccelStepper), pero en punto fijo ENTERO -- CERO floats dentro de la
+    // interrupcion. Motivo: el ESP32/Arduino no garantiza guardar el
+    // contexto de la FPU al entrar a una ISR de timer; usar float ahi
+    // adentro corrompe registros y crashea (LoadProhibited), como paso.
+    //
+    // "cn" se guarda escalado (cn_real_us = cn / RAMP_SCALE) para que la
+    // division entera de la formula de Austin no trunque a 0 antes de
+    // tiempo y la rampa se quede "pegada" sin llegar a la velocidad real.
+    //
+    // Los limites de la rampa (accelSteps/decelStart) SI se calculan con
+    // float (sqrt, division) pero solo en moveTo()/moveContinuous(),
+    // fuera de la ISR -> ahi el float es 100% seguro.
+    // ------------------------------------------------------------------
+    static constexpr long RAMP_SCALE = 256;      // precision extra en punto fijo
+    static constexpr uint32_t BASE_TICK_US = 20; // ritmo fijo del timer de hardware
+
+    volatile long cn;             // intervalo actual, ESCALADO por RAMP_SCALE
+    volatile long n;              // indice de paso en la rampa (+ acelerando, - frenando)
+    volatile long stepIndex;      // pasos dados en el movimiento actual (0-based, cuenta hacia adelante)
+    volatile long ticksUntilStep; // cuenta regresiva de ticks base hasta el proximo paso
+
+    long c0;          // intervalo inicial ESCALADO (arranque desde parado)
+    long cmin;        // intervalo minimo ESCALADO (velocidad crucero)
+    long accelSteps;  // pasos de aceleracion calculados para el movimiento actual
+    long decelStart;  // stepIndex (pasos ya dados) a partir del cual hay que frenar
+
+    volatile bool rampEnabled; // true si hay aceleracion configurada (evita comparar
+                                // el float 'acceleration' dentro de la ISR)
+
+    float maxSpeed;     // techo configurado con setSpeed() (pasos/seg)
+    float acceleration; // configurado con setAcceleration() (pasos/seg^2)
 
     hw_timer_t *timer;
     portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 
-    void aplicarFrecuenciaTimer();
+    // Decide el intervalo (cn) para el PROXIMO paso. Solo aritmetica
+    // entera -> segura para llamar desde la ISR. También se usa para
+    // "sembrar" el primer intervalo desde moveTo()/moveContinuous().
+    void IRAM_ATTR computeNextInterval();
 
-    // Lógica real de generación de pulso; corre en contexto de interrupción.
+    // Genera el pulso y avanza la posición; corre en contexto de interrupción.
     void IRAM_ATTR onTimerTick();
 
     // Punteros estáticos para que las ISR (funciones libres, requeridas por

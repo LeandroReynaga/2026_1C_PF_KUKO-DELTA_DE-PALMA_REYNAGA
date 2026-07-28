@@ -215,9 +215,9 @@ void Robot::updateHoming()
         // de espera (no una lectura puntual).
         encoders.calibrarHoming(HOME_ANGLE_M1, HOME_ANGLE_M2, HOME_ANGLE_M3);
 
-        motor1.setSpeed(2000);
-        motor2.setSpeed(2000);
-        motor3.setSpeed(2000);
+        motor1.setSpeed(15000);
+        motor2.setSpeed(15000);
+        motor3.setSpeed(15000);
 
         state = GO_POSITION; // vamos a la posición objetivo de recogida
     }
@@ -269,7 +269,7 @@ void Robot::updateGoPosition()
     // Ajustar acá el punto de recogida.
     constexpr float TARGET_X = 5.0f;
     constexpr float TARGET_Y = -10.0f;
-    constexpr float TARGET_Z = -25.0f;
+    constexpr float TARGET_Z = -29.0f;
 
     // El movimiento se comanda UNA sola vez al entrar al estado (no en cada
     // vuelta de loop): Motors::moveSynchronized calcula velocidad segun la

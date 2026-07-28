@@ -1,4 +1,5 @@
 #include "Stepper.h"
+#include <math.h>
 
 Stepper *Stepper::instancias[4] = {nullptr, nullptr, nullptr, nullptr};
 
@@ -20,10 +21,18 @@ Stepper::Stepper(uint8_t stepPin,
     currentPosition = 0;
     targetPosition = 0;
 
-    speed = 500.0f;
-    acceleration = 0.0f;
+    cn = 0;
+    n = 0;
+    stepIndex = 0;
+    ticksUntilStep = 0;
 
-    stepInterval = 1000000UL / (uint32_t)speed;
+    maxSpeed = 500.0f;
+    acceleration = 0.0f;
+    rampEnabled = false; // sin rampa hasta que se llame setAcceleration()
+    c0 = 0;
+    cmin = (long)((1000000.0f / maxSpeed) * RAMP_SCALE);
+    accelSteps = 0;
+    decelStart = 0;
 
     timer = nullptr;
 
@@ -43,8 +52,6 @@ void Stepper::begin()
     digitalWrite(dirPin, LOW);
 
     // Timer con prescaler 80 sobre el reloj de 80MHz del APB -> 1 tick = 1us.
-    // Así stepInterval (calculado en microsegundos, igual que antes) se puede
-    // usar directamente como valor de alarma.
     timer = timerBegin(timerIndex, 80, true);
 
     switch (timerIndex)
@@ -56,7 +63,10 @@ void Stepper::begin()
         default: break;
     }
 
-    aplicarFrecuenciaTimer();
+    // El timer corre a un ritmo FIJO y chico (BASE_TICK_US), configurado
+    // UNA sola vez aca y nunca mas tocado desde la ISR. El ritmo real de
+    // los pasos lo controla ticksUntilStep, no la frecuencia del timer.
+    timerAlarmWrite(timer, BASE_TICK_US, true);
     timerAlarmEnable(timer);
 
     enable();
@@ -93,24 +103,29 @@ void Stepper::setSpeed(float stepsPerSecond)
     if (stepsPerSecond <= 0.0f)
         return;
 
-    speed = stepsPerSecond;
-    stepInterval = (uint32_t)(1000000.0f / speed);
+    long newCmin = (long)((1000000.0f / stepsPerSecond) * RAMP_SCALE);
 
-    aplicarFrecuenciaTimer();
+    portENTER_CRITICAL(&mux);
+    maxSpeed = stepsPerSecond;
+    cmin = newCmin;
+    portEXIT_CRITICAL(&mux);
 }
 
-void Stepper::setAcceleration(float acceleration)
+void Stepper::setAcceleration(float stepsPerSecond2)
 {
-    this->acceleration = acceleration; // reservado para una futura rampa de velocidad
-}
+    if (stepsPerSecond2 <= 0.0f)
+        return;
 
-void Stepper::aplicarFrecuenciaTimer()
-{
-    if (timer == nullptr) return;
+    // Formula de Austin (2004): intervalo (en us) del primer paso al
+    // arrancar desde parado, dada la aceleracion deseada. Se calcula UNA
+    // vez aca (float, fuera de la ISR: seguro) y se guarda escalado.
+    long newC0 = (long)(0.676f * sqrtf(2.0f / stepsPerSecond2) * 1000000.0f * RAMP_SCALE);
 
-    // autoreload = true: la ISR se sigue disparando sola cada stepInterval us
-    // sin que el loop() tenga que hacer nada.
-    timerAlarmWrite(timer, stepInterval, true);
+    portENTER_CRITICAL(&mux);
+    acceleration = stepsPerSecond2;
+    c0 = newC0;
+    rampEnabled = true;
+    portEXIT_CRITICAL(&mux);
 }
 
 void Stepper::moveContinuous(bool dir)
@@ -118,8 +133,22 @@ void Stepper::moveContinuous(bool dir)
     enable();
     setDirection(dir);
 
+    // Sin objetivo fijo: acelera hasta crucero y se queda ahi (no hay
+    // frenado automatico, solo via stop()).
+    long steps = rampEnabled
+        ? (long)((maxSpeed * maxSpeed) / (2.0f * acceleration))
+        : 0;
+
     portENTER_CRITICAL(&mux);
+    accelSteps = steps;
+    decelStart = 0x7FFFFFFFL; // "nunca": no hay objetivo, no se frena solo
+    n = 0;
+    cn = 0;
+    stepIndex = 0;
     motionMode = CONTINUOUS;
+    computeNextInterval(); // intervalo del primer paso
+    ticksUntilStep = cn / (RAMP_SCALE * (long)BASE_TICK_US);
+    if (ticksUntilStep < 1) ticksUntilStep = 1;
     portEXIT_CRITICAL(&mux);
 }
 
@@ -149,8 +178,22 @@ void Stepper::moveTo(long position)
 
     enable();
 
+    long D = labs(position - actual);
+    long steps = rampEnabled
+        ? (long)((maxSpeed * maxSpeed) / (2.0f * acceleration))
+        : 0;
+    if (2 * steps > D) steps = D / 2; // distancia corta: perfil triangular
+
     portENTER_CRITICAL(&mux);
+    accelSteps = steps;
+    decelStart = D - steps;
+    n = 0;
+    cn = 0;
+    stepIndex = 0;
     motionMode = POSITION;
+    computeNextInterval(); // decide el intervalo del primer paso (arranca en c0)
+    ticksUntilStep = cn / (RAMP_SCALE * (long)BASE_TICK_US);
+    if (ticksUntilStep < 1) ticksUntilStep = 1;
     portEXIT_CRITICAL(&mux);
 }
 
@@ -158,6 +201,10 @@ void Stepper::stop()
 {
     portENTER_CRITICAL(&mux);
     motionMode = IDLE;
+    n = 0;
+    cn = 0;
+    stepIndex = 0;
+    ticksUntilStep = 0;
     portEXIT_CRITICAL(&mux);
 }
 
@@ -191,8 +238,43 @@ void Stepper::update()
 
 // ------------------------------------------------------------------
 // A partir de acá corre en contexto de INTERRUPCIÓN. Nada de Serial, nada
-// de I2C, nada de float pesado, nada que pueda bloquear.
+// de I2C, nada de float/double, nada que llame a timerAlarmWrite ni a
+// ninguna otra función del API de timers (esas viven en flash, no
+// garantizado en IRAM). Todo lo de acá para abajo es aritmética entera y
+// GPIO puro.
 // ------------------------------------------------------------------
+void IRAM_ATTR Stepper::computeNextInterval()
+{
+    // Sin aceleracion configurada, no rampea: crucero directo al maximo
+    // (comportamiento anterior, por si alguien no llama setAcceleration()).
+    // rampEnabled es bool, no float: nada de FPU en esta comparacion.
+    if (!rampEnabled)
+    {
+        cn = cmin;
+        n = 0;
+        return;
+    }
+
+    // El umbral de frenado (decelStart) ya viene precalculado desde
+    // moveTo()/moveContinuous() -> aca no hace falta ni sqrt ni division
+    // para decidir cuando frenar, solo una comparacion entera.
+    if (n > 0 && stepIndex >= decelStart)
+    {
+        n = -n; // arrancar a frenar (mismo truco que el algoritmo de Austin)
+    }
+
+    if (n == 0)
+    {
+        cn = c0;
+    }
+    else
+    {
+        cn = cn - (2 * cn) / (4 * n + 1); // formula de Austin, en punto fijo entero
+        if (cn < cmin) cn = cmin;
+    }
+    n++;
+}
+
 void IRAM_ATTR Stepper::onTimerTick()
 {
     if (!enabled) return;
@@ -203,6 +285,18 @@ void IRAM_ATTR Stepper::onTimerTick()
     if (motionMode == POSITION && currentPosition == targetPosition)
     {
         motionMode = IDLE;
+        n = 0;
+        cn = 0;
+        stepIndex = 0;
+        ticksUntilStep = 0;
+        portEXIT_CRITICAL_ISR(&mux);
+        return;
+    }
+
+    ticksUntilStep--;
+    if (ticksUntilStep > 0)
+    {
+        // Todavia no toca el proximo paso: no se genera pulso este tick.
         portEXIT_CRITICAL_ISR(&mux);
         return;
     }
@@ -210,7 +304,6 @@ void IRAM_ATTR Stepper::onTimerTick()
     portEXIT_CRITICAL_ISR(&mux);
 
     // Pulso: alto, esperar el ancho mínimo, bajo.
-    // El bloqueo es de pocos microsegundos, aceptable dentro de una ISR.
     digitalWrite(stepPin, HIGH);
     delayMicroseconds(STEP_PULSE_US);
     digitalWrite(stepPin, LOW);
@@ -220,10 +313,21 @@ void IRAM_ATTR Stepper::onTimerTick()
         currentPosition++;
     else
         currentPosition--;
+    stepIndex++;
 
     if (motionMode == POSITION && currentPosition == targetPosition)
     {
         motionMode = IDLE;
+        n = 0;
+        cn = 0;
+        stepIndex = 0;
+        ticksUntilStep = 0;
+    }
+    else
+    {
+        computeNextInterval(); // decide el intervalo para el SIGUIENTE paso
+        ticksUntilStep = cn / (RAMP_SCALE * (long)BASE_TICK_US);
+        if (ticksUntilStep < 1) ticksUntilStep = 1;
     }
     portEXIT_CRITICAL_ISR(&mux);
 }

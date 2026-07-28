@@ -26,8 +26,8 @@ struct MotionLimits {
 //  LIMITES FISICOS DEL SISTEMA (driver + microstepping + mecanica)
 //  Unico lugar a tocar para subir/bajar el techo de velocidad global.
 // ============================================================
-constexpr float MAX_SPEED = 4000.0f;         // pasos/seg
-constexpr float MAX_ACCELERATION = 500.0f;  // pasos/seg^2 (reservado a futuro), antes 3000
+constexpr float MAX_SPEED = 15000.0f;         // pasos/seg
+constexpr float MAX_ACCELERATION = 22000.0f;  // pasos/seg^2 (reservado a futuro), antes 3000
 constexpr MotionLimits DEFAULT_LIMITS = {MAX_SPEED, MAX_ACCELERATION};
 
 /**
