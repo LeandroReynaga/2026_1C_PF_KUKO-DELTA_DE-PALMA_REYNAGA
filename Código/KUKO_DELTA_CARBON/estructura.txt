@@ -26,8 +26,8 @@ KUKO_DELTA_CARBON/
 │   │   ├── DeltaKinematics.h
 │   │
 │   ├── motion/
-│   │   ├── MotionPlanner.cpp
-│   │   ├── MotionPlanner.h
+│   │   ├── ConveyorIntercept.cpp
+│   │   ├── ConveyorIntercept.h
 │   │   ├── Trajectory.cpp
 │   │   ├── Trajectory.h
 │   │
