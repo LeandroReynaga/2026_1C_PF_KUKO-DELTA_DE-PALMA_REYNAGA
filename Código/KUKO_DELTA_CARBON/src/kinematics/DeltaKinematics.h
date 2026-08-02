@@ -18,6 +18,27 @@ constexpr float FOREARM_LENGTH  = 35.2f;   // L2: brazo inferior, varilla libre 
 constexpr float BASE_RADIUS     = 8.275f;  // Centro de la base al eje del motor. Según SW es 7.075 pero no se condice.
 constexpr float EFFECTOR_RADIUS = 3.83f;   // Centro del efector al eje de articulación (76.6 mm / 2)
 
+// ============================================================
+//  OFFSET DE LA HERRAMIENTA (gripper), en cm
+//  ------------------------------------------------------------
+//  Todas las coordenadas que recibe solveIK() son la posición de la PUNTA
+//  DEL GRIPPER (TCP), no la del plato del efector. Este vector es la
+//  posición de la punta MEDIDA DESDE el centro del plato:
+//
+//      punta = plato + EFFECTOR_OFFSET
+//
+//  El gripper cuelga 2.8 cm por debajo del plato, así que el offset en Z
+//  es negativo. solveIK() convierte punta -> plato restando este offset,
+//  una sola vez y para todas las llamadas: NO hay que restarlo a mano en
+//  los puntos que define Robot.cpp (si no, se aplicaría dos veces).
+//
+//  Verificado contra el robot real: la punta toca la cinta cuando el plato
+//  está en Z = -30.5, o sea pidiendo Z = -33.3 (= -30.5 + (-2.8)).
+// ============================================================
+constexpr float EFFECTOR_OFFSET_X = 0.0f;
+constexpr float EFFECTOR_OFFSET_Y = 0.0f;
+constexpr float EFFECTOR_OFFSET_Z = -2.8f;
+
 // Límites articulares de seguridad (grados), medidos desde la horizontal del brazo.
 constexpr float THETA_MIN = -50.0f;
 constexpr float THETA_MAX = 50.0f;
@@ -61,7 +82,10 @@ const char *toString(IKStatus status);
 
 /**
  * Cinemática inversa completa del robot.
- * Entrada: posición (x, y, z) del efector en cm, respecto al centro de la base.
+ * Entrada: posición (x, y, z) de la PUNTA DEL GRIPPER (TCP) en cm, respecto
+ *   al centro de la base. El offset de la herramienta (EFFECTOR_OFFSET_*)
+ *   se descuenta acá adentro; quien llama trabaja siempre en coordenadas
+ *   de la punta.
  * Salida: ángulos de los 3 motores en grados + estado de la solución.
  */
 DeltaAngles solveIK(float x, float y, float z);

@@ -4,43 +4,84 @@
 #include "hardware/Conveyor.h"
 #include "hardware/Encoders.h"
 #include "kinematics/DeltaKinematics.h"
-#include "hardware/Conveyor.h"
+#include "motion/ConveyorIntercept.h"
+
+#include <string.h>
+#include <ctype.h>
+#include <stdlib.h>
 
 Conveyor conveyor(CINTAPWM);
 Pneumatics pneumatics;
 
-// Duraciones de espera no bloqueante (antes eran delay(2500), delay(10000) y delay(3000))
-static const uint32_t HOMING_SETTLE_WAIT_MS = 2500;
-static const uint32_t RELEASE_WAIT_MS        = 10000;
-static const uint32_t CONVEYOR_STOP_WAIT_MS  = 3000;
+// ============================================================
+//  CINTA TRANSPORTADORA
+//  v = pi * d * (N/60), con d = 2,4 cm y N = 60 rpm  ->  7,54 cm/s
+//  Se toma como constante y conocida: toda la intercepcion depende de este
+//  numero, asi que si se cambia la polea o las rpm hay que recalcularlo
+//  aca (y recalibrar el PWM de Conveyor::begin(), que hoy arranca al 60%
+//  sin relacion medida con las rpm reales).
+// ============================================================
+static const float BELT_VELOCITY_CMS = 7.54f;
+static const float DETECTION_LINE_X  = -23.0f; // donde la camara detecta las piezas
+
+// Ancho util de la cinta (Y). Fuera de esto el dato de vision es erroneo.
+static const float BELT_MIN_Y = -2.8f;
+static const float BELT_MAX_Y = 11.2f;
 
 // ============================================================
-// Barrido de velocidad/aceleracion (bring-up de motores)
-// ------------------------------------------------------------
-// Objetivo: encontrar a ojo/oido el limite real de los NEMA23 con los
-// drivers DM556 ajustados a 2.7A, antes de fijar velocidades definitivas.
-// El robot va y vuelve entre dos puntos cartesianos (punto A: cerca de la
-// cinta; punto B: al otro lado del rango), subiendo un escalon de
-// velocidad/aceleracion en cada vuelta (o quedando fijo si el step es 0,
-// para probar un valor puntual como 80mil/120mil de aceleracion). Todavia
-// no hay deteccion automatica de paso perdido (eso requiere calibrar el
-// filtro de los encoders), asi que el corte es manual: apenas se note
-// que un motor patina/pierde pasos, presionar 'R' por el monitor serie.
+//  GEOMETRIA DE AGARRE (coordenadas de la PUNTA del gripper)
+//  DeltaKinematics ya descuenta el offset de herramienta (0,0,-2.8).
 // ============================================================
-static const float    SPEED_TEST_A_X = 0.0f;
-static const float    SPEED_TEST_A_Y = 0.0f;
-static const float    SPEED_TEST_A_Z = -30.5f;
+static const float GRAB_Z      = -32.3f; // cara superior de la pieza (1 cm de alto)
+static const float APPROACH_DX = -2.0f;  // 2 cm por detras: rampa a favor de la cinta
+static const float APPROACH_DZ = 0.4f;   // 4 mm por arriba
 
-static const float    SPEED_TEST_B_X = 0.0f;
-static const float    SPEED_TEST_B_Y = 0.0f;
-static const float    SPEED_TEST_B_Z = -29.5f;
+// Cuanto baja el tramo 2 por DEBAJO de la cara de la pieza. Es lo que hace
+// que el contacto ocurra a mitad del movimiento y no al final, o sea con el
+// gripper todavia andando a la velocidad de la cinta en vez de frenado
+// (ver la explicacion completa en ConveyorIntercept.h). De paso comprime la
+// ventosa, que ayuda al sellado.
+//
+// Es EL parametro para ajustar la suavidad del encuentro:
+//   0,25 mm -> toca a 7,54 cm/s = velocidad de cinta (velocity-matched)
+//   menos    -> toca mas lento que la cinta (la pieza se le adelanta)
+//   mas      -> toca mas rapido que la cinta (el gripper la alcanza)
+static const float PRESS_DZ = 0.025f;
 
-static const float    SPEED_TEST_START_SPEED = 70000.0f;//5000.0f;  // pasos/seg, arranque conservador
-static const float    SPEED_TEST_START_ACCEL = 17000.0f;//130000.0f;  // pasos/seg^2
-static const float    SPEED_TEST_SPEED_STEP  = 000.0f;  // incremento por vuelta completa (ida+vuelta)
-static const float    SPEED_TEST_ACCEL_STEP  = 000.0f;
-static const uint32_t SPEED_TEST_PAUSE_MS    = 00;      // pausa entre tramos, para observar/escuchar
+static const float LIFT_DZ = 2.0f;       // despegue de la pieza de la cinta
 
+// Area donde es seguro agarrar, validada a mano sobre el robot real
+// (inspeccion visual de las rotulas en todas las posiciones). El punto de
+// aproximacion cae en X = -12 cuando se agarra en el borde de entrada.
+static const float WORK_AREA_MIN_X = -10.0f;
+static const float WORK_AREA_MAX_X = 10.0f;
+
+// ============================================================
+//  TACHOS (posicion de la punta del gripper para soltar la pieza)
+//  Modo COLOR: 1 rojo, 2 verde, 3 azul
+//  Modo FORMA: 1 cuadrado, 2 hexagono, 3 circulo
+// ============================================================
+static const float BIN_X[3] = {-12.0f, 0.0f, 12.0f};
+static const float BIN_Y    = -9.55f;
+static const float BIN_Z    = -29.3f;
+
+// ============================================================
+//  TIEMPOS (todos no bloqueantes, con millis())
+// ============================================================
+static const uint32_t HOMING_SETTLE_WAIT_MS = 2500; // ventana de promediado de encoders
+static const uint32_t BIN_SETTLE_MS         = 200;  // quieto sobre el tacho antes de soltar
+
+// Cuanto se espera con la bomba apagada para que la pieza se despegue del
+// gripper. Es un parche temporal: falta la electrovalvula que mete aire en
+// la linea de vacio al apagar la bomba. Cuando este montada (misma senal
+// que la bomba, no cambia el pinout) la pieza cae en el instante y este
+// tiempo se puede bajar a ~100 ms.
+static const uint32_t RELEASE_DETACH_MS = 10000;
+
+// Margen de atraso tolerable al llegar al punto de aproximacion antes de
+// dar por perdido el instante de encuentro y replanificar.
+static const uint32_t PICK_LATE_TOLERANCE_MS = 30;
+static const uint8_t  MAX_REPLAN_ATTEMPTS    = 2;
 
 Robot::Robot() :
 
@@ -54,14 +95,11 @@ motor3(PUL3, DIR3, ENA, 2)
     axis1Homed = false;
     axis2Homed = false;
     axis3Homed = false;
-
-    speedTestLimits = {SPEED_TEST_START_SPEED, SPEED_TEST_START_ACCEL};
 }
 
 void Robot::begin()
 {
     pneumatics.begin();
-    //conveyor.begin();
 
     motor1.begin();
     motor2.begin();
@@ -72,23 +110,47 @@ void Robot::begin()
     motor3.setSpeed(2000);
 
     endstops.begin();
+
+    Serial.println();
+    Serial.println("=== KUKO DELTA CARBON ===");
+    Serial.println("Comandos por Serial (uno por linea):");
+    Serial.println("  Y,color,forma   pieza detectada. Ej: 3.5,B,S");
+    Serial.println("                  color = R/G/B, forma = S/H/C");
+    Serial.println("  C               clasificar por COLOR");
+    Serial.println("  F               clasificar por FORMA");
+    Serial.println("  R               parada de emergencia / reinicio");
 }
 
 void Robot::update()
 {
-    // Consola de ajuste fino por el monitor serie, se revisa en cualquier
-    // estado. Comandos (terminados con Enter/nueva linea):
-    //   R           -> en ERROR rehomea; en cualquier otro estado es la
-    //                  parada de emergencia manual (todavia no hay
-    //                  deteccion automatica de paso perdido via encoders)
-    //   a<numero>   -> setea speedTestLimits.maxAcceleration (ej: a32000)
-    //   v<numero>   -> setea speedTestLimits.maxSpeed        (ej: v40000)
-    // El cambio se aplica al PROXIMO tramo (A->B o B->A) que se comande,
-    // no al que esta en curso: el Stepper ya arranco ese movimiento con
-    // la velocidad/aceleracion que tenia configurada en ese momento.
-    static char cmdBuffer[16];
-    static uint8_t cmdLen = 0;
+    procesarSerial();
 
+    switch (state)
+    {
+        case HOMING:         updateHoming();        break;
+        case WAIT_PIECE:     updateWaitPiece();     break;
+        case GO_HOME_IDLE:   updateGoHomeIdle();    break;
+        case PICK_APPROACH:  updatePickApproach();  break;
+        case PICK_DESCEND:   updatePickDescend();   break;
+        case PICK_LIFT:      updatePickLift();      break;
+        case GO_BIN:         updateGoBin();         break;
+        case BIN_SETTLE:     updateBinSettle();     break;
+        case RELEASE_WAIT:   updateReleaseWait();   break;
+
+        default:                                    break;
+    }
+
+    motor1.update();
+    motor2.update();
+    motor3.update();
+}
+
+// ============================================================
+//  CONSOLA SERIE
+// ============================================================
+
+void Robot::procesarSerial()
+{
     while (Serial.available() > 0)
     {
         char c = (char)Serial.read();
@@ -98,134 +160,198 @@ void Robot::update()
             if (cmdLen > 0)
             {
                 cmdBuffer[cmdLen] = '\0';
-
-                if (cmdLen == 1 && (cmdBuffer[0] == 'R' || cmdBuffer[0] == 'r'))
-                {
-                    if (state == ERROR)
-                    {
-                        Serial.println("[RESET] Rehomeando...");
-                        startHoming();
-                    }
-                    else
-                    {
-                        emergencyStop();
-                    }
-                }
-                else if (cmdLen > 1 && (cmdBuffer[0] == 'a' || cmdBuffer[0] == 'A'))
-                {
-                    float valor = atof(cmdBuffer + 1);
-                    valor = constrain(valor, 0.0f, Motors::MAX_ACCELERATION);
-                    speedTestLimits.maxAcceleration = valor;
-
-                    Serial.print("[SPEED TEST] aceleracion -> ");
-                    Serial.println(speedTestLimits.maxAcceleration);
-                }
-                else if (cmdLen > 1 && (cmdBuffer[0] == 'v' || cmdBuffer[0] == 'V'))
-                {
-                    float valor = atof(cmdBuffer + 1);
-                    valor = constrain(valor, 0.0f, Motors::MAX_SPEED);
-                    speedTestLimits.maxSpeed = valor;
-
-                    Serial.print("[SPEED TEST] velocidad -> ");
-                    Serial.println(speedTestLimits.maxSpeed);
-                }
-                else
-                {
-                    Serial.println("[SPEED TEST] comando no reconocido (usar 'aNUM', 'vNUM' o 'R')");
-                }
+                procesarComando(cmdBuffer, cmdLen);
             }
-
             cmdLen = 0;
         }
         else if (cmdLen < sizeof(cmdBuffer) - 1)
         {
             cmdBuffer[cmdLen++] = c;
         }
+        else
+        {
+            // Linea mas larga que el buffer: se descarta entera, para no
+            // interpretar un pedazo suelto como si fuera un comando valido.
+            cmdLen = 0;
+        }
     }
-
-    switch(state)
-    {
-        case HOMING:
-
-            updateHoming();
-
-            break;
-
-        case SPEED_TEST_TO_POINT_A:
-
-            updateSpeedTestToPointA();
-
-            break;
-
-        case SPEED_TEST_TO_POINT_B:
-
-            updateSpeedTestToPointB();
-
-            break;
-
-        case GO_ZERO:
-
-            updateGoZero();
-
-            break;
-        
-        case GO_POSITION:
-        
-            updateGoPosition();
-
-            break;
-
-        case GRAB:
-            updateGrab();
-
-            break;
-
-        case GO_UP:
-            updateGoUp();
-
-            break;
-
-        case CONVEYOR_RUN:
-            updateConveyorRun();
-
-            break;
-        
-        case GO_DOWN:
-            updateGoDown();
-
-            break;
-
-        case RELEASE:
-            updateRelease();
-
-            break;
-
-        case GO_ZERO2:
-            updateGoZero2();
-
-            break;
-
-        case CONVEYOR_STOP:
-            updateConveyorStop();
-
-            break;
-        
-
-        default:
-
-            break;
-    }
-        
-    motor1.update();
-    motor2.update();
-    motor3.update();
 }
+
+void Robot::procesarComando(char *cmd, uint8_t len)
+{
+    // --- Comandos de un solo caracter: modo de clasificacion y emergencia ---
+    // Un mensaje de pieza SIEMPRE tiene 2 comas, asi que no hay ambiguedad
+    // con 'C' (modo color) ni con 'R' (reset), aunque esas mismas letras se
+    // usen como forma/color adentro de un mensaje de pieza.
+    if (len == 1)
+    {
+        const char c = toupper(cmd[0]);
+
+        if (c == 'R')
+        {
+            if (state == ERROR)
+            {
+                Serial.println("[RESET] Rehomeando...");
+                startHoming();
+            }
+            else
+            {
+                emergencyStop();
+            }
+            return;
+        }
+
+        if (c == 'C' || c == 'F')
+        {
+            const SortMode nuevo = (c == 'C') ? SORT_BY_COLOR : SORT_BY_SHAPE;
+
+            // Si el robot tiene una pieza en la mano, el cambio queda
+            // pendiente hasta que la suelte: cambiarle el tacho de destino
+            // a una pieza en vuelo la mandaria al lugar equivocado.
+            const bool conPiezaEnMano = (state == PICK_DESCEND ||
+                                          state == PICK_LIFT   ||
+                                          state == GO_BIN      ||
+                                          state == BIN_SETTLE);
+
+            if (conPiezaEnMano)
+            {
+                pendingSortMode = nuevo;
+                sortModePending = true;
+                Serial.print("[MODO] pendiente -> ");
+                Serial.println(nombreModo(nuevo));
+            }
+            else
+            {
+                sortMode = nuevo;
+                sortModePending = false;
+                Serial.print("[MODO] ");
+                Serial.println(nombreModo(sortMode));
+            }
+            return;
+        }
+
+        Serial.println("[SERIAL] comando desconocido");
+        return;
+    }
+
+    // --- Mensaje de pieza: "Y,color,forma" ---
+    char *coma1 = strchr(cmd, ',');
+    if (coma1 == NULL)
+    {
+        Serial.println("[SERIAL] comando desconocido");
+        return;
+    }
+
+    char *coma2 = strchr(coma1 + 1, ',');
+    if (coma2 == NULL)
+    {
+        Serial.println("[SERIAL] mensaje de pieza incompleto");
+        return;
+    }
+
+    const char color = toupper(coma1[1]);
+    const char shape = toupper(coma2[1]);
+
+    *coma1 = '\0'; // corta el campo Y para poder convertirlo
+    const float y = atof(cmd);
+
+    if (color != 'R' && color != 'G' && color != 'B')
+    {
+        Serial.println("[SERIAL] color invalido (R/G/B)");
+        return;
+    }
+    if (shape != 'S' && shape != 'H' && shape != 'C')
+    {
+        Serial.println("[SERIAL] forma invalida (S/H/C)");
+        return;
+    }
+    if (y < BELT_MIN_Y || y > BELT_MAX_Y)
+    {
+        Serial.print("[SERIAL] Y fuera de la cinta: ");
+        Serial.println(y);
+        return;
+    }
+
+    Piece p;
+    p.y = y;
+    p.color = color;
+    p.shape = shape;
+    p.detectedAt_ms = millis(); // el retardo vision->serial se toma despreciable
+
+    if (!queuePush(p))
+    {
+        Serial.println("[COLA] llena, se descarta la pieza mas nueva");
+        return;
+    }
+
+    Serial.print("[PIEZA] Y=");
+    Serial.print(p.y);
+    Serial.print(" color=");
+    Serial.print(p.color);
+    Serial.print(" forma=");
+    Serial.print(p.shape);
+    Serial.print("  en cola: ");
+    Serial.println(queueCount);
+}
+
+const char *Robot::nombreModo(SortMode m) const
+{
+    return (m == SORT_BY_COLOR) ? "por COLOR" : "por FORMA";
+}
+
+void Robot::aplicarModoPendiente()
+{
+    if (!sortModePending)
+    {
+        return;
+    }
+
+    sortMode = pendingSortMode;
+    sortModePending = false;
+
+    Serial.print("[MODO] aplicado -> ");
+    Serial.println(nombreModo(sortMode));
+}
+
+// ============================================================
+//  COLA DE PIEZAS
+// ============================================================
+
+bool Robot::queuePush(const Piece &p)
+{
+    if (queueCount >= QUEUE_CAPACITY)
+    {
+        return false;
+    }
+
+    pieceQueue[(queueHead + queueCount) % QUEUE_CAPACITY] = p;
+    queueCount++;
+    return true;
+}
+
+bool Robot::queuePop(Piece &out)
+{
+    if (queueCount == 0)
+    {
+        return false;
+    }
+
+    out = pieceQueue[queueHead];
+    queueHead = (queueHead + 1) % QUEUE_CAPACITY;
+    queueCount--;
+    return true;
+}
+
+// ============================================================
+//  HOMING
+// ============================================================
 
 void Robot::startHoming()
 {
     axis1Homed = false;
     axis2Homed = false;
     axis3Homed = false;
+    homed = false;
 
     state = HOMING;
 
@@ -241,70 +367,72 @@ void Robot::startHoming()
     motor2.setSpeed(1000);
     motor3.setSpeed(1000);
 
-    // Cada rehomeo reinicia el barrido de velocidad/aceleracion desde el
-    // valor conservador (no desde el valor que veniamos probando cuando
-    // se disparo la parada de emergencia).
-    speedTestLimits = {SPEED_TEST_START_SPEED, SPEED_TEST_START_ACCEL};
-    speedTestMoveIssued = false;
-    speedTestPauseStart_ms = 0;
+    // Las piezas encoladas traen timestamps de antes del corte: sus
+    // posiciones ya no son confiables (la cinta estuvo parada mientras
+    // tanto), asi que se descartan todas.
+    queueHead = 0;
+    queueCount = 0;
+
+    // Se suelta lo que hubiera quedado agarrado antes del corte, para
+    // arrancar el ciclo con el gripper vacio y en estado conocido.
+    pneumatics.release();
+    pumpOn = false;
+
+    // Un cambio de modo que habia quedado pendiente pertenecia al ciclo que
+    // se corto: no se arrastra al ciclo nuevo. El modo ACTIVO si se
+    // mantiene (el operador ya lo eligio y no lo dio de baja).
+    sortModePending = false;
+
+    moveIssued = false;
+    replanCount = 0;
+    homingSettleStart_ms = 0;
 }
 
 void Robot::updateHoming()
 {
     // Motor 1
 
-    if(!axis1Homed)
+    if (!axis1Homed)
     {
-        if(endstops.readMotor1())
+        if (endstops.readMotor1())
         {
             motor1.stop();
-
             motor1.setPosition(angleToSteps(HOME_ANGLE_M1));
-
             axis1Homed = true;
         }
     }
 
     // Motor 2
 
-    if(!axis2Homed)
+    if (!axis2Homed)
     {
-        if(endstops.readMotor2())
+        if (endstops.readMotor2())
         {
             motor2.stop();
-
             motor2.setPosition(angleToSteps(HOME_ANGLE_M2));
-
             axis2Homed = true;
         }
     }
 
     // Motor 3
 
-    if(!axis3Homed)
+    if (!axis3Homed)
     {
-        if(endstops.readMotor3())
+        if (endstops.readMotor3())
         {
             motor3.stop();
-
             motor3.setPosition(angleToSteps(HOME_ANGLE_M3));
-
             axis3Homed = true;
         }
     }
 
     // ¿Todos llegaron?
 
-    if(axis1Homed &&
-       axis2Homed &&
-       axis3Homed
-       )
+    if (axis1Homed && axis2Homed && axis3Homed)
     {
-        
-                if (homingSettleStart_ms == 0)
+        if (homingSettleStart_ms == 0)
         {
-            // Arranca la ventana de acumulación de media móvil por canal,
-            // durante todo el segundo de espera.
+            // Arranca la ventana de acumulación de media móvil por canal.
             encoders.iniciarAsentamientoHoming();
             homingSettleStart_ms = millis();
             return;
@@ -317,132 +445,28 @@ void Robot::updateHoming()
 
         homingSettleStart_ms = 0;
 
-        // Calibra usando el PROMEDIO de todas las muestras del segundo
-        // de espera (no una lectura puntual).
+        // Calibra usando el PROMEDIO de todas las muestras de la ventana de
+        // espera (no una lectura puntual).
         encoders.calibrarHoming(HOME_ANGLE_M1, HOME_ANGLE_M2, HOME_ANGLE_M3);
 
-        Serial.println("[SPEED TEST] Homing OK. Arranca barrido de velocidad/aceleracion.");
-        Serial.print("[SPEED TEST] velocidad=");
-        Serial.print(speedTestLimits.maxSpeed);
-        Serial.print(" pasos/seg  aceleracion=");
-        Serial.print(speedTestLimits.maxAcceleration);
-        Serial.println(" pasos/seg^2");
+        homed = true;
 
-        state = SPEED_TEST_TO_POINT_A; // bring-up: barrido de velocidad en vez del ciclo de recogida
+        // La cinta arranca recien con el robot ya calibrado: antes de eso
+        // no tendria sentido aceptar piezas.
+        conveyor.begin();
+
+        Serial.println("[HOMING] OK. Robot listo.");
+        Serial.print("[MODO] ");
+        Serial.println(nombreModo(sortMode));
+
+        moveIssued = false;
+        state = GO_HOME_IDLE;
     }
-}
-
-void Robot::updateSpeedTestToPointA()
-{
-    // Pequeña pausa antes de arrancar cada tramo, para poder observar el
-    // resultado del tramo anterior antes de que arranque el siguiente.
-    if (speedTestPauseStart_ms == 0)
-    {
-        speedTestPauseStart_ms = millis();
-        return;
-    }
-
-    if (millis() - speedTestPauseStart_ms < SPEED_TEST_PAUSE_MS)
-    {
-        return;
-    }
-
-    if (!speedTestMoveIssued)
-    {
-        if (!goToPositionIK(SPEED_TEST_A_X, SPEED_TEST_A_Y, SPEED_TEST_A_Z, speedTestLimits))
-        {
-            return; // punto invalido para esta geometria: no se comanda nada, se reintenta el siguiente tick
-        }
-        speedTestMoveIssued = true;
-    }
-
-    if (motor1.targetReached() &&
-        motor2.targetReached() &&
-        motor3.targetReached())
-    {
-        speedTestMoveIssued = false;
-        speedTestPauseStart_ms = 0;
-        //state = SPEED_TEST_TO_POINT_B;
-        state = READY; // Que quede en el punto A y termine la secuencia
-    }
-}
-
-void Robot::updateSpeedTestToPointB()
-{
-    if (speedTestPauseStart_ms == 0)
-    {
-        speedTestPauseStart_ms = millis();
-        return;
-    }
-
-    if (millis() - speedTestPauseStart_ms < SPEED_TEST_PAUSE_MS)
-    {
-        return;
-    }
-
-    if (!speedTestMoveIssued)
-    {
-        if (!goToPositionIK(SPEED_TEST_B_X, SPEED_TEST_B_Y, SPEED_TEST_B_Z, speedTestLimits))
-        {
-            return; // punto invalido para esta geometria: no se comanda nada, se reintenta el siguiente tick
-        }
-        speedTestMoveIssued = true;
-    }
-
-    if (motor1.targetReached() &&
-        motor2.targetReached() &&
-        motor3.targetReached())
-    {
-        speedTestMoveIssued = false;
-        speedTestPauseStart_ms = 0;
-
-        // Escalon de velocidad/aceleracion para el proximo ciclo, topeado
-        // al maximo global del sistema (Motors::MAX_SPEED/MAX_ACCELERATION).
-        speedTestLimits.maxSpeed += SPEED_TEST_SPEED_STEP;
-        if (speedTestLimits.maxSpeed > Motors::MAX_SPEED)
-        {
-            speedTestLimits.maxSpeed = Motors::MAX_SPEED;
-        }
-
-        speedTestLimits.maxAcceleration += SPEED_TEST_ACCEL_STEP;
-        if (speedTestLimits.maxAcceleration > Motors::MAX_ACCELERATION)
-        {
-            speedTestLimits.maxAcceleration = Motors::MAX_ACCELERATION;
-        }
-
-        Serial.print("[SPEED TEST] velocidad=");
-        Serial.print(speedTestLimits.maxSpeed);
-        Serial.print(" pasos/seg  aceleracion=");
-        Serial.print(speedTestLimits.maxAcceleration);
-        Serial.println(" pasos/seg^2");
-
-        state = SPEED_TEST_TO_POINT_A;
-    }
-}
-
-void Robot::emergencyStop()
-{
-    motor1.stop();
-    motor2.stop();
-    motor3.stop();
-
-    Serial.println("[EMERGENCIA] Parada manual solicitada por teclado.");
-    Serial.print("[EMERGENCIA] Ultima velocidad probada: ");
-    Serial.print(speedTestLimits.maxSpeed);
-    Serial.print(" pasos/seg, aceleracion: ");
-    Serial.print(speedTestLimits.maxAcceleration);
-    Serial.println(" pasos/seg^2");
-    Serial.println("[EMERGENCIA] Presiona 'R' de nuevo para rehomear y reiniciar el barrido.");
-
-    speedTestMoveIssued = false;
-    speedTestPauseStart_ms = 0;
-
-    state = ERROR;
 }
 
 bool Robot::homingFinished() const
 {
-    return state == READY;
+    return homed;
 }
 
 Robot::RobotState Robot::getState() const
@@ -450,24 +474,9 @@ Robot::RobotState Robot::getState() const
     return state;
 }
 
-void Robot::updateGoZero()
-{
-
-        motor1.moveTo(0);
-        motor2.moveTo(0);
-        motor3.moveTo(0);
-
-      if(motor1.targetReached() &&
-        motor2.targetReached() &&
-        motor3.targetReached())
-        {
-
-        positionMoveIssued = false; // el proximo GO_POSITION tiene que volver a comandar el movimiento
-        state = GO_POSITION;
-        //state = READY; // Que quede en 0 y termine la secuencia
-        }
-
-}
+// ============================================================
+//  MOVIMIENTO
+// ============================================================
 
 bool Robot::goToPositionIK(float x, float y, float z, const Motors::MotionLimits &limits)
 {
@@ -480,140 +489,350 @@ bool Robot::goToPositionIK(float x, float y, float z, const Motors::MotionLimits
     return true;
 }
 
-void Robot::updateGoPosition()
-{
-    // Coordenada objetivo del efector (cm), mismo sistema que DeltaKinematics.
-    // Ajustar acá el punto de recogida.
-    constexpr float TARGET_X = 0.0f;
-    constexpr float TARGET_Y = 0.0f;
-    constexpr float TARGET_Z = -30.0f;
+// ============================================================
+//  ESPERA / VUELTA A HOME
+// ============================================================
 
-    // El movimiento se comanda UNA sola vez al entrar al estado (no en cada
-    // vuelta de loop): Motors::moveSynchronized calcula velocidad segun la
-    // distancia restante, asi que llamarlo repetidas veces reconfiguraria
-    // el timer de cada Stepper en cada tick sin necesidad.
-    if (!positionMoveIssued)
+void Robot::updateGoHomeIdle()
+{
+    // Si aparece una pieza mientras vuelve a home, se interrumpe el regreso
+    // y sale a buscarla desde donde este: el proximo moveSynchronized
+    // recalcula todo desde la posicion actual.
+    if (queueCount > 0 && iniciarSiguientePieza())
     {
-        if (!goToPositionIK(TARGET_X, TARGET_Y, TARGET_Z))
-        {
-            return; // punto invalido: no se comanda nada, se reintenta el siguiente tick
-        }
-        positionMoveIssued = true;
+        return;
     }
 
-    if(motor1.targetReached() &&
-        motor2.targetReached() &&
-        motor3.targetReached())
-        {
-        state = GRAB;
-        //state = READY; // Que termine la secuencia en la posicion indicada
-        }
+    if (!moveIssued)
+    {
+        // Home = brazos horizontales (0 grados en los 3 ejes).
+        Motors::moveSynchronized(motor1, motor2, motor3, 0, 0, 0, Motors::FAST_LIMITS);
+        moveIssued = true;
+    }
 
+    if (enPosicion())
+    {
+        moveIssued = false;
+        state = WAIT_PIECE;
+    }
 }
 
-void Robot::updateGrab()
+void Robot::updateWaitPiece()
 {
-        // Activar la bomba para agarrar el objeto
+    if (queueCount > 0)
+    {
+        iniciarSiguientePieza();
+    }
+}
+
+// ============================================================
+//  PLANIFICACION DE LA MANIOBRA
+// ============================================================
+
+bool Robot::planificarPieza(const Piece &p)
+{
+    ConveyorIntercept::BeltConfig belt;
+    belt.velocityX = BELT_VELOCITY_CMS;
+    belt.detectionLineX = DETECTION_LINE_X;
+
+    ConveyorIntercept::PickGeometry geom;
+    geom.grabZ = GRAB_Z;
+    geom.approachDX = APPROACH_DX;
+    geom.approachDZ = APPROACH_DZ;
+    geom.pressDZ = PRESS_DZ;
+    geom.liftDZ = LIFT_DZ;
+    geom.workAreaMinX = WORK_AREA_MIN_X;
+    geom.workAreaMaxX = WORK_AREA_MAX_X;
+
+    const float tSinceDetection = (millis() - p.detectedAt_ms) / 1000.0f;
+
+    ConveyorIntercept::InterceptResult r = ConveyorIntercept::solve(
+        p.y, tSinceDetection, belt, geom,
+        motor1.getPosition(), motor2.getPosition(), motor3.getPosition(),
+        Motors::MAX_SPEED, Motors::MAX_ACCELERATION, Motors::MIN_ACCELERATION);
+
+    if (!r.reachable)
+    {
+        return false;
+    }
+
+    approachX    = r.approachX;    approachY    = r.approachY;    approachZ    = r.approachZ;
+    descendEndX  = r.descendEndX;  descendEndY  = r.descendEndY;  descendEndZ  = r.descendEndZ;
+    liftX        = r.liftX;        liftY        = r.liftY;        liftZ        = r.liftZ;
+
+    // Punto de contacto, solo para el log de diagnostico.
+    lastGrabX = r.grabX;
+    lastContactSpeedX = r.contactSpeedX;
+
+    descendStart_ms = millis() + (uint32_t)(r.descendStartDelay * 1000.0f);
+
+    return true;
+}
+
+bool Robot::iniciarSiguientePieza()
+{
+    // Aca el robot no tiene ninguna pieza en la mano: es el momento seguro
+    // para aplicar un cambio de modo pendiente, ANTES de decidir el tacho
+    // de la proxima pieza.
+    aplicarModoPendiente();
+
+    Piece p;
+
+    while (queuePop(p))
+    {
+        if (!planificarPieza(p))
+        {
+            Serial.print("[PIEZA] no alcanzable (Y=");
+            Serial.print(p.y);
+            Serial.println("), se deja pasar");
+            continue; // se prueba con la siguiente de la cola
+        }
+
+        currentPiece = p;
+        currentBin = binIndexFor(p);
+        replanCount = 0;
+        moveIssued = false;
+        state = PICK_APPROACH;
+
+        Serial.print("[PIEZA] contacto en X=");
+        Serial.print(lastGrabX);
+        Serial.print(" Y=");
+        Serial.print(p.y);
+        Serial.print(" a ");
+        Serial.print(lastContactSpeedX);
+        Serial.print(" cm/s (cinta ");
+        Serial.print(BELT_VELOCITY_CMS);
+        Serial.print(") -> tacho ");
+        Serial.println(currentBin + 1);
+
+        return true;
+    }
+
+    return false;
+}
+
+uint8_t Robot::binIndexFor(const Piece &p) const
+{
+    if (sortMode == SORT_BY_COLOR)
+    {
+        switch (p.color)
+        {
+            case 'R': return 0;
+            case 'G': return 1;
+            case 'B': return 2;
+            default:  return 0;
+        }
+    }
+
+    switch (p.shape)
+    {
+        case 'S': return 0;
+        case 'H': return 1;
+        case 'C': return 2;
+        default:  return 0;
+    }
+}
+
+// ============================================================
+//  TRAMO 1: aproximacion (aceleracion maxima) + espera del instante justo
+// ============================================================
+
+void Robot::updatePickApproach()
+{
+    if (!moveIssued)
+    {
+        if (!goToPositionIK(approachX, approachY, approachZ, Motors::FAST_LIMITS))
+        {
+            // No deberia pasar: ConveyorIntercept ya valido este punto.
+            Serial.println("[PIEZA] punto de aproximacion invalido, se descarta");
+            moveIssued = false;
+            state = GO_HOME_IDLE;
+            return;
+        }
+        moveIssued = true;
+    }
+
+    if (!enPosicion())
+    {
+        return;
+    }
+
+    // Ya en el punto de aproximacion: se prende la bomba para que el vacio
+    // este bien formado antes de tocar la pieza.
+    if (!pumpOn)
+    {
         pneumatics.grab();
-        {
-            state = GO_UP;
-        }
+        pumpOn = true;
+    }
 
-}
+    // Se espera al instante calculado para lanzar la bajada. La resta con
+    // signo aguanta el desborde de millis().
+    const int32_t atraso_ms = (int32_t)(millis() - descendStart_ms);
 
-void Robot::updateGoUp()
-{
-        motor1.moveTo(-1300);
-        motor2.moveTo(-1300);
-        motor3.moveTo(-1300);
-
-      if(motor1.targetReached() &&
-        motor2.targetReached() &&
-        motor3.targetReached())
-        {
-            state = CONVEYOR_RUN;
-        }
-
-}
-
-void Robot::updateConveyorRun()
-{
-        conveyor.begin();
-        {
-            state = GO_DOWN;
-        }
-
-}
-
-void Robot::updateGoDown()
-{
-
-        motor1.moveTo(200);
-        motor2.moveTo(200);
-        motor3.moveTo(200);
-
-      if(motor1.targetReached() &&
-        motor2.targetReached() &&
-        motor3.targetReached())
-        {
-            state = RELEASE;
-        }
-
-}
-
-void Robot::updateRelease()
-{
-    // Antes: pneumatics.release(); delay(10000);
-    // El delay() congelaba TODO el sistema durante 10s: los motores no
-    // podían actualizarse, los encoders no podían leer, y el homing/loop
-    // completo quedaba bloqueado. Reemplazado por una espera no bloqueante
-    // basada en millis().
-
-    if (releaseWaitStart_ms == 0)
+    if (atraso_ms < 0)
     {
-        // Primera vuelta en este estado: soltamos la pieza y arrancamos el conteo
+        return; // todavia no es momento: la pieza no llego
+    }
+
+    if (atraso_ms > (int32_t)PICK_LATE_TOLERANCE_MS)
+    {
+        // Se perdio la ventana (el tramo 1 tardo mas de lo estimado). Se
+        // replanifica con la pieza donde este ahora, si todavia da.
+        if (replanCount < MAX_REPLAN_ATTEMPTS && planificarPieza(currentPiece))
+        {
+            replanCount++;
+            moveIssued = false;
+            Serial.println("[PIEZA] replanificando agarre");
+            return;
+        }
+
+        Serial.println("[PIEZA] se perdio la ventana de agarre, se deja pasar");
         pneumatics.release();
-        releaseWaitStart_ms = millis();
+        pumpOn = false;
+        moveIssued = false;
+        state = GO_HOME_IDLE;
         return;
     }
 
-    if (millis() - releaseWaitStart_ms >= RELEASE_WAIT_MS)
-    {
-        releaseWaitStart_ms = 0; // listo para la próxima vez que se entre a este estado
-        state = GO_ZERO2;
-    }
+    moveIssued = false;
+    state = PICK_DESCEND;
 }
 
-void Robot::updateGoZero2()
-{
-        motor1.moveTo(-500);
-        motor2.moveTo(-500);
-        motor3.moveTo(-500);
+// ============================================================
+//  TRAMO 2: bajada a la pieza (aceleracion minima, a favor de la cinta)
+//  El destino SOBREPASA a la pieza, asi el contacto ocurre a mitad del
+//  movimiento y a la misma velocidad que la cinta (ver ConveyorIntercept.h).
+// ============================================================
 
-      if(motor1.targetReached() &&
-        motor2.targetReached() &&
-        motor3.targetReached())
+void Robot::updatePickDescend()
+{
+    if (!moveIssued)
+    {
+        if (!goToPositionIK(descendEndX, descendEndY, descendEndZ, Motors::SOFT_LIMITS))
         {
-            state = CONVEYOR_STOP;
+            Serial.println("[PIEZA] punto de agarre invalido, se descarta");
+            pneumatics.release();
+            pumpOn = false;
+            moveIssued = false;
+            state = GO_HOME_IDLE;
+            return;
         }
+        moveIssued = true;
+    }
 
+    if (enPosicion())
+    {
+        moveIssued = false;
+        state = PICK_LIFT;
+    }
 }
 
-void Robot::updateConveyorStop()
-{
-    // Antes: delay(3000); conveyor.stop();
-    // Mismo problema que en updateRelease(): bloqueaba todo el sistema.
+// ============================================================
+//  TRAMO 3: despegue de la pieza de la cinta (aceleracion maxima)
+// ============================================================
 
-    if (conveyorStopWaitStart_ms == 0)
+void Robot::updatePickLift()
+{
+    if (!moveIssued)
     {
-        conveyorStopWaitStart_ms = millis();
+        if (!goToPositionIK(liftX, liftY, liftZ, Motors::FAST_LIMITS))
+        {
+            Serial.println("[PIEZA] punto de despegue invalido");
+            moveIssued = false;
+            state = GO_HOME_IDLE;
+            return;
+        }
+        moveIssued = true;
+    }
+
+    if (enPosicion())
+    {
+        moveIssued = false;
+        state = GO_BIN;
+    }
+}
+
+// ============================================================
+//  TRAMO 4: traslado al tacho (aceleracion maxima)
+// ============================================================
+
+void Robot::updateGoBin()
+{
+    if (!moveIssued)
+    {
+        if (!goToPositionIK(BIN_X[currentBin], BIN_Y, BIN_Z, Motors::FAST_LIMITS))
+        {
+            Serial.println("[TACHO] posicion invalida");
+            emergencyStop();
+            return;
+        }
+        moveIssued = true;
+    }
+
+    if (enPosicion())
+    {
+        moveIssued = false;
+        binSettleStart_ms = millis();
+        state = BIN_SETTLE;
+    }
+}
+
+// ============================================================
+//  ASENTAMIENTO Y SOLTADO
+// ============================================================
+
+void Robot::updateBinSettle()
+{
+    // Quieto sobre el tacho: si se soltara apenas frena, la pieza saldria
+    // disparada con la inercia del brazo en vez de caer vertical.
+    if (millis() - binSettleStart_ms < BIN_SETTLE_MS)
+    {
         return;
     }
 
-    if (millis() - conveyorStopWaitStart_ms >= CONVEYOR_STOP_WAIT_MS)
+    pneumatics.release();
+    pumpOn = false;
+
+    releaseStart_ms = millis();
+    state = RELEASE_WAIT;
+}
+
+void Robot::updateReleaseWait()
+{
+    // Espera a que la pieza se despegue sola del gripper (ver
+    // RELEASE_DETACH_MS: es un parche hasta montar la electrovalvula).
+    if (millis() - releaseStart_ms < RELEASE_DETACH_MS)
     {
-        conveyor.stop();
-        conveyorStopWaitStart_ms = 0;
-        state = READY;
+        return;
     }
+
+    // Recien ahora, con la pieza ya soltada, se puede cambiar de modo.
+    aplicarModoPendiente();
+
+    // Si hay otra pieza, sale a buscarla directo desde arriba del tacho.
+    if (queueCount > 0 && iniciarSiguientePieza())
+    {
+        return;
+    }
+
+    moveIssued = false;
+    state = GO_HOME_IDLE;
+}
+
+// ============================================================
+//  EMERGENCIA
+// ============================================================
+
+void Robot::emergencyStop()
+{
+    motor1.stop();
+    motor2.stop();
+    motor3.stop();
+
+    conveyor.stop();
+
+    Serial.println("[EMERGENCIA] Parada manual. Presiona 'R' para rehomear.");
+
+    moveIssued = false;
+    state = ERROR;
 }

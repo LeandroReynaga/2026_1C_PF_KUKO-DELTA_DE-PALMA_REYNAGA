@@ -73,6 +73,15 @@ const char *toString(IKStatus status) {
 DeltaAngles solveIK(float x, float y, float z) {
     DeltaAngles result;
 
+    // La entrada es la posición de la PUNTA del gripper (TCP). La geometría
+    // del delta resuelve el centro del PLATO del efector, así que lo primero
+    // es descontar el offset de la herramienta:  plato = punta - offset.
+    // Con EFFECTOR_OFFSET_Z = -2.8, pedir la punta en Z=-33.3 resuelve el
+    // plato en Z=-30.5, que es donde la punta toca la cinta.
+    x -= EFFECTOR_OFFSET_X;
+    y -= EFFECTOR_OFFSET_Y;
+    z -= EFFECTOR_OFFSET_Z;
+
     x = x * 1.02f; // Ganancia para ajustar coordenada X, medida en el robot real
     y = y * 0.98f; // Ganancia para ajustar coordenada Y, medida en el robot real
 
