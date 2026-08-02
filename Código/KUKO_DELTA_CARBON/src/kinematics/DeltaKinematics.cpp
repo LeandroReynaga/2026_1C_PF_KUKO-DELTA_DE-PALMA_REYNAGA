@@ -52,13 +52,13 @@ IKStatus solveLeg(float x0, float y0, float z0, float &theta) {
     return IKStatus::OK;
 }
 
-// Convierte grados a micropasos absolutos, listos para AccelStepper::moveTo().
+// Convierte grados a micropasos absolutos, listos para Stepper::moveTo().
 long angleToSteps(float degrees, bool invert) {
     const long steps = lroundf(degrees * STEPS_PER_DEGREE);
     return invert ? -steps : steps;
 }
 
-} // namespace (anónimo, uso interno del archivo)
+} 
 
 const char *toString(IKStatus status) {
     switch (status) {
@@ -120,4 +120,4 @@ DeltaAngles solveIK(float x, float y, float z) {
     return result;
 }
 
-} // namespace DeltaKinematics
+}

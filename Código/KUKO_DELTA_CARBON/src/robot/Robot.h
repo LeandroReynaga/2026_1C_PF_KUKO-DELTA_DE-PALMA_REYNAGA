@@ -15,6 +15,8 @@ public:
     {
         IDLE,
         HOMING,
+        SPEED_TEST_TO_POINT_A,
+        SPEED_TEST_TO_POINT_B,
         GO_ZERO,
         GO_POSITION,
         GRAB,
@@ -44,6 +46,12 @@ public:
 
     bool goToPositionIK(float x, float y, float z, const Motors::MotionLimits &limits = Motors::DEFAULT_LIMITS);
 
+    // Parada de emergencia manual: detiene los 3 motores donde esten y pasa
+    // a ERROR. Pensada para dispararse por teclado (tecla 'R') apenas se
+    // note a ojo/oido que un motor perdio pasos durante el barrido de
+    // velocidad, ya que todavia no hay deteccion automatica por encoder.
+    void emergencyStop();
+
 private:
 
     // Motores
@@ -64,6 +72,8 @@ private:
 
     // Rutina privada
     void updateHoming();
+    void updateSpeedTestToPointA();
+    void updateSpeedTestToPointB();
     void updateGoZero();
     void updateGoPosition();
     void updateGrab();
@@ -77,18 +87,22 @@ private:
     uint32_t homingSettleStart_ms = 0;
     uint32_t releaseWaitStart_ms      = 0;
     uint32_t conveyorStopWaitStart_ms = 0;
-    
+
     bool positionMoveIssued = false;
 
-    static constexpr long MICROPASOS = 20000;
+    // Barrido de velocidad/aceleracion (bring-up de motores): va y vuelve
+    // al punto de prueba subiendo speedTestLimits en cada vuelta, hasta
+    // que el usuario detecte perdida de pasos a ojo/oido y presione 'R'.
+    Motors::MotionLimits speedTestLimits;
+    bool speedTestMoveIssued = false;
+    uint32_t speedTestPauseStart_ms = 0;
 
-    //static constexpr float HOME_ANGLE_M1 = -46.08f; //-5;//-46.08f;
-    //static constexpr float HOME_ANGLE_M2 = -46.26f; //-3;//-46.26f;
-    //static constexpr float HOME_ANGLE_M3 = -46.40f; //-2.5;//-46.44f;
+    static constexpr long MICROPASOS = 10000;
 
-    static constexpr float HOME_ANGLE_M1 = -45.1f;//-44.1f; //-2.35f;
-    static constexpr float HOME_ANGLE_M2 = -44.3f;//-43.3f; //-2.35f;
-    static constexpr float HOME_ANGLE_M3 = -44.5f;//-46.5f; //-2.35f;
+
+    static constexpr float HOME_ANGLE_M1 = -45.1f;
+    static constexpr float HOME_ANGLE_M2 = -44.3f;
+    static constexpr float HOME_ANGLE_M3 = -44.5f;
 
     static long angleToSteps(float angle)
 {

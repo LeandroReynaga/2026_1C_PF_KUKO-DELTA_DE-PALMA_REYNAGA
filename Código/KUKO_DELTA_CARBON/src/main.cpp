@@ -26,6 +26,7 @@ void setup()
     endstops.begin();
     robot.begin();
     robot.startHoming();
+    
 }
 
 void loop()

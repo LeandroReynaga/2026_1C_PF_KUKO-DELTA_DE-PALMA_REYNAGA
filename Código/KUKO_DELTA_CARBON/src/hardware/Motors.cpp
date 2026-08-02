@@ -32,4 +32,4 @@ void moveSynchronized(Stepper &m1, Stepper &m2, Stepper &m3,
     m3.moveTo(target3);
 }
 
-} // namespace Motors
+}
