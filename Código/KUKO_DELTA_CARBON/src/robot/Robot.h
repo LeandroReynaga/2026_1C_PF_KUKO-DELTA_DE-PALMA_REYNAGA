@@ -185,6 +185,7 @@ private:
 
     char    cmdBuffer[32];
     uint8_t cmdLen = 0;
+    bool    cmdOverflow = false; // descartando el resto de una linea larga
 
     uint32_t homingSettleStart_ms = 0;
     uint32_t binSettleStart_ms    = 0;

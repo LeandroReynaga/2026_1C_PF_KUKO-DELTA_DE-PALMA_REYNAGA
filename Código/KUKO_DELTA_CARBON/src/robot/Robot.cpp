@@ -32,9 +32,9 @@ static const float BELT_MAX_Y = 11.2f;
 //  GEOMETRIA DE AGARRE (coordenadas de la PUNTA del gripper)
 //  DeltaKinematics ya descuenta el offset de herramienta (0,0,-2.8).
 // ============================================================
-static const float GRAB_Z      = -32.3f; // cara superior de la pieza (1 cm de alto)
+static const float GRAB_Z      = -32.6f; // -32.3 antes. cara superior de la pieza (1 cm de alto)
 static const float APPROACH_DX = -2.0f;  // 2 cm por detras: rampa a favor de la cinta
-static const float APPROACH_DZ = 0.4f;   // 4 mm por arriba
+static const float APPROACH_DZ = 0.7f;   // 0.4 antes. 4 mm por arriba
 
 // Cuanto baja el tramo 2 por DEBAJO de la cara de la pieza. Es lo que hace
 // que el contacto ocurra a mitad del movimiento y no al final, o sea con el
@@ -48,7 +48,7 @@ static const float APPROACH_DZ = 0.4f;   // 4 mm por arriba
 //   mas      -> toca mas rapido que la cinta (el gripper la alcanza)
 static const float PRESS_DZ = 0.025f;
 
-static const float LIFT_DZ = 2.0f;       // despegue de la pieza de la cinta
+static const float LIFT_DZ = 3.0f;       // despegue de la pieza de la cinta (antes 2)
 
 // Area donde es seguro agarrar, validada a mano sobre el robot real
 // (inspeccion visual de las rotulas en todas las posiciones). El punto de
@@ -76,12 +76,31 @@ static const uint32_t BIN_SETTLE_MS         = 200;  // quieto sobre el tacho ant
 // la linea de vacio al apagar la bomba. Cuando este montada (misma senal
 // que la bomba, no cambia el pinout) la pieza cae en el instante y este
 // tiempo se puede bajar a ~100 ms.
-static const uint32_t RELEASE_DETACH_MS = 10000;
+static const uint32_t RELEASE_DETACH_MS = 15000;
 
 // Margen de atraso tolerable al llegar al punto de aproximacion antes de
 // dar por perdido el instante de encuentro y replanificar.
 static const uint32_t PICK_LATE_TOLERANCE_MS = 30;
 static const uint8_t  MAX_REPLAN_ATTEMPTS    = 2;
+
+namespace {
+
+// Recorta espacios/tabs al principio y al final, in situ. Los mensajes los
+// puede tipear una persona a mano en el monitor serie mientras todavia no
+// esta el programa de Python, asi que "3.5, B, S" tiene que valer igual que
+// "3.5,B,S".
+char *recortar(char *s)
+{
+    while (*s == ' ' || *s == '\t') s++;
+
+    char *fin = s + strlen(s);
+    while (fin > s && (fin[-1] == ' ' || fin[-1] == '\t')) fin--;
+    *fin = '\0';
+
+    return s;
+}
+
+} // namespace
 
 Robot::Robot() :
 
@@ -157,12 +176,23 @@ void Robot::procesarSerial()
 
         if (c == '\n' || c == '\r')
         {
-            if (cmdLen > 0)
+            if (cmdOverflow)
+            {
+                Serial.println("[SERIAL] linea demasiado larga, descartada");
+                cmdOverflow = false;
+            }
+            else if (cmdLen > 0)
             {
                 cmdBuffer[cmdLen] = '\0';
                 procesarComando(cmdBuffer, cmdLen);
             }
             cmdLen = 0;
+        }
+        else if (cmdOverflow)
+        {
+            // Se descarta hasta el fin de linea: si se reiniciara el buffer
+            // aca, la COLA de una linea larga terminaria ejecutandose como
+            // si fuera un comando nuevo y valido.
         }
         else if (cmdLen < sizeof(cmdBuffer) - 1)
         {
@@ -170,8 +200,7 @@ void Robot::procesarSerial()
         }
         else
         {
-            // Linea mas larga que el buffer: se descarta entera, para no
-            // interpretar un pedazo suelto como si fuera un comando valido.
+            cmdOverflow = true;
             cmdLen = 0;
         }
     }
@@ -179,11 +208,21 @@ void Robot::procesarSerial()
 
 void Robot::procesarComando(char *cmd, uint8_t len)
 {
+    (void)len; // se recalcula despues de recortar espacios
+
+    cmd = recortar(cmd);
+    const size_t n = strlen(cmd);
+
+    if (n == 0)
+    {
+        return; // linea vacia (o solo espacios): se ignora sin ruido
+    }
+
     // --- Comandos de un solo caracter: modo de clasificacion y emergencia ---
     // Un mensaje de pieza SIEMPRE tiene 2 comas, asi que no hay ambiguedad
     // con 'C' (modo color) ni con 'R' (reset), aunque esas mismas letras se
     // usen como forma/color adentro de un mensaje de pieza.
-    if (len == 1)
+    if (n == 1)
     {
         const char c = toupper(cmd[0]);
 
@@ -230,45 +269,101 @@ void Robot::procesarComando(char *cmd, uint8_t len)
             return;
         }
 
-        Serial.println("[SERIAL] comando desconocido");
+        Serial.print("[SERIAL] comando invalido: '");
+        Serial.print(cmd);
+        Serial.println("'. Validos: 'C', 'F', 'R' o 'Y,color,forma'");
         return;
     }
 
-    // --- Mensaje de pieza: "Y,color,forma" ---
+    // --- Mensaje de pieza: "Y,color,forma" (exactamente 3 campos) ---
     char *coma1 = strchr(cmd, ',');
     if (coma1 == NULL)
     {
-        Serial.println("[SERIAL] comando desconocido");
+        Serial.print("[SERIAL] comando invalido: '");
+        Serial.print(cmd);
+        Serial.println("'. Validos: 'C', 'F', 'R' o 'Y,color,forma'");
         return;
     }
 
     char *coma2 = strchr(coma1 + 1, ',');
     if (coma2 == NULL)
     {
-        Serial.println("[SERIAL] mensaje de pieza incompleto");
+        Serial.println("[SERIAL] faltan campos, se espera 'Y,color,forma' (ej: 3.5,B,S)");
         return;
     }
 
-    const char color = toupper(coma1[1]);
-    const char shape = toupper(coma2[1]);
+    if (strchr(coma2 + 1, ',') != NULL)
+    {
+        Serial.println("[SERIAL] sobran campos, se espera 'Y,color,forma' (ej: 3.5,B,S)");
+        return;
+    }
 
-    *coma1 = '\0'; // corta el campo Y para poder convertirlo
-    const float y = atof(cmd);
+    *coma1 = '\0';
+    *coma2 = '\0';
+
+    char *campoY     = recortar(cmd);
+    char *campoColor = recortar(coma1 + 1);
+    char *campoForma = recortar(coma2 + 1);
+
+    // El campo Y tiene que ser un numero COMPLETO. Con atof() no alcanzaba:
+    // devuelve 0.0 ante cualquier texto que no sea numerico, y 0.0 cae
+    // dentro de la cinta, asi que un "hola,B,S" se habria aceptado en
+    // silencio como una pieza en Y=0.
+    char *fin = NULL;
+    const float y = strtof(campoY, &fin);
+
+    if (*campoY == '\0' || fin == campoY || *fin != '\0')
+    {
+        Serial.print("[SERIAL] Y invalida: '");
+        Serial.print(campoY);
+        Serial.println("'. Tiene que ser un numero en cm (ej: 3.5)");
+        return;
+    }
+
+    if (strlen(campoColor) != 1)
+    {
+        Serial.print("[SERIAL] color invalido: '");
+        Serial.print(campoColor);
+        Serial.println("'. Tiene que ser un solo caracter: R, G o B");
+        return;
+    }
+
+    if (strlen(campoForma) != 1)
+    {
+        Serial.print("[SERIAL] forma invalida: '");
+        Serial.print(campoForma);
+        Serial.println("'. Tiene que ser un solo caracter: S, H o C");
+        return;
+    }
+
+    const char color = toupper(campoColor[0]);
+    const char shape = toupper(campoForma[0]);
 
     if (color != 'R' && color != 'G' && color != 'B')
     {
-        Serial.println("[SERIAL] color invalido (R/G/B)");
+        Serial.print("[SERIAL] color invalido: '");
+        Serial.print(campoColor);
+        Serial.println("'. Validos: R (rojo), G (verde), B (azul)");
         return;
     }
+
     if (shape != 'S' && shape != 'H' && shape != 'C')
     {
-        Serial.println("[SERIAL] forma invalida (S/H/C)");
+        Serial.print("[SERIAL] forma invalida: '");
+        Serial.print(campoForma);
+        Serial.println("'. Validas: S (cuadrado), H (hexagono), C (circulo)");
         return;
     }
+
     if (y < BELT_MIN_Y || y > BELT_MAX_Y)
     {
-        Serial.print("[SERIAL] Y fuera de la cinta: ");
-        Serial.println(y);
+        Serial.print("[SERIAL] Y=");
+        Serial.print(y);
+        Serial.print(" fuera de la cinta (");
+        Serial.print(BELT_MIN_Y);
+        Serial.print(" a ");
+        Serial.print(BELT_MAX_Y);
+        Serial.println(" cm)");
         return;
     }
 
