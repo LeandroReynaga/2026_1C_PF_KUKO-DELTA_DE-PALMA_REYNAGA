@@ -17,6 +17,7 @@ from config import (
     CAMERA_FPS,
     CAMERA_HEIGHT,
     CAMERA_INDEX,
+    CAMERA_USE_MJPG,
     CAMERA_WIDTH,
 )
 
@@ -32,6 +33,11 @@ def main() -> None:
         raise RuntimeError(
             "No se pudo abrir la camara. Revisa CAMERA_INDEX en config.py."
         )
+
+    # Mismo orden que Camera._configure_resolution(): el formato
+    # primero, si no DirectShow ya negocio el modo y lo ignora.
+    if CAMERA_USE_MJPG:
+        capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
 
     capture.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
     capture.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)

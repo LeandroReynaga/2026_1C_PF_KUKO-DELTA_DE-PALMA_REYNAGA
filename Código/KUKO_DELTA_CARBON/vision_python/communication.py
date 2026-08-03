@@ -56,10 +56,17 @@ class SerialCommunication:
         track_id: int,
         shape: str,
         color: str,
-        x_pixel: int,
-        y_pixel: int,
+        x_cm: float,
+        y_cm: float,
     ) -> None:
-        """Envía al ESP32 una pieza que cruzó la línea."""
+        """Envía al ESP32 una pieza que cruzó la línea.
+
+        La posición va en CENTÍMETROS y en el sistema de referencia
+        del robot (ver coordinates.py), no en píxeles: el ESP32 no
+        necesita saber nada de la cámara ni del recorte.
+
+        Formato: PIEZA,id,forma,color,x_cm,y_cm
+        """
 
         if not self.connected:
             return
@@ -69,8 +76,8 @@ class SerialCommunication:
             f"{track_id},"
             f"{shape},"
             f"{color},"
-            f"{x_pixel},"
-            f"{y_pixel}\n"
+            f"{x_cm:.2f},"
+            f"{y_cm:.2f}\n"
         )
 
         try:

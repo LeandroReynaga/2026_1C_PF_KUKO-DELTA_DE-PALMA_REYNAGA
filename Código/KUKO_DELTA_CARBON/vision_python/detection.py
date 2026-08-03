@@ -7,21 +7,15 @@ import cv2
 import numpy as np
 
 from config import (
-    BLUE_LOWER,
-    BLUE_UPPER,
     CIRCLE_CIRCULARITY_MIN,
+    COLOR_HSV_RANGES,
+    HEXAGON_FILL_RATIO_MAX,
+    HEXAGON_FILL_RATIO_MIN,
     MASK_SMOOTHING_KERNEL_SIZE,
     MAX_CONTOUR_AREA,
     MIN_CONTOUR_AREA,
     MORPH_KERNEL_SIZE,
-    RED_LOWER_1,
-    RED_LOWER_2,
-    RED_UPPER_1,
-    RED_UPPER_2,
-    ROI_X_MAX_RATIO,
-    ROI_X_MIN_RATIO,
-    ROI_Y_MAX_RATIO,
-    ROI_Y_MIN_RATIO,
+    SHAPE_APPROX_EPSILON_RATIO,
     SMOOTH_MASK_EDGES,
     SQUARE_ASPECT_RATIO_MAX,
     SQUARE_ASPECT_RATIO_MIN,
@@ -92,41 +86,45 @@ def clean_mask(mask: np.ndarray) -> np.ndarray:
 def create_color_masks(
     hsv_image: np.ndarray,
 ) -> dict[str, np.ndarray]:
-    """Crea las máscaras para objetos rojos y azules."""
+    """Crea una máscara por cada color de COLOR_HSV_RANGES.
 
-    red_mask_1 = cv2.inRange(
-        hsv_image,
-        np.array(RED_LOWER_1, dtype=np.uint8),
-        np.array(RED_UPPER_1, dtype=np.uint8),
-    )
+    No hay colores hardcodeados: se recorre la tabla de config.py,
+    así que sumar un color nuevo (verde, amarillo, lo que sea) es
+    agregar una entrada allá y nada más.
+    """
 
-    red_mask_2 = cv2.inRange(
-        hsv_image,
-        np.array(RED_LOWER_2, dtype=np.uint8),
-        np.array(RED_UPPER_2, dtype=np.uint8),
-    )
+    masks: dict[str, np.ndarray] = {}
 
-    red_mask = cv2.bitwise_or(
-        red_mask_1,
-        red_mask_2,
-    )
+    for color, hsv_ranges in COLOR_HSV_RANGES.items():
+        color_mask: np.ndarray | None = None
 
-    blue_mask = cv2.inRange(
-        hsv_image,
-        np.array(BLUE_LOWER, dtype=np.uint8),
-        np.array(BLUE_UPPER, dtype=np.uint8),
-    )
+        # Un color puede estar partido en varios sectores del
+        # espacio HSV (el rojo). Se unen todos sus rangos.
+        for lower, upper in hsv_ranges:
+            range_mask = cv2.inRange(
+                hsv_image,
+                np.array(lower, dtype=np.uint8),
+                np.array(upper, dtype=np.uint8),
+            )
 
-    return {
-        "ROJO": clean_mask(red_mask),
-        "AZUL": clean_mask(blue_mask),
-    }
+            if color_mask is None:
+                color_mask = range_mask
+            else:
+                color_mask = cv2.bitwise_or(
+                    color_mask,
+                    range_mask,
+                )
+
+        if color_mask is not None:
+            masks[color] = clean_mask(color_mask)
+
+    return masks
 
 
 def classify_shape(
     contour: object,
 ) -> tuple[str | None, float]:
-    """Clasifica un contorno como círculo o cuadrado.
+    """Clasifica un contorno como cuadrado, hexágono o círculo.
 
     Se usa el casco convexo (convex hull) del contorno antes de
     medir circularidad y vértices. Un brillo/reflejo sobre la
@@ -134,6 +132,11 @@ def classify_shape(
     artificialmente la circularidad y puede alterar la cantidad
     de vértices detectados. Como las piezas reales son siempre
     convexas, esto ignora ese ruido sin cambiar la forma real.
+
+    El orden de las comprobaciones importa: el hexágono se prueba
+    ANTES que el círculo. Un hexágono regular tiene circularidad
+    0.91, muy por encima del umbral de círculo, así que si se
+    probara el círculo primero todo hexágono caería ahí.
     """
 
     hull = cv2.convexHull(contour)
@@ -150,7 +153,7 @@ def classify_shape(
 
     approximation = cv2.approxPolyDP(
         hull,
-        0.035 * perimeter,
+        SHAPE_APPROX_EPSILON_RATIO * perimeter,
         True,
     )
 
@@ -172,6 +175,31 @@ def classify_shape(
                 <= SQUARE_ASPECT_RATIO_MAX
             ):
                 return "CUADRADO", circularity
+
+    # ----------------------------
+    # Comprobación de hexágono
+    # ----------------------------
+
+    # Se aceptan 5 y 7 vértices además de 6: con el borde de la
+    # máscara sucio, una esquina del hexágono se puede perder o
+    # partir en dos. Lo que evita que un círculo se cuele por acá no
+    # es el conteo sino la segunda condición, la fracción del
+    # círculo envolvente que llena la figura: el hexágono llena
+    # ~0.78 y el círculo ~0.90.
+    if vertices in (5, 6, 7):
+        _, enclosing_radius = cv2.minEnclosingCircle(hull)
+
+        if enclosing_radius > 0:
+            fill_ratio = area / (
+                pi * enclosing_radius * enclosing_radius
+            )
+
+            if (
+                HEXAGON_FILL_RATIO_MIN
+                <= fill_ratio
+                <= HEXAGON_FILL_RATIO_MAX
+            ):
+                return "HEXAGONO", circularity
 
     # ----------------------------
     # Comprobación de círculo
@@ -332,7 +360,12 @@ def find_piece_contours(
 def detect_objects(
     frame: np.ndarray,
 ) -> tuple[list[Detection], dict[str, np.ndarray]]:
-    """Detecta círculos y cuadrados rojos o azules."""
+    """Detecta círculos y cuadrados rojos o azules.
+
+    El fotograma que llega ya viene recortado a la cinta por
+    Camera.read(), así que no hace falta enmascarar nada: todo lo
+    que se ve es zona útil.
+    """
 
     blurred_frame = cv2.GaussianBlur(
         frame,
@@ -346,18 +379,6 @@ def detect_objects(
     )
 
     masks = create_color_masks(hsv_image)
-
-    roi_mask = create_roi_mask(frame)
-
-    masks["ROJO"] = cv2.bitwise_and(
-    masks["ROJO"],
-    roi_mask,
-)
-
-    masks["AZUL"] = cv2.bitwise_and(
-    masks["AZUL"],
-    roi_mask,
-)
 
     detections: list[Detection] = []
 
@@ -406,31 +427,3 @@ def detect_objects(
             detections.append(detection)
 
     return detections, masks
-
-def create_roi_mask(
-    image: np.ndarray,
-) -> np.ndarray:
-    """Crea una máscara que limita la detección a la cinta."""
-
-    height, width = image.shape[:2]
-
-    x_min = int(width * ROI_X_MIN_RATIO)
-    x_max = int(width * ROI_X_MAX_RATIO)
-
-    y_min = int(height * ROI_Y_MIN_RATIO)
-    y_max = int(height * ROI_Y_MAX_RATIO)
-
-    roi_mask = np.zeros(
-        (height, width),
-        dtype=np.uint8,
-    )
-
-    cv2.rectangle(
-        roi_mask,
-        (x_min, y_min),
-        (x_max, y_max),
-        255,
-        -1,
-    )
-
-    return roi_mask

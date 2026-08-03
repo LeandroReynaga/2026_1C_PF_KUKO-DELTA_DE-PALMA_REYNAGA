@@ -7,18 +7,18 @@ import cv2
 from camera import Camera
 from communication import SerialCommunication
 from config import (
-    LINE_Y_RATIO,
-    ROI_X_MAX_RATIO,
-    ROI_X_MIN_RATIO,
-    ROI_Y_MAX_RATIO,
-    ROI_Y_MIN_RATIO,
+    CAMERA_AUTO_EXPOSURE,
+    CAMERA_EXPOSURE,
+    LINE_X_RATIO,
     SHOW_COLOR_MASKS,
     WINDOW_NAME,
 )
+from coordinates import pixels_to_robot_cm
 from detection import detect_objects
 from line_crossing import (
     LineCrossingDetector,
     draw_detection_line,
+    draw_text_right_of_line,
 )
 from tracker import (
     CentroidTracker,
@@ -26,16 +26,29 @@ from tracker import (
 )
 
 
+# Color con el que se dibuja cada pieza sobre el video, en BGR.
+# Es solo presentación: si aparece un color que no está acá se
+# dibuja en blanco, no se rompe nada.
+DRAWING_COLORS = {
+    "ROJO": (0, 0, 255),
+    "AZUL": (255, 0, 0),
+    "VERDE": (0, 200, 0),
+}
+
+DEFAULT_DRAWING_COLOR = (255, 255, 255)
+
+
 def draw_tracked_object(
     frame: object,
     track: TrackedObject,
+    line_x: int,
 ) -> None:
     """Dibuja los datos de una pieza sobre el video."""
 
-    if track.color == "ROJO":
-        drawing_color = (0, 0, 255)
-    else:
-        drawing_color = (255, 0, 0)
+    drawing_color = DRAWING_COLORS.get(
+        track.color,
+        DEFAULT_DRAWING_COLOR,
+    )
 
     # Se dibuja el casco convexo, no el contorno crudo: es lo
     # mismo que usa classify_shape() para decidir la forma, así
@@ -71,8 +84,20 @@ def draw_tracked_object(
         f"{track.shape} {track.color}"
     )
 
+    # En pantalla se muestran centímetros del robot, que es lo mismo
+    # que viaja por el serial: así lo que se lee en el video es
+    # exactamente el dato con el que va a trabajar el ESP32.
+    frame_height, frame_width = frame.shape[:2]
+
+    x_cm, y_cm = pixels_to_robot_cm(
+        track.center,
+        frame_width,
+        frame_height,
+        line_x,
+    )
+
     position_label = (
-        f"X:{center_x} px Y:{center_y} px"
+        f"X:{x_cm:.1f} cm Y:{y_cm:.1f} cm"
     )
 
     cv2.putText(
@@ -112,6 +137,25 @@ def main() -> None:
 
     camera = Camera()
 
+    capture_width, capture_height = camera.capture_resolution()
+
+    exposure_label = (
+        "automática"
+        if CAMERA_AUTO_EXPOSURE
+        else f"fija en {CAMERA_EXPOSURE}"
+    )
+
+    print(
+        f"Backend de captura: {camera.backend_name} | "
+        "resolución que entrega la cámara: "
+        f"{capture_width}x{capture_height} px | "
+        f"exposición {exposure_label}"
+    )
+
+    # El tamaño final recién se conoce con el primer fotograma:
+    # se informa una sola vez para poder verificar el recorte.
+    crop_reported = False
+
     tracker = CentroidTracker()
     line_detector = LineCrossingDetector()
 
@@ -134,32 +178,22 @@ def main() -> None:
 
             frame_height, frame_width = frame.shape[:2]
 
-            roi_x_min = int(frame_width * ROI_X_MIN_RATIO)
-            roi_x_max = int(frame_width * ROI_X_MAX_RATIO)
+            # El fotograma ya llega recortado a la cinta: no hay
+            # área de detección que dibujar, es toda la ventana.
+            if not crop_reported:
+                print(
+                    "Fotograma en pantalla: "
+                    f"{frame_width}x{frame_height} px "
+                    "(ya rotado y recortado a la cinta). "
+                    "Si entra mesa o quedan pedazos de cinta afuera, "
+                    "ajustá CROP_Y_MIN_RATIO / CROP_Y_MAX_RATIO "
+                    "en config.py."
+                )
 
-            roi_y_min = int(frame_height * ROI_Y_MIN_RATIO)
-            roi_y_max = int(frame_height * ROI_Y_MAX_RATIO)
+                crop_reported = True
 
-            cv2.rectangle(
-                frame,
-                (roi_x_min, roi_y_min),
-                (roi_x_max, roi_y_max),
-                (255, 255, 0),
-                2,
-            )
-
-            cv2.putText(
-                frame,
-                ".", #AREA DE DETECCION",
-                (roi_x_min + 10, roi_y_min + 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 0),
-                2,
-            )
-
-            line_y = int(
-                frame_height * LINE_Y_RATIO
+            line_x = int(
+                frame_width * LINE_X_RATIO
             )
 
             detections, masks = detect_objects(frame)
@@ -169,20 +203,30 @@ def main() -> None:
             crossed_objects = (
                 line_detector.check_crossings(
                     tracked_objects,
-                    line_y,
+                    line_x,
                 )
             )
 
             total_crossings += len(crossed_objects)
 
             for track in crossed_objects:
+                x_cm, y_cm = pixels_to_robot_cm(
+                    track.center,
+                    frame_width,
+                    frame_height,
+                    line_x,
+                )
+
+                # En consola se dejan también los píxeles: sirven
+                # para verificar la conversión mientras se calibra.
                 print(
                     "PIEZA DETECTADA:",
                     f"ID={track.track_id}",
                     f"FORMA={track.shape}",
                     f"COLOR={track.color}",
-                    f"X={track.center[0]}",
-                    f"Y={track.center[1]}",
+                    f"X={x_cm:.2f} cm",
+                    f"Y={y_cm:.2f} cm",
+                    f"(px {track.center[0]},{track.center[1]})",
                     sep=" | ",
                 )
 
@@ -190,19 +234,20 @@ def main() -> None:
                     track_id=track.track_id,
                     shape=track.shape,
                     color=track.color,
-                    x_pixel=track.center[0],
-                    y_pixel=track.center[1],
+                    x_cm=x_cm,
+                    y_cm=y_cm,
                 )
 
             draw_detection_line(
                 frame,
-                line_y,
+                line_x,
             )
 
             for track in tracked_objects:
                 draw_tracked_object(
                     frame,
                     track,
+                    line_x,
                 )
 
             current_time = time.perf_counter()
@@ -239,14 +284,14 @@ def main() -> None:
                 2,
             )
 
-            cv2.putText(
+            # El contador va del lado de la línea por el que las
+            # piezas ya salieron, para no taparlas mientras entran.
+            draw_text_right_of_line(
                 frame,
                 f"Piezas contadas: {total_crossings}",
-                (20, 70),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.65,
+                line_x,
+                70,
                 (0, 255, 255),
-                2,
             )
 
             cv2.imshow(

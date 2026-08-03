@@ -8,9 +8,8 @@ Uso:
     python hsv_calibrator.py
 
 Controles:
-    1  -> cargar preset ROJO (rango 1, cerca de H=0)
-    2  -> cargar preset ROJO (rango 2, cerca de H=179)
-    3  -> cargar preset AZUL
+    1..9     -> cargar el preset de cada rango de color definido
+                en config.COLOR_HSV_RANGES (se listan al arrancar)
     s  -> imprimir en consola el rango actual, listo para
           copiar y pegar en config.py
     q / ESC -> salir
@@ -21,33 +20,43 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from camera import Camera
 from config import (
-    BLUE_LOWER,
-    BLUE_UPPER,
-    CAMERA_FPS,
-    CAMERA_HEIGHT,
-    CAMERA_INDEX,
-    CAMERA_WIDTH,
+    COLOR_HSV_RANGES,
     MORPH_KERNEL_SIZE,
-    RED_LOWER_1,
-    RED_LOWER_2,
-    RED_UPPER_1,
-    RED_UPPER_2,
-    ROI_X_MAX_RATIO,
-    ROI_X_MIN_RATIO,
-    ROI_Y_MAX_RATIO,
-    ROI_Y_MIN_RATIO,
 )
 
 WINDOW_CONTROLS = "Calibracion HSV - controles"
 WINDOW_MASK = "Calibracion HSV - mascara"
 WINDOW_ORIGINAL = "Calibracion HSV - camara"
 
-PRESETS = {
-    ord("1"): ("ROJO rango 1", RED_LOWER_1, RED_UPPER_1),
-    ord("2"): ("ROJO rango 2", RED_LOWER_2, RED_UPPER_2),
-    ord("3"): ("AZUL", BLUE_LOWER, BLUE_UPPER),
-}
+
+def build_presets() -> dict[int, tuple[str, tuple, tuple]]:
+    """Arma un preset por cada rango de config.COLOR_HSV_RANGES.
+
+    Se genera a partir de la tabla en vez de escribirlo a mano, así
+    un color nuevo (verde, amarillo) aparece acá solo, sin tener que
+    acordarse de tocar este archivo también.
+    """
+
+    presets: dict[int, tuple[str, tuple, tuple]] = {}
+    key = ord("1")
+
+    for color, hsv_ranges in COLOR_HSV_RANGES.items():
+        for index, (lower, upper) in enumerate(hsv_ranges, start=1):
+            # Un color con un solo rango no necesita numerarlo.
+            if len(hsv_ranges) > 1:
+                name = f"{color} rango {index}"
+            else:
+                name = color
+
+            presets[key] = (name, lower, upper)
+            key += 1
+
+    return presets
+
+
+PRESETS = build_presets()
 
 
 def nothing(_value: int) -> None:
@@ -80,38 +89,14 @@ def read_trackbars() -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     return (h_min, s_min, v_min), (h_max, s_max, v_max)
 
 
-def roi_mask_for(frame: np.ndarray) -> np.ndarray:
-    height, width = frame.shape[:2]
-
-    x_min = int(width * ROI_X_MIN_RATIO)
-    x_max = int(width * ROI_X_MAX_RATIO)
-    y_min = int(height * ROI_Y_MIN_RATIO)
-    y_max = int(height * ROI_Y_MAX_RATIO)
-
-    mask = np.zeros((height, width), dtype=np.uint8)
-    cv2.rectangle(mask, (x_min, y_min), (x_max, y_max), 255, -1)
-
-    return mask
-
-
 def main() -> None:
-    capture = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
+    # Se usa la misma clase Camera que main.py para calibrar sobre
+    # exactamente la misma imagen: ya rotada y recortada a la cinta.
+    camera = Camera()
 
-    if not capture.isOpened():
-        capture.release()
-        capture = cv2.VideoCapture(CAMERA_INDEX)
-
-    if not capture.isOpened():
-        raise RuntimeError(
-            "No se pudo abrir la camara. Revisa CAMERA_INDEX en config.py."
-        )
-
-    capture.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
-    capture.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
-
-    current_preset = "AZUL"
-    lower, upper = BLUE_LOWER, BLUE_UPPER
+    # Se arranca en el primer preset de la tabla.
+    first_key = min(PRESETS)
+    current_preset, lower, upper = PRESETS[first_key]
 
     create_trackbars(lower, upper)
 
@@ -120,15 +105,19 @@ def main() -> None:
         dtype=np.uint8,
     )
 
+    presets_label = "  ".join(
+        f"{chr(key)}={name}" for key, (name, _l, _u) in sorted(PRESETS.items())
+    ) + "  s=imprimir  q=salir"
+
     print("Calibrador HSV iniciado.")
-    print(
-        "Teclas: 1=rojo rango1  2=rojo rango2  3=azul  "
-        "s=imprimir valores  q/ESC=salir"
-    )
+    print("Presets disponibles:")
+    for key, (name, _lower, _upper) in sorted(PRESETS.items()):
+        print(f"    {chr(key)} -> {name}")
+    print("Teclas: s=imprimir valores  q/ESC=salir")
 
     try:
         while True:
-            frame_read, frame = capture.read()
+            frame_read, frame = camera.read()
 
             if not frame_read:
                 print("No se pudo leer un fotograma de la camara.")
@@ -147,8 +136,6 @@ def main() -> None:
 
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-            mask = cv2.bitwise_and(mask, roi_mask_for(frame))
 
             # Color promedio de los pixeles que la máscara está
             # dejando pasar ahora mismo. Sirve para notar cuando
@@ -173,19 +160,6 @@ def main() -> None:
             display_frame = frame.copy()
             height, width = display_frame.shape[:2]
 
-            x_min = int(width * ROI_X_MIN_RATIO)
-            x_max = int(width * ROI_X_MAX_RATIO)
-            y_min = int(height * ROI_Y_MIN_RATIO)
-            y_max = int(height * ROI_Y_MAX_RATIO)
-
-            cv2.rectangle(
-                display_frame,
-                (x_min, y_min),
-                (x_max, y_max),
-                (255, 255, 0),
-                2,
-            )
-
             cv2.putText(
                 display_frame,
                 f"Preset: {current_preset}",
@@ -208,7 +182,7 @@ def main() -> None:
 
             cv2.putText(
                 display_frame,
-                "1=rojo1  2=rojo2  3=azul  s=imprimir  q=salir",
+                presets_label,
                 (20, 90),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.55,
@@ -281,7 +255,7 @@ def main() -> None:
                 print(f"UPPER = {upper_np}")
 
     finally:
-        capture.release()
+        camera.release()
         cv2.destroyAllWindows()
 
 

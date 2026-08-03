@@ -4,28 +4,25 @@ import time
 
 import cv2
 
-from config import (
-    LINE_DIRECTION,
-    ROI_X_MAX_RATIO,
-    ROI_X_MIN_RATIO,
-)
+from config import LINE_DIRECTION
 from tracker import TrackedObject
 
 
 class LineCrossingDetector:
-    """Detecta el cruce de una línea horizontal."""
+    """Detecta el cruce de una línea vertical."""
 
     def check_crossings(
         self,
         tracks: list[TrackedObject],
-        line_y: int,
+        line_x: int,
     ) -> list[TrackedObject]:
         """
-        Comprueba si los objetos cruzaron la línea horizontal.
+        Comprueba si los objetos cruzaron la línea vertical.
 
-        En una imagen OpenCV:
-        - Y aumenta hacia abajo.
-        - Y disminuye cuando una pieza sube.
+        La cinta se ve horizontal en pantalla, así que las piezas
+        avanzan en X:
+        - X aumenta cuando la pieza va hacia la derecha.
+        - X disminuye cuando la pieza va hacia la izquierda.
         """
 
         crossed_objects: list[TrackedObject] = []
@@ -35,25 +32,25 @@ class LineCrossingDetector:
             if track.crossed_line:
                 continue
 
-            previous_y = track.previous_center[1]
-            current_y = track.center[1]
+            previous_x = track.previous_center[0]
+            current_x = track.center[0]
 
             crossed = False
 
-            # Cinta desde abajo hacia arriba.
-            # La coordenada Y disminuye.
-            if LINE_DIRECTION == "BOTTOM_TO_TOP":
+            # Cinta de izquierda a derecha.
+            # La coordenada X aumenta.
+            if LINE_DIRECTION == "LEFT_TO_RIGHT":
                 crossed = (
-                    previous_y > line_y
-                    and current_y <= line_y
+                    previous_x < line_x
+                    and current_x >= line_x
                 )
 
-            # Cinta desde arriba hacia abajo.
-            # La coordenada Y aumenta.
-            elif LINE_DIRECTION == "TOP_TO_BOTTOM":
+            # Cinta de derecha a izquierda.
+            # La coordenada X disminuye.
+            elif LINE_DIRECTION == "RIGHT_TO_LEFT":
                 crossed = (
-                    previous_y < line_y
-                    and current_y >= line_y
+                    previous_x > line_x
+                    and current_x <= line_x
                 )
 
             if crossed:
@@ -65,41 +62,86 @@ class LineCrossingDetector:
         return crossed_objects
 
 
+def draw_text_right_of_line(
+    frame: object,
+    text: str,
+    line_x: int,
+    text_y: int,
+    color: tuple[int, int, int],
+    font_scale: float = 0.65,
+    thickness: int = 2,
+) -> None:
+    """Escribe un texto en la franja que queda a la derecha de la línea.
+
+    El espacio disponible depende de LINE_X_RATIO, así que no se
+    puede fijar un tamaño de letra de antemano: si el texto no
+    entra entre la línea y el borde derecho, se achica hasta que
+    entre. Así nunca se sale del cuadro ni queda pisando la línea,
+    se mueva donde se mueva.
+    """
+
+    margin_from_line = 12
+    margin_from_edge = 8
+
+    text_x = line_x + margin_from_line
+
+    available_width = (
+        frame.shape[1] - text_x - margin_from_edge
+    )
+
+    # La línea quedó tan a la derecha que no hay franja donde
+    # escribir; se omite el texto antes que dibujar algo cortado.
+    if available_width <= 0:
+        return
+
+    (text_width, _), _ = cv2.getTextSize(
+        text,
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        thickness,
+    )
+
+    if text_width > available_width:
+        font_scale = font_scale * available_width / text_width
+
+        # Con la letra chica, el grosor 2 empasta los trazos y se
+        # vuelve ilegible.
+        if font_scale < 0.45:
+            thickness = 1
+
+    cv2.putText(
+        frame,
+        text,
+        (text_x, text_y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        color,
+        thickness,
+    )
+
+
 def draw_detection_line(
     frame: object,
-    line_y: int,
+    line_x: int,
 ) -> None:
-    """Dibuja la línea horizontal sobre la zona de la cinta."""
+    """Dibuja la línea vertical sobre la zona de la cinta."""
 
-    frame_height, frame_width = frame.shape[:2]
+    frame_height = frame.shape[0]
 
-    # Límites horizontales de la región de interés.
-    roi_x_min = int(
-        frame_width * ROI_X_MIN_RATIO
-    )
-
-    roi_x_max = int(
-        frame_width * ROI_X_MAX_RATIO
-    )
-
-    # Línea horizontal.
+    # El fotograma ya viene recortado a la cinta, así que la línea
+    # cruza todo el alto disponible.
     cv2.line(
         frame,
-        (roi_x_min, line_y),
-        (roi_x_max, line_y),
+        (line_x, 0),
+        (line_x, frame_height),
         (0, 255, 255),
         3,
     )
 
-    # Texto ubicado encima de la línea.
-    text_y = max(line_y - 12, 25)
-
-    cv2.putText(
+    draw_text_right_of_line(
         frame,
         "LINEA DE DETECCION",
-        (roi_x_min + 10, text_y),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.65,
+        line_x,
+        frame_height - 15,
         (0, 255, 255),
-        2,
     )
