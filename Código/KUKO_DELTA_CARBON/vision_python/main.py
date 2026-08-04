@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import time
 
 import cv2
@@ -24,6 +25,31 @@ from tracker import (
     CentroidTracker,
     TrackedObject,
 )
+
+
+def configurar_consola() -> None:
+    """Evita que un mensaje de consola pueda matar el programa.
+
+    En Windows, print() escribe usando cp1252, que no puede
+    representar cualquier carácter Unicode. Un carácter que no entre
+    levanta UnicodeEncodeError, y como el print está dentro del
+    bucle principal, eso tira abajo TODO el sistema de visión con el
+    robot andando. Perder la visión por un mensaje de log no es un
+    intercambio aceptable, así que se pide reemplazar lo que no se
+    pueda escribir en vez de fallar.
+
+    De paso se pasa la salida a UTF-8, que es lo que esperan la
+    consola de VS Code y las terminales actuales; sin esto los
+    acentos de los mensajes se ven como símbolos raros.
+    """
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            # Salida redirigida a un archivo o a un pipe que no
+            # admite reconfiguración: no es motivo para no arrancar.
+            pass
 
 
 # Color con el que se dibuja cada pieza sobre el video, en BGR.
@@ -133,6 +159,8 @@ def draw_tracked_object(
 
 
 def main() -> None:
+    configurar_consola()
+
     print("Iniciando sistema de visión...")
 
     camera = Camera()
@@ -230,11 +258,14 @@ def main() -> None:
                     sep=" | ",
                 )
 
+                # La X no se manda: la pieza se informa justo al
+                # cruzar la línea, así que para el robot siempre vale
+                # LINE_X_CM. Se sigue calculando solo para mostrarla
+                # en pantalla y en la consola.
                 serial_communication.send_piece(
                     track_id=track.track_id,
                     shape=track.shape,
                     color=track.color,
-                    x_cm=x_cm,
                     y_cm=y_cm,
                 )
 
@@ -314,7 +345,7 @@ def main() -> None:
                 serial_communication.read_messages()
             ):
                 print(
-                    "ESP32 → Python:",
+                    "ESP32 -> Python:",
                     message,
                 )
 

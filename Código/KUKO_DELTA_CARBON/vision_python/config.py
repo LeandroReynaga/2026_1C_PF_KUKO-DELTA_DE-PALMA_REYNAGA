@@ -332,10 +332,20 @@ SHOW_COLOR_MASKS = False
 # Comunicación serial
 # ----------------------------
 
-# Dejar en False mientras probamos únicamente la cámara.
-SERIAL_ENABLED = False
+# Con esto en True, cada pieza que cruza la línea se le manda sola
+# al ESP32. Poner en False para probar únicamente la cámara, sin
+# robot conectado: la visión sigue funcionando igual.
+SERIAL_ENABLED = True
 
-SERIAL_PORT = "COM5"
+# "AUTO" busca el puerto del ESP32 por el chip USB-serie de la placa
+# (CP210x, CH340, FTDI). Conviene dejarlo así: Windows le cambia el
+# número de COM según el puerto USB donde se enchufe, y además
+# descarta solo los COM de Bluetooth, que también aparecen listados.
+#
+# Si hubiera más de una placa conectada, poner el puerto a mano
+# ("COM5", "COM7", ...).
+SERIAL_PORT = "AUTO"
+
 SERIAL_BAUDRATE = 115200
 
 # ============================================================

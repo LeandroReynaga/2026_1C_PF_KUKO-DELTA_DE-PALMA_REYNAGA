@@ -29,6 +29,37 @@ static const float BELT_MIN_Y = -2.8f;
 static const float BELT_MAX_Y = 11.2f;
 
 // ============================================================
+//  LATENCIA DE LA VISION
+// ============================================================
+// Entre el instante en que la pieza cruza FISICAMENTE la linea de
+// deteccion y el instante en que el mensaje llega al ESP32 pasa un
+// tiempo muerto: exposicion de la camara, buffer del driver, el
+// fotograma que hay que esperar para ver el cruce, la deteccion en
+// si y el envio por Serial. Durante todo eso la pieza SIGUE
+// AVANZANDO sobre la cinta.
+//
+// Sin compensarlo, el robot cree que la pieza esta mas atras de
+// donde realmente esta, apunta detras de ella, y la pieza le queda
+// adelantada: aparece a la derecha de la ventosa.
+//
+// Se modela como TIEMPO y no como una distancia fija a proposito.
+// El error en cm es latencia * velocidad de cinta, asi que
+// expresarlo en segundos lo deja valido aunque se cambien las rpm
+// de la cinta; una constante en cm habria que recalibrarla.
+//
+// PARA CALIBRARLO: medir cuanto le erra el gripper en X y dividir
+// por la velocidad de la cinta.
+//
+//     latencia_s = error_cm / BELT_VELOCITY_CMS
+//
+//   pieza ADELANTADA (a la derecha de la ventosa) -> falta, subirlo
+//   pieza ATRASADA   (a la izquierda)             -> sobra, bajarlo
+//
+// Valor actual: se midio 1,5 cm de atraso con la cinta a 7,54 cm/s
+//     1,5 / 7,54 = 0,199 s
+static const float VISION_LATENCY_S = 0.20f;
+
+// ============================================================
 //  GEOMETRIA DE AGARRE (coordenadas de la PUNTA del gripper)
 //  DeltaKinematics ya descuenta el offset de herramienta (0,0,-2.8).
 // ============================================================
@@ -371,7 +402,10 @@ void Robot::procesarComando(char *cmd, uint8_t len)
     p.y = y;
     p.color = color;
     p.shape = shape;
-    p.detectedAt_ms = millis(); // el retardo vision->serial se toma despreciable
+    // Instante en que LLEGO el mensaje, no en que la pieza cruzo la
+    // linea: el desfasaje entre los dos se corrige en
+    // planificarPieza() con VISION_LATENCY_S.
+    p.detectedAt_ms = millis();
 
     if (!queuePush(p))
     {
@@ -639,7 +673,11 @@ bool Robot::planificarPieza(const Piece &p)
     geom.workAreaMinX = WORK_AREA_MIN_X;
     geom.workAreaMaxX = WORK_AREA_MAX_X;
 
-    const float tSinceDetection = (millis() - p.detectedAt_ms) / 1000.0f;
+    // Al tiempo que paso desde que llego el mensaje se le suma la
+    // latencia de la vision: cuando ese mensaje llego, la pieza ya
+    // no estaba sobre la linea de deteccion, ya habia avanzado.
+    const float tSinceDetection = VISION_LATENCY_S +
+                                  (millis() - p.detectedAt_ms) / 1000.0f;
 
     ConveyorIntercept::InterceptResult r = ConveyorIntercept::solve(
         p.y, tSinceDetection, belt, geom,
