@@ -57,15 +57,15 @@ static const float BELT_MAX_Y = 11.2f;
 //
 // Valor actual: se midio 1,5 cm de atraso con la cinta a 7,54 cm/s
 //     1,5 / 7,54 = 0,199 s
-static const float VISION_LATENCY_S = 0.20f;
+static const float VISION_LATENCY_S = -0.1f; // antes 0.2
 
 // ============================================================
 //  GEOMETRIA DE AGARRE (coordenadas de la PUNTA del gripper)
 //  DeltaKinematics ya descuenta el offset de herramienta (0,0,-2.8).
 // ============================================================
-static const float GRAB_Z      = -32.6f; // -32.3 antes. cara superior de la pieza (1 cm de alto)
+static const float GRAB_Z      = -32.9f; // -32.3 antes, -32.6 despues. cara superior de la pieza (1 cm de alto)
 static const float APPROACH_DX = -2.0f;  // 2 cm por detras: rampa a favor de la cinta
-static const float APPROACH_DZ = 0.7f;   // 0.4 antes. 4 mm por arriba
+static const float APPROACH_DZ = 2.7f;   // 0.4 antes, despues 0.7. 4 mm por arriba
 
 // Cuanto baja el tramo 2 por DEBAJO de la cara de la pieza. Es lo que hace
 // que el contacto ocurra a mitad del movimiento y no al final, o sea con el
@@ -94,20 +94,20 @@ static const float WORK_AREA_MAX_X = 10.0f;
 // ============================================================
 static const float BIN_X[3] = {-12.0f, 0.0f, 12.0f};
 static const float BIN_Y    = -9.55f;
-static const float BIN_Z    = -29.3f;
+static const float BIN_Z    = -26.5f; //antes -29.3cm
 
 // ============================================================
 //  TIEMPOS (todos no bloqueantes, con millis())
 // ============================================================
 static const uint32_t HOMING_SETTLE_WAIT_MS = 2500; // ventana de promediado de encoders
-static const uint32_t BIN_SETTLE_MS         = 200;  // quieto sobre el tacho antes de soltar
+static const uint32_t BIN_SETTLE_MS         = 5;  // quieto sobre el tacho antes de soltar antes 200
 
 // Cuanto se espera con la bomba apagada para que la pieza se despegue del
 // gripper. Es un parche temporal: falta la electrovalvula que mete aire en
 // la linea de vacio al apagar la bomba. Cuando este montada (misma senal
 // que la bomba, no cambia el pinout) la pieza cae en el instante y este
 // tiempo se puede bajar a ~100 ms.
-static const uint32_t RELEASE_DETACH_MS = 15000;
+static const uint32_t RELEASE_DETACH_MS = 5;
 
 // Margen de atraso tolerable al llegar al punto de aproximacion antes de
 // dar por perdido el instante de encuentro y replanificar.
