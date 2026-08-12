@@ -63,7 +63,7 @@ static const float VISION_LATENCY_S = -0.1f; // antes 0.2
 //  GEOMETRIA DE AGARRE (coordenadas de la PUNTA del gripper)
 //  DeltaKinematics ya descuenta el offset de herramienta (0,0,-2.8).
 // ============================================================
-static const float GRAB_Z      = -32.9f; // -32.3 antes, -32.6 despues. cara superior de la pieza (1 cm de alto)
+static const float GRAB_Z      = -32.6f; // -32.3 antes, -32.9 despues. cara superior de la pieza (1 cm de alto)
 static const float APPROACH_DX = -2.0f;  // 2 cm por detras: rampa a favor de la cinta
 static const float APPROACH_DZ = 2.7f;   // 0.4 antes, despues 0.7. 4 mm por arriba
 
@@ -107,12 +107,57 @@ static const uint32_t BIN_SETTLE_MS         = 5;  // quieto sobre el tacho antes
 // la linea de vacio al apagar la bomba. Cuando este montada (misma senal
 // que la bomba, no cambia el pinout) la pieza cae en el instante y este
 // tiempo se puede bajar a ~100 ms.
-static const uint32_t RELEASE_DETACH_MS = 5;
+static const uint32_t RELEASE_DETACH_MS = 50;
 
 // Margen de atraso tolerable al llegar al punto de aproximacion antes de
 // dar por perdido el instante de encuentro y replanificar.
 static const uint32_t PICK_LATE_TOLERANCE_MS = 30;
 static const uint8_t  MAX_REPLAN_ATTEMPTS    = 2;
+
+// ============================================================
+//  RECUPERACION DE COLISIONES
+// ============================================================
+// Cuanto se queda quieto el robot despues de detectar una colision, antes
+// de arrancar la recalibracion. No es para que "se acomode" nada: es para
+// que quien este mirando alcance a ver que paso y a sacar la mano o el
+// obstaculo antes de que el brazo vuelva a moverse solo.
+static const uint32_t COLLISION_PAUSE_MS = 3000;
+
+// Colisiones seguidas (sin completar ninguna pieza en el medio) despues de
+// las cuales se deja de reintentar. Si el brazo choca contra lo mismo tres
+// veces, rehomear una cuarta no lo va a arreglar: lo unico que se logra es
+// seguir golpeando el robot.
+static const uint8_t MAX_COLISIONES_SEGUIDAS = 3;
+
+// Cuanto se suspende la supervision al conmutar la bomba de vacio.
+//
+// La bomba es una carga fuerte que arranca justo cuando el brazo termina el
+// tramo rapido y todavia no empezo el lento -- o sea, exactamente donde
+// aparecian los falsos positivos. La salida del AS5600 es ratiometrica a su
+// VCC y el ADC del ESP32 mide contra una referencia interna, asi que
+// cualquier hundida del riel al arrancar la bomba corre las tres lecturas
+// de golpe sin que se haya movido nada.
+//
+// Ademas, el tramo de bajada TOCA la pieza a proposito (y la comprime, ver
+// PRESS_DZ): ahi hay una perturbacion mecanica real y esperada, que no es
+// una colision. Esta ventana cubre las dos cosas.
+static const uint32_t BLANQUEO_NEUMATICA_MS = 300;
+
+// Cada cuanto se vuelca una linea con los numeros de la supervision. Existe
+// porque cuando la vision de Python tiene tomado el puerto serie no se le
+// pueden mandar comandos al robot ('S', 'M'), asi que los datos para
+// calibrar tienen que salir solos. La interfaz de Python los acumula como
+// una linea mas, no le molesta.
+//
+// 0 = apagado.
+static const uint32_t DIAGNOSTICO_PERIODICO_MS = 15000;
+
+// Tiempo maximo que puede tardar el homing en encontrar los 3 finales de
+// carrera. Si se pasa, es que un eje no llega (trabado contra algo, o el
+// obstaculo que causo la colision sigue ahi): se corta todo, se para la
+// cinta y se espera intervencion manual. Sin esto, un brazo trabado deja
+// al robot empujando contra el obstaculo para siempre.
+static const uint32_t HOMING_TIMEOUT_MS = 20000;
 
 namespace {
 
@@ -161,6 +206,10 @@ void Robot::begin()
 
     endstops.begin();
 
+    guard.begin();
+    guard.setObservar(!supervisionHabilitada);
+    fallos.begin();
+
     Serial.println();
     Serial.println("=== KUKO DELTA CARBON ===");
     Serial.println("Comandos por Serial (uno por linea):");
@@ -169,11 +218,39 @@ void Robot::begin()
     Serial.println("  C               clasificar por COLOR");
     Serial.println("  F               clasificar por FORMA");
     Serial.println("  R               parada de emergencia / reinicio");
+    Serial.println("  D               historial de fallos");
+    Serial.println("  S               estado de la supervision por encoders");
+    Serial.println("  G               prender/apagar la supervision");
+    Serial.println("  M               traza en vivo del encoder vs los pasos");
+    Serial.println("  U<grados>       umbral fijo de colision. Ej: U12.5");
+    Serial.println("  T<ms>           tiempo de confirmacion. Ej: T80");
+    Serial.println("  K<ms>           margen por velocidad. Ej: K80");
+    Serial.println("  L<ms>           atraso del encoder a compensar. Ej: L70");
 }
 
 void Robot::update()
 {
     procesarSerial();
+
+    // Supervision de colisiones: corre ANTES de la maquina de estados, en
+    // cada vuelta del loop, sin importar en que estado este el robot. Si
+    // detecta una colision cambia el estado a COLLISION_STOP y el switch de
+    // abajo ya entra por ahi.
+    supervisarColision();
+
+    if (trazaActiva && (uint32_t)(millis() - ultimaTraza_ms) >= TRAZA_INTERVALO_MS)
+    {
+        ultimaTraza_ms = millis();
+        imprimirTraza();
+    }
+
+    if (DIAGNOSTICO_PERIODICO_MS > 0 &&
+        state != IDLE && state != ERROR &&
+        (uint32_t)(millis() - ultimoDiagnostico_ms) >= DIAGNOSTICO_PERIODICO_MS)
+    {
+        ultimoDiagnostico_ms = millis();
+        imprimirDiagnosticoCorto();
+    }
 
     switch (state)
     {
@@ -186,6 +263,7 @@ void Robot::update()
         case GO_BIN:         updateGoBin();         break;
         case BIN_SETTLE:     updateBinSettle();     break;
         case RELEASE_WAIT:   updateReleaseWait();   break;
+        case COLLISION_STOP: updateCollisionStop(); break;
 
         default:                                    break;
     }
@@ -271,6 +349,57 @@ void Robot::procesarComando(char *cmd, uint8_t len)
             return;
         }
 
+        if (c == 'D')
+        {
+            fallos.imprimirHistorial();
+            return;
+        }
+
+        if (c == 'S')
+        {
+            imprimirEstadoSupervision();
+            return;
+        }
+
+        if (c == 'M')
+        {
+            trazaActiva = !trazaActiva;
+
+            if (trazaActiva)
+            {
+                Serial.println("[TRAZA] on. columnas por eje: raw (0-4095), enc y cmd en grados");
+                Serial.println("[TRAZA] desde el homing, err = enc - cmd (el que mira el guard)");
+                ultimaTraza_ms = 0;
+            }
+            else
+            {
+                Serial.println("[TRAZA] off");
+            }
+            return;
+        }
+
+        if (c == 'G')
+        {
+            supervisionHabilitada = !supervisionHabilitada;
+
+            // El guard NO se desarma: sigue midiendo, marcando picos y
+            // avisando por Serial lo que habria hecho. Lo unico que cambia
+            // es si eso frena o no el robot. Asi se puede seguir
+            // trabajando y calibrando al mismo tiempo, sin quedarse sin
+            // datos justo cuando hacen falta.
+            guard.setObservar(!supervisionHabilitada);
+
+            if (!supervisionHabilitada)
+            {
+                Serial.println("[GUARD] paradas APAGADAS: sigue midiendo y avisando, pero no frena");
+            }
+            else
+            {
+                Serial.println("[GUARD] paradas ACTIVAS");
+            }
+            return;
+        }
+
         if (c == 'C' || c == 'F')
         {
             const SortMode nuevo = (c == 'C') ? SORT_BY_COLOR : SORT_BY_SHAPE;
@@ -302,8 +431,64 @@ void Robot::procesarComando(char *cmd, uint8_t len)
 
         Serial.print("[SERIAL] comando invalido: '");
         Serial.print(cmd);
-        Serial.println("'. Validos: 'C', 'F', 'R' o 'Y,color,forma'");
+        Serial.println("'. Validos: 'C', 'F', 'R', 'D', 'S', 'G' o 'Y,color,forma'");
         return;
+    }
+
+    // --- Ajuste en caliente de la supervision: 'U<grados>', 'T<ms>',
+    //     'K<ms>' (margen por velocidad) y 'L<ms>' (atraso a compensar) ---
+    // No llevan coma, asi que no se confunden nunca con un mensaje de pieza
+    // (que siempre tiene dos). Sirven para barrer valores sin recompilar;
+    // el definitivo va en GuardConfig, en CollisionGuard.h.
+    {
+        const char letra = toupper(cmd[0]);
+
+        if ((letra == 'U' || letra == 'T' || letra == 'K' || letra == 'L') &&
+            strchr(cmd, ',') == NULL)
+        {
+            char *finValor = NULL;
+            const float valor = strtof(cmd + 1, &finValor);
+
+            if (finValor == cmd + 1 || *finValor != '\0' || valor < 0.0f)
+            {
+                Serial.print("[SERIAL] valor invalido: '");
+                Serial.print(cmd);
+                Serial.println("'. Se espera 'U12.5' (grados) o 'T80'/'K80'/'L70' (ms)");
+                return;
+            }
+
+            switch (letra)
+            {
+                case 'U':
+                    guard.setUmbral(valor);
+                    Serial.print("[GUARD] umbral fijo = ");
+                    Serial.print(guard.umbral(), 1);
+                    Serial.println(" grados");
+                    break;
+
+                case 'T':
+                    guard.setConfirmacion((uint32_t)valor);
+                    Serial.print("[GUARD] confirmacion = ");
+                    Serial.print(guard.confirmacion());
+                    Serial.println(" ms");
+                    break;
+
+                case 'K':
+                    guard.setMargenVelocidad((uint32_t)valor);
+                    Serial.print("[GUARD] margen por velocidad = ");
+                    Serial.print(guard.margenVelocidad());
+                    Serial.println(" ms");
+                    break;
+
+                default:
+                    guard.setRetardo((uint32_t)valor);
+                    Serial.print("[GUARD] compensacion de atraso = ");
+                    Serial.print(guard.retardo());
+                    Serial.println(" ms");
+                    break;
+            }
+            return;
+        }
     }
 
     // --- Mensaje de pieza: "Y,color,forma" (exactamente 3 campos) ---
@@ -312,7 +497,7 @@ void Robot::procesarComando(char *cmd, uint8_t len)
     {
         Serial.print("[SERIAL] comando invalido: '");
         Serial.print(cmd);
-        Serial.println("'. Validos: 'C', 'F', 'R' o 'Y,color,forma'");
+        Serial.println("'. Validos: 'C', 'F', 'R', 'D', 'S', 'G' o 'Y,color,forma'");
         return;
     }
 
@@ -475,7 +660,7 @@ bool Robot::queuePop(Piece &out)
 //  HOMING
 // ============================================================
 
-void Robot::startHoming()
+void Robot::startHoming(bool conservarContexto)
 {
     axis1Homed = false;
     axis2Homed = false;
@@ -483,6 +668,15 @@ void Robot::startHoming()
     homed = false;
 
     state = HOMING;
+
+    // Mientras dura el homing no se supervisa nada: los ejes van contra los
+    // finales de carrera a proposito, y ademas setPosition() les redefine la
+    // cuenta de pasos de golpe, asi que cualquier comparacion contra el
+    // encoder en el medio no significa nada. Se vuelve a armar al final,
+    // cuando se calibra.
+    guard.desarmar();
+
+    homingStart_ms = millis();
 
     motor1.setPosition(999999);  // fuerza que nunca este en home al principio
     motor2.setPosition(999999);
@@ -499,18 +693,31 @@ void Robot::startHoming()
     // Las piezas encoladas traen timestamps de antes del corte: sus
     // posiciones ya no son confiables (la cinta estuvo parada mientras
     // tanto), asi que se descartan todas.
-    queueHead = 0;
-    queueCount = 0;
+    //
+    // La excepcion es la recalibracion despues de una colision: ahi la cinta
+    // NUNCA se detuvo, por lo que los timestamps siguen siendo validos y las
+    // piezas siguieron avanzando de forma perfectamente conocida. Se conserva
+    // la cola entera y al terminar el homing se vuelve a mirar cual sigue
+    // siendo alcanzable: las que se pasaron de largo durante los 3 segundos
+    // de pausa mas el homing las descarta planificarPieza() sola, una por
+    // una, avisando por Serial.
+    if (!conservarContexto)
+    {
+        queueHead = 0;
+        queueCount = 0;
+
+        // Un cambio de modo que habia quedado pendiente pertenecia al ciclo
+        // que se corto: no se arrastra al ciclo nuevo. El modo ACTIVO si se
+        // mantiene (el operador ya lo eligio y no lo dio de baja).
+        sortModePending = false;
+
+        colisionesSeguidas = 0;
+    }
 
     // Se suelta lo que hubiera quedado agarrado antes del corte, para
     // arrancar el ciclo con el gripper vacio y en estado conocido.
     pneumatics.release();
     pumpOn = false;
-
-    // Un cambio de modo que habia quedado pendiente pertenecia al ciclo que
-    // se corto: no se arrastra al ciclo nuevo. El modo ACTIVO si se
-    // mantiene (el operador ya lo eligio y no lo dio de baja).
-    sortModePending = false;
 
     moveIssued = false;
     replanCount = 0;
@@ -519,6 +726,30 @@ void Robot::startHoming()
 
 void Robot::updateHoming()
 {
+    // Un eje que no llega nunca a su final de carrera es un eje trabado
+    // (tipicamente: el obstaculo que provoco la colision sigue ahi). Seguir
+    // empujando contra el no arregla nada y castiga la mecanica.
+    if (!(axis1Homed && axis2Homed && axis3Homed) &&
+        (uint32_t)(millis() - homingStart_ms) > HOMING_TIMEOUT_MS)
+    {
+        motor1.stop();
+        motor2.stop();
+        motor3.stop();
+
+        // Aca si se para la cinta: el robot no puede recuperarse solo, y
+        // dejarla andando solo acumula piezas sin clasificar.
+        conveyor.stop();
+
+        registrarFallo(FALLO_HOMING, 0);
+
+        Serial.print("[HOMING] no encontro los finales de carrera en ");
+        Serial.print(HOMING_TIMEOUT_MS / 1000);
+        Serial.println(" s: hay un eje trabado. Revisar y mandar 'R'.");
+
+        state = ERROR;
+        return;
+    }
+
     // Motor 1
 
     if (!axis1Homed)
@@ -563,6 +794,19 @@ void Robot::updateHoming()
         {
             // Arranca la ventana de acumulación de media móvil por canal.
             encoders.iniciarAsentamientoHoming();
+
+            // La misma ventana le sirve a la supervision para promediar SU
+            // referencia: son 2,5 s con los 3 ejes frenados contra el
+            // endstop, la unica oportunidad de tomar un cero de encoder sin
+            // el ruido de +-1 grado encima. Si la referencia saliera de una
+            // lectura puntual, ese error se sumaria a todas las
+            // comparaciones posteriores.
+            // Se arma siempre, incluso con las paradas apagadas: en ese caso
+            // el guard queda observando (mide y avisa, pero no frena).
+            guard.iniciarReferencia(motor1.getPosition(),
+                                    motor2.getPosition(),
+                                    motor3.getPosition());
+
             homingSettleStart_ms = millis();
             return;
         }
@@ -578,6 +822,10 @@ void Robot::updateHoming()
         // espera (no una lectura puntual).
         encoders.calibrarHoming(HOME_ANGLE_M1, HOME_ANGLE_M2, HOME_ANGLE_M3);
 
+        // Recien aca queda armada la supervision: con la referencia ya
+        // promediada y los pasos de los 3 ejes en su valor de home.
+        guard.fijarReferencia();
+
         homed = true;
 
         // La cinta arranca recien con el robot ya calibrado: antes de eso
@@ -587,6 +835,13 @@ void Robot::updateHoming()
         Serial.println("[HOMING] OK. Robot listo.");
         Serial.print("[MODO] ");
         Serial.println(nombreModo(sortMode));
+        Serial.print("[GUARD] ");
+        Serial.print(guard.nombreEstado());
+        Serial.print("  umbral=");
+        Serial.print(guard.umbral(), 1);
+        Serial.print(" grados  confirmacion=");
+        Serial.print(guard.confirmacion());
+        Serial.println(" ms");
 
         moveIssued = false;
         state = GO_HOME_IDLE;
@@ -796,6 +1051,11 @@ void Robot::updatePickApproach()
     {
         pneumatics.grab();
         pumpOn = true;
+
+        // El arranque de la bomba le pega a la alimentacion de los encoders
+        // (ver BLANQUEO_NEUMATICA_MS): se suspende la deteccion mientras
+        // dura, y el guard informa cuanto se corrio cada eje.
+        guard.silenciar(BLANQUEO_NEUMATICA_MS);
     }
 
     // Se espera al instante calculado para lanzar la bajada. La resta con
@@ -925,6 +1185,7 @@ void Robot::updateBinSettle()
 
     pneumatics.release();
     pumpOn = false;
+    guard.silenciar(BLANQUEO_NEUMATICA_MS); // apagarla tambien mueve el riel
 
     releaseStart_ms = millis();
     state = RELEASE_WAIT;
@@ -938,6 +1199,10 @@ void Robot::updateReleaseWait()
     {
         return;
     }
+
+    // Pieza entregada: el ciclo cerro bien, asi que la racha de colisiones
+    // seguidas se corta aca (lo que hubiera chocado antes, ya se resolvio).
+    colisionesSeguidas = 0;
 
     // Recien ahora, con la pieza ya soltada, se puede cambiar de modo.
     aplicarModoPendiente();
@@ -953,6 +1218,346 @@ void Robot::updateReleaseWait()
 }
 
 // ============================================================
+//  SUPERVISION POR ENCODERS (deteccion de colisiones)
+// ============================================================
+//
+//  Los encoders NO cierran el lazo de posicion: el posicionamiento sigue
+//  siendo a lazo abierto por micropasos, que da muy buen resultado. Lo que
+//  cierran es un lazo de SEGURIDAD: miran si el brazo esta donde los pasos
+//  dicen que deberia estar.
+//
+//  Mientras el robot anda bien, los pasos emitidos y el angulo medido se
+//  mueven juntos y la diferencia queda chica (ruido del encoder, retardo de
+//  sus filtros, atraso mecanico de la rampa). Cuando el brazo choca contra
+//  algo, los pasos siguen saliendo pero el eje no gira: la diferencia se
+//  abre rapido y no vuelve. Eso es lo que se detecta.
+//
+//  Dos condiciones, no una: la diferencia tiene que pasar el umbral Y
+//  mantenerse. Una lectura suelta fuera de rango no frena nada.
+//
+//  Ver CollisionGuard.h para el detalle del calculo y de los parametros.
+//
+// ============================================================
+
+void Robot::supervisarColision()
+{
+    // Se llama SIEMPRE, aunque las paradas esten apagadas: con 'G' el guard
+    // pasa a modo observador (mide y avisa, no frena), asi la traza, los
+    // picos y la ganancia medida siguen sirviendo mientras se calibra.
+
+    // Un encoder que dejo de ser confiable no frena el robot (seria peor el
+    // remedio: se pararia por no poder ver, no por haber chocado), pero si
+    // queda registrado: mientras dure, ese eje esta sin vigilancia.
+    uint8_t ejeCaido = 0;
+    if (guard.consumirAvisoSensor(ejeCaido))
+    {
+        registrarFallo(FALLO_ENCODER, (uint8_t)(ejeCaido + 1));
+        Serial.print("[GUARD] encoder del eje ");
+        Serial.print(ejeCaido + 1);
+        Serial.println(" no confiable: ese eje queda sin supervisar");
+    }
+
+    if (!guard.actualizar(motor1.getPosition(),
+                          motor2.getPosition(),
+                          motor3.getPosition()))
+    {
+        return;
+    }
+
+    dispararColision(guard.ejeDelFallo(),
+                     guard.errorDelFallo(),
+                     guard.cmdDeltaDelFallo(),
+                     guard.encDeltaDelFallo());
+}
+
+void Robot::dispararColision(uint8_t eje, float errorDeg, float cmdDelta, float encDelta)
+{
+    // Lo primero, antes de cualquier print: frenar. Los tres ejes, no solo
+    // el que disparo -- el brazo delta es un mecanismo cerrado, si uno se
+    // trabo los otros dos estan forzando contra el.
+    motor1.stop();
+    motor2.stop();
+    motor3.stop();
+
+    // La pieza que estuviera agarrada se suelta. Despues del rehoming no hay
+    // forma de saber si sigue pegada a la ventosa ni donde quedo, asi que
+    // arrastrarla seria peor: el ciclo tiene que arrancar con el gripper
+    // vacio y en estado conocido. La pieza perdida queda en el registro.
+    pneumatics.release();
+    pumpOn = false;
+
+    // La cinta tambien para: si siguiera andando durante la pausa y el
+    // rehoming, las piezas se acumularian y pasarian de largo sin
+    // clasificar. Arranca sola de nuevo al final del homing
+    // (conveyor.begin() en updateHoming), o sea recien con el robot ya
+    // recalibrado y listo para trabajar.
+    conveyor.stop();
+
+    registrarFallo(FALLO_COLISION, (uint8_t)(eje + 1), errorDeg, cmdDelta, encDelta);
+
+    Serial.print("[COLISION] eje ");
+    Serial.print(eje + 1);
+    Serial.print(": el encoder marca ");
+    Serial.print(errorDeg, 1);
+    Serial.print(" grados de diferencia con los pasos (pasos ");
+    Serial.print(cmdDelta, 1);
+    Serial.print(" / encoder ");
+    Serial.print(encDelta, 1);
+    Serial.println(")");
+
+    colisionesSeguidas++;
+
+    if (colisionesSeguidas >= MAX_COLISIONES_SEGUIDAS)
+    {
+        // Chocar, rehomear y volver a chocar contra lo mismo no lo va a
+        // resolver: hay algo fisico que sacar antes de seguir.
+        conveyor.stop();
+
+        Serial.print("[COLISION] ");
+        Serial.print(colisionesSeguidas);
+        Serial.println(" colisiones seguidas sin completar una pieza: hay algo trabado.");
+        Serial.println("[COLISION] Robot detenido. Revisar y mandar 'R'.");
+
+        moveIssued = false;
+        state = ERROR;
+        return;
+    }
+
+    Serial.print("[COLISION] parado ");
+    Serial.print(COLLISION_PAUSE_MS / 1000.0f, 1);
+    Serial.println(" s y despues recalibra");
+
+    moveIssued = false;
+    collisionStart_ms = millis();
+    state = COLLISION_STOP;
+}
+
+void Robot::updateCollisionStop()
+{
+    // Pausa no bloqueante: el loop sigue girando entero (Serial, encoders,
+    // cola de piezas). Los motores estan frenados, no hay nada que mover.
+    if ((uint32_t)(millis() - collisionStart_ms) < COLLISION_PAUSE_MS)
+    {
+        return;
+    }
+
+    Serial.println("[COLISION] recalibrando...");
+
+    // La cola se descarta: con la cinta detenida durante la pausa y el
+    // homing, las piezas ya no estan donde su timestamp dice que estarian.
+    // Las que queden sobre la cinta las vuelve a detectar la vision cuando
+    // arranque de nuevo.
+    startHoming(false);
+}
+
+// ============================================================
+//  REGISTRO DE FALLOS
+// ============================================================
+
+void Robot::registrarFallo(uint8_t tipo, uint8_t eje,
+                            float errorDeg, float cmdDelta, float encDelta)
+{
+    RegistroFallo r;
+
+    r.tipo     = tipo;
+    r.eje      = eje;
+    r.errorDeg = errorDeg;
+    r.cmdDelta = cmdDelta;
+    r.encDelta = encDelta;
+    r.estado   = nombreEstado(state);
+
+    // Con que pieza fallo: color, forma, donde estaba sobre la cinta y a que
+    // tacho iba. Es lo que despues necesita la interfaz para mostrar el
+    // fallo con contexto y no como un numero suelto.
+    if (hayManiobraEnCurso())
+    {
+        r.conPieza = true;
+        r.enMano   = hayPiezaEnMano();
+        r.color    = currentPiece.color;
+        r.forma    = currentPiece.shape;
+        r.piezaY   = currentPiece.y;
+        r.piezaX   = piezaXEstimada(currentPiece);
+        r.tacho    = (uint8_t)(currentBin + 1);
+    }
+
+    fallos.registrar(r);
+}
+
+float Robot::piezaXEstimada(const Piece &p) const
+{
+    // Misma cuenta que usa planificarPieza(): desde que se detecto, la pieza
+    // avanzo velocidad * tiempo, corregido por la latencia de la vision.
+    const float t = VISION_LATENCY_S + (millis() - p.detectedAt_ms) / 1000.0f;
+    return DETECTION_LINE_X + BELT_VELOCITY_CMS * t;
+}
+
+bool Robot::hayManiobraEnCurso() const
+{
+    return state == PICK_APPROACH ||
+           state == PICK_DESCEND  ||
+           state == PICK_LIFT     ||
+           state == GO_BIN        ||
+           state == BIN_SETTLE    ||
+           state == RELEASE_WAIT;
+}
+
+bool Robot::hayPiezaEnMano() const
+{
+    // Desde que empieza la bajada de agarre ya se cuenta como "en la mano":
+    // el contacto ocurre a mitad del tramo 2, no al final.
+    return state == PICK_DESCEND ||
+           state == PICK_LIFT    ||
+           state == GO_BIN       ||
+           state == BIN_SETTLE;
+}
+
+const char *Robot::nombreEstado(RobotState s) const
+{
+    switch (s)
+    {
+        case IDLE:           return "IDLE";
+        case HOMING:         return "HOMING";
+        case WAIT_PIECE:     return "WAIT_PIECE";
+        case GO_HOME_IDLE:   return "GO_HOME_IDLE";
+        case PICK_APPROACH:  return "PICK_APPROACH";
+        case PICK_DESCEND:   return "PICK_DESCEND";
+        case PICK_LIFT:      return "PICK_LIFT";
+        case GO_BIN:         return "GO_BIN";
+        case BIN_SETTLE:     return "BIN_SETTLE";
+        case RELEASE_WAIT:   return "RELEASE_WAIT";
+        case COLLISION_STOP: return "COLLISION_STOP";
+        case ERROR:          return "ERROR";
+        default:             return "?";
+    }
+}
+
+void Robot::imprimirEstadoSupervision() const
+{
+    Serial.print("[GUARD] ");
+    Serial.print(guard.nombreEstado());
+    Serial.print(guard.armado() ? "" : (supervisionHabilitada ? " (habilitada)" : " (apagada por el operador)"));
+    Serial.print("  umbral=");
+    Serial.print(guard.umbral(), 1);
+    Serial.print("+");
+    Serial.print(guard.margenVelocidad());
+    Serial.print("ms*vel  confirmacion=");
+    Serial.print(guard.confirmacion());
+    Serial.print(" ms  compensacion=");
+    Serial.print(guard.retardo());
+    Serial.println(" ms");
+
+    for (uint8_t i = 0; i < 3; i++)
+    {
+        // err     lo que ve el guard ahora mismo
+        // pico    el peor error desde el homing: con esto se elige el umbral
+        // gan     encoder/pasos con el eje frenado. TIENE que dar ~1.00; si
+        //         da menos, se estan perdiendo cuentas (y ningun margen lo
+        //         arregla, hay que ir al sensor)
+        // atraso  error/velocidad en marcha. Si es estable y parecido en los
+        //         3 ejes, es atraso de medicion y se compensa con 'L'
+        // raw     extremos de lectura cruda: dicen cuanto margen queda hasta
+        //         la zona donde el ADC ya no mide (60 a 3950)
+        Serial.print("[GUARD] eje ");
+        Serial.print(i + 1);
+        Serial.print("  err=");
+        Serial.print(guard.errorActual(i), 2);
+        Serial.print("  pico=");
+        Serial.print(guard.picoDesdeHoming(i), 2);
+        Serial.print("  pico_total=");
+        Serial.print(guard.picoHistorico(i), 2);
+        Serial.print("  umbral_ef=");
+        Serial.print(guard.umbralEfectivo(i), 1);
+        Serial.print("  gan=");
+        Serial.print(guard.gananciaMedida(i), 3);
+        Serial.print("  atraso=");
+        Serial.print(guard.atrasoMedido_ms(i), 1);
+        Serial.print("ms  fuga=");
+        Serial.print(guard.derivaAbsorbida(i), 2);
+        Serial.print("  raw=");
+        Serial.print(guard.rawMinimo(i));
+        Serial.print("..");
+        Serial.print(guard.rawMaximo(i));
+        Serial.print("  encoder=");
+        Serial.println(guard.fueraDeRango(i) ? "FUERA DE RANGO" :
+                       (guard.sensorCaido(i) ? "CAIDO" : "ok"));
+    }
+
+    fallos.imprimirResumen();
+}
+
+// ============================================================
+//  TRAZA EN VIVO ('M')
+// ============================================================
+//  Vuelca a 20 Hz lo que ve la supervision, para poder mirar un movimiento
+//  entero y entender que pasa cuando salta un falso positivo. Con esto se
+//  distinguen los tres casos que se parecen entre si:
+//
+//    ATRASO      enc va detras de cmd durante todo el movimiento y lo
+//                alcanza al frenar: al final err vuelve a ~0 solo
+//    PERDIDA DE  enc no alcanza a cmd nunca: al frenar queda un escalon
+//    CUENTAS     que no se va, y se suma al del movimiento siguiente
+//    ZONA CIEGA  raw se queda clavado en un extremo mientras cmd avanza
+//
+//  Formato pensado para copiar y pegar en una planilla o en Python.
+// ============================================================
+
+// Una sola linea, pensada para leerla en el log de la interfaz de Python
+// cuando no se puede pedir 'S' a mano:
+//
+//   pico  peor error desde el homing -> con esto se elige el umbral fijo
+//   gan   encoder/pasos con el eje frenado; tiene que dar ~1.00
+//   atr   atraso de la medicion en ms (error/velocidad en marcha)
+//   fuga  grados de deriva que la fuga en reposo lleva absorbidos: si crece
+//         sin parar y siempre para el mismo lado, se pierden pasos de verdad
+void Robot::imprimirDiagnosticoCorto() const
+{
+    Serial.print("[GUARD]");
+
+    for (uint8_t i = 0; i < 3; i++)
+    {
+        Serial.print(" e");
+        Serial.print(i + 1);
+        Serial.print(" err=");
+        Serial.print(guard.errorActual(i), 1);
+        Serial.print(" pico=");
+        Serial.print(guard.picoDesdeHoming(i), 1);
+        Serial.print(" gan=");
+        Serial.print(guard.gananciaMedida(i), 3);
+        Serial.print(" atr=");
+        Serial.print(guard.atrasoMedido_ms(i), 0);
+        Serial.print(" fuga=");
+        Serial.print(guard.derivaAbsorbida(i), 1);
+    }
+
+    Serial.print(" fallos=");
+    Serial.println(fallos.total());
+}
+
+void Robot::imprimirTraza()
+{
+    Serial.print("[TRAZA] t=");
+    Serial.print(millis());
+
+    for (uint8_t i = 0; i < 3; i++)
+    {
+        Serial.print(" e");
+        Serial.print(i + 1);
+        Serial.print(" raw=");
+        Serial.print(encoders.leerRaw(i));
+        Serial.print(" enc=");
+        Serial.print(guard.encDeltaActual(i), 2);
+        Serial.print(" cmd=");
+        Serial.print(guard.cmdDeltaActual(i), 2);
+        Serial.print(" err=");
+        Serial.print(guard.errorActual(i), 2);
+        Serial.print(" vel=");
+        Serial.print(guard.velocidadCmd(i), 0);
+    }
+
+    Serial.println();
+}
+
+// ============================================================
 //  EMERGENCIA
 // ============================================================
 
@@ -963,6 +1568,13 @@ void Robot::emergencyStop()
     motor3.stop();
 
     conveyor.stop();
+
+    // Con el robot frenado a mitad de camino, la posicion real deja de
+    // corresponderse con los pasos comandados: no tiene sentido seguir
+    // comparando hasta que se rehomee.
+    guard.desarmar();
+
+    registrarFallo(FALLO_MANUAL, 0);
 
     Serial.println("[EMERGENCIA] Parada manual. Presiona 'R' para rehomear.");
 

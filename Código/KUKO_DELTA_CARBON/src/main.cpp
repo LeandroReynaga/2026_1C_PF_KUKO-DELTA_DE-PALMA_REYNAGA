@@ -20,6 +20,16 @@ const uint32_t INTERVALO_PRINT_MS = 200; // 5 Hz, suficiente para ver la evoluci
 
 void setup()
 {
+    // Buffer de transmision grande ANTES de abrir el puerto (despues de
+    // Serial.begin() no tiene efecto). Sin esto, un mensaje largo -- el
+    // volcado de fallos del comando 'D', por ejemplo -- llena la FIFO del
+    // UART y Serial.print() BLOQUEA hasta que se vacie: a 115200 baudios,
+    // 2 kB son ~180 ms con el loop entero congelado. Y si en ese rato el
+    // brazo se estuvo moviendo, el encoder ve un salto enorme entre lectura
+    // y lectura, el filtro de plausibilidad lo rechaza por implausible y el
+    // canal se cae. Con el buffer en RAM, el mensaje se encola y se
+    // transmite por interrupcion mientras el loop sigue girando.
+    Serial.setTxBufferSize(2048);
     Serial.begin(115200);
 
     encoders.begin();

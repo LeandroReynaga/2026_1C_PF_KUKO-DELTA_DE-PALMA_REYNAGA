@@ -3,6 +3,8 @@
 
 #include <Arduino.h>
 #include "Stepper.h"
+#include "CollisionGuard.h"
+#include "FaultLog.h"
 #include "../hardware/Endstops.h"
 #include "Pinout.h"
 #include "../hardware/Motors.h"
@@ -34,6 +36,7 @@ public:
         GO_BIN,          // tramo 4: accel MAX hasta el tacho que corresponde
         BIN_SETTLE,      // 0,2 s quieto para que la pieza caiga vertical
         RELEASE_WAIT,    // bomba apagada, esperando que la pieza se despegue
+        COLLISION_STOP,  // colision detectada: frenado y quieto antes de recalibrar
         ERROR
     };
 
@@ -51,11 +54,19 @@ public:
 
     void update();
 
-    void startHoming();
+    // conservarContexto = true se usa SOLO en la recalibracion posterior a
+    // una colision: la cinta nunca se detuvo, asi que las piezas que estaban
+    // en la cola siguen teniendo timestamps validos y hay que volver a
+    // mirarlas (varias ya no van a ser alcanzables, eso lo filtra
+    // planificarPieza). Con false (el arranque y el reset manual) la cola se
+    // descarta entera.
+    void startHoming(bool conservarContexto = false);
 
     bool homingFinished() const;
 
     RobotState getState() const;
+
+    const char *nombreEstado(RobotState s) const;
 
     bool goToPositionIK(float x, float y, float z,
                         const Motors::MotionLimits &limits = Motors::DEFAULT_LIMITS);
@@ -166,6 +177,62 @@ private:
     void updateGoBin();
     void updateBinSettle();
     void updateReleaseWait();
+    void updateCollisionStop();
+
+    // ------------------------------------------------------------------
+    //  Supervision por encoders (lazo cerrado de seguridad)
+    // ------------------------------------------------------------------
+    // Los encoders NO controlan la posicion: el control sigue siendo por
+    // micropasos. Lo unico que hacen es vigilar que el brazo este donde los
+    // pasos dicen que deberia estar; si no lo esta, es que choco contra
+    // algo. Ver CollisionGuard.h.
+    CollisionGuard guard;
+    FaultLog       fallos;
+
+    // Si las colisiones frenan el robot o solo se avisan por Serial. Se
+    // puede cambiar en caliente con 'G', pero el valor inicial sale de
+    // GuardConfig::FRENAR_POR_COLISION: cuando el puerto serie lo esta
+    // usando la vision, no hay forma de mandar comandos a mano y la unica
+    // via es el codigo.
+    bool supervisionHabilitada = GuardConfig::FRENAR_POR_COLISION;
+
+    void supervisarColision();
+    void dispararColision(uint8_t eje, float errorDeg, float cmdDelta, float encDelta);
+
+    // Arma el registro con el contexto actual (estado, pieza en curso,
+    // tacho de destino) y lo manda al FaultLog.
+    void registrarFallo(uint8_t tipo, uint8_t eje,
+                        float errorDeg = 0.0f, float cmdDelta = 0.0f, float encDelta = 0.0f);
+
+    void imprimirEstadoSupervision() const;
+
+    // Traza en vivo de la supervision ('M'), para diagnosticar falsos
+    // positivos mirando el movimiento entero en vez de un numero suelto.
+    void imprimirTraza();
+
+    // Resumen de una linea que sale solo cada tantos segundos, para tener
+    // datos de calibracion cuando el puerto serie esta tomado por la vision.
+    void imprimirDiagnosticoCorto() const;
+
+    bool     trazaActiva          = false;
+    uint32_t ultimaTraza_ms       = 0;
+    uint32_t ultimoDiagnostico_ms = 0;
+
+    static const uint32_t TRAZA_INTERVALO_MS = 50; // 20 Hz
+
+    // Donde esta AHORA una pieza sobre la cinta, segun cuando se detecto.
+    float piezaXEstimada(const Piece &p) const;
+
+    bool hayManiobraEnCurso() const;
+    bool hayPiezaEnMano() const;
+
+    uint32_t collisionStart_ms = 0;
+    uint32_t homingStart_ms    = 0;
+
+    // Colisiones seguidas sin haber completado una pieza en el medio. Si se
+    // repiten, es que hay algo trabado de verdad y rehomear no lo va a
+    // arreglar: mejor parar y avisar que insistir golpeando el robot.
+    uint8_t colisionesSeguidas = 0;
 
     // Toma la proxima pieza de la cola que sea alcanzable y arranca la
     // maniobra. Devuelve false si no quedo ninguna.

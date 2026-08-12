@@ -57,9 +57,19 @@ private:
     double   sumaAnguloContinuoHoming[NUM_ENCODERS] = {0.0, 0.0, 0.0};
     uint32_t muestrasHoming[NUM_ENCODERS]           = {0, 0, 0};
 
+    // Un canal que se pasó de MAX_ERRORES_CONSECUTIVOS queda enganchado: el
+    // filtro de plausibilidad compara contra la última lectura aceptada, así
+    // que si el eje se fue lejos de ahí, rechaza todo para siempre. Esta
+    // bandera dice que ese canal tuvo que reengancharse a la fuerza; la
+    // lectura vuelve a servir, pero no es confiable para supervisar hasta
+    // que el homing rehaga la referencia.
+    bool resincronizado[NUM_ENCODERS] = {false, false, false};
+
     uint16_t leerRawPromediado(uint8_t indiceMotor);
     void     procesarLecturaValida(uint8_t indiceMotor, uint16_t raw);
     void     registrarError(uint8_t indiceMotor);
+    void     resincronizar(uint8_t indiceMotor, uint16_t raw,
+                            float anguloNuevo, float diferencia);
 
 public:
     void begin();
@@ -72,11 +82,25 @@ public:
     // (mapeado internamente a GPIO35, GPIO34 y GPIO39).
     float    leerGrados(uint8_t motor) const;         // último ángulo filtrado válido, en marco del robot
     float    leerGradosContinuo(uint8_t motor) const; // ángulo acumulado sin discontinuidad, en marco del robot
+
+    // Igual que leerGradosContinuo() pero SIN el offset de calibración de
+    // home, o sea en el marco del sensor. Lo usa la supervisión de
+    // colisiones (CollisionGuard), que compara INCREMENTOS: el offset se
+    // cancelaría solo al restar, pero cambia en medio de la ventana de
+    // asentamiento del homing (justo cuando se calibra), y eso sí ensuciaría
+    // la referencia. Es solo un getter: no modifica ni saltea ningún filtro.
+    float    leerGradosContinuoCrudo(uint8_t motor) const;
     uint16_t leerRaw(uint8_t motor) const;
     bool     esValido(uint8_t motor) const;
     bool     estaInicializado(uint8_t motor) const;
     bool     estaCalibradoHoming(uint8_t motor) const;
     uint8_t  erroresConsecutivos(uint8_t motor) const;
+
+    // true si ese canal tuvo que reengancharse a la fuerza (ver
+    // resincronizado[]). La limpia CollisionGuard al rearmar la referencia
+    // en el homing.
+    bool     huboResincronizacion(uint8_t motor) const;
+    void     limpiarResincronizacion(uint8_t motor);
     uint32_t tiempoDesdeUltimaLecturaOk_ms(uint8_t motor) const;
     float    leerVelocidad(uint8_t motor) const;
 

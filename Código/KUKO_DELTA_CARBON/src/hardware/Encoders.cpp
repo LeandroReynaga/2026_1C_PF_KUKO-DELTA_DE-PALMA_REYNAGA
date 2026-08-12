@@ -23,6 +23,7 @@ void Encoders::begin()
         homingCalibrado[i] = false;
         sumaAnguloContinuoHoming[i] = 0.0;
         muestrasHoming[i] = 0;
+        resincronizado[i] = false;
     }
 
     acumulandoHoming = false;
@@ -92,6 +93,19 @@ void Encoders::procesarLecturaValida(uint8_t indiceMotor, uint16_t raw)
     if (fabs(diferencia) > SALTO_MAX_DEG_POR_CICLO)
     {
         registrarError(indiceMotor);
+
+        // El rechazo se compara SIEMPRE contra la última lectura aceptada.
+        // Si el eje realmente se fue a más de SALTO_MAX_DEG_POR_CICLO de
+        // ahí (pasa si el loop se congela unas decenas de ms con el brazo
+        // a máxima velocidad), todas las lecturas siguientes también quedan
+        // a esa distancia y el canal se rechaza a sí mismo para siempre.
+        // Una vez que ya se dio por no válido, no hay nada que preservar:
+        // conviene reengancharlo con la posición actual antes que dejarlo
+        // muerto hasta el próximo reinicio.
+        if (canales[indiceMotor].erroresSeguidos >= MAX_ERRORES_CONSECUTIVOS)
+        {
+            resincronizar(indiceMotor, raw, anguloNuevo, diferencia);
+        }
         return;
     }
 
@@ -114,6 +128,47 @@ void Encoders::procesarLecturaValida(uint8_t indiceMotor, uint16_t raw)
     c.valido              = true;
     c.erroresSeguidos     = 0;
     c.ultimaLecturaOk_ms  = ahora;
+}
+
+// ------------------------------------------------------------------
+void Encoders::resincronizar(uint8_t indiceMotor, uint16_t raw,
+                              float anguloNuevo, float diferencia)
+{
+    CanalEncoder &c = canales[indiceMotor];
+
+    // El salto se toma como movimiento real que no se alcanzó a seguir, así
+    // que se acumula en el ángulo continuo (si no, quedaría corrido para
+    // siempre). El filtro exponencial se resiembra en el valor actual en vez
+    // de arrastrarse desde uno viejo que ya no significa nada.
+    c.anguloContinuo += diferencia;
+    c.anguloFiltrado  = anguloNuevo;
+    c.anguloActual    = anguloNuevo;
+    c.rawActual       = raw;
+
+    c.valido            = true;
+    c.erroresSeguidos   = 0;
+    c.velocidadDegSeg   = 0.0f;
+    c.ultimaLecturaOk_ms = millis();
+
+    // Bandera pegajosa: la lectura vuelve a servir para diagnóstico, pero
+    // NO para supervisar colisiones. Puede haber sido movimiento real que se
+    // perdió, o una falla del sensor; hasta el próximo homing (que rehace la
+    // referencia desde cero) no hay forma de saberlo. La limpia
+    // CollisionGuard al rearmarse.
+    resincronizado[indiceMotor] = true;
+}
+
+// ------------------------------------------------------------------
+bool Encoders::huboResincronizacion(uint8_t motor) const
+{
+    if (motor >= NUM_ENCODERS) return false;
+    return resincronizado[motor];
+}
+
+void Encoders::limpiarResincronizacion(uint8_t motor)
+{
+    if (motor >= NUM_ENCODERS) return;
+    resincronizado[motor] = false;
 }
 
 // ------------------------------------------------------------------
@@ -141,6 +196,12 @@ float Encoders::leerGradosContinuo(uint8_t motor) const
 {
     if (motor >= NUM_ENCODERS) return 0.0f;
     return canales[motor].anguloContinuo + offsetHoming[motor];
+}
+
+float Encoders::leerGradosContinuoCrudo(uint8_t motor) const
+{
+    if (motor >= NUM_ENCODERS) return 0.0f;
+    return canales[motor].anguloContinuo;
 }
 
 uint16_t Encoders::leerRaw(uint8_t motor) const
@@ -241,4 +302,5 @@ void Encoders::resetearCanal(uint8_t motor)
     homingCalibrado[motor] = false;
     sumaAnguloContinuoHoming[motor] = 0.0;
     muestrasHoming[motor] = 0;
+    resincronizado[motor] = false;
 }

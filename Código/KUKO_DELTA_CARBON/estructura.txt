@@ -37,6 +37,10 @@ KUKO_DELTA_CARBON/
 │   │   ├── Robot.h
 │   │   ├── Stepper.cpp
 │   │   ├── Stepper.h
+│   │   ├── CollisionGuard.cpp   (supervision por encoders)
+│   │   ├── CollisionGuard.h
+│   │   ├── FaultLog.cpp         (registro de fallos)
+│   │   ├── FaultLog.h
 
 │   │
 │   ├── tasks/

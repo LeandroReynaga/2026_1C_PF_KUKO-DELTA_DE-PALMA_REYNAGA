@@ -43,7 +43,9 @@ como headers vacíos — placeholders para trabajo futuro, no conectados
 actualmente).
 
 **Máquina de estados del robot** (`src/robot/Robot.h/.cpp`) es el
-orquestador. `Robot::update()` es un `switch` sobre `RobotState` (HOMING →
+orquestador. Antes del `switch`, cada `update()` corre `supervisarColision()`
+(ver más abajo), que puede meter al robot en `COLLISION_STOP` desde
+cualquier estado. `Robot::update()` es un `switch` sobre `RobotState` (HOMING →
 GO_POSITION → GRAB → GO_UP → CONVEYOR_RUN → GO_DOWN → RELEASE → GO_ZERO2 →
 CONVEYOR_STOP → READY), cada uno con un handler privado `updateX()` llamado
 en cada tick del loop. Todas las esperas dentro de estos handlers son
@@ -77,6 +79,47 @@ todos los ejes. No está incluida por `Robot.cpp` ni `main.cpp` —
 `Stepper.h/.cpp` es la que realmente está en uso. No asumas que ambas están
 activas; revisá los `#include` antes de editar cualquiera de las dos.
 
+**Supervisión de colisiones** (`src/robot/CollisionGuard.h/.cpp`) es la
+única parte del sistema que usa los encoders en marcha. NO es control de
+posición —eso sigue siendo lazo abierto por micropasos—: compara en cada
+vuelta del loop el ángulo medido contra el que dicen los pasos emitidos, y
+si la diferencia pasa el umbral **y se mantiene** `CONFIRMACION_MS`, declara
+colisión. El umbral no es fijo: `UMBRAL_DEG + MARGEN_VELOCIDAD_MS × velocidad`,
+porque la medición del encoder llega atrasada un tiempo dado y el error que
+eso produce crece con la velocidad (un umbral fijo alto tapa el problema pero
+deja ciega la detección con el robot quieto). El atraso se puede además
+cancelar con `RETARDO_ENCODER_MS`, que pasa la posición comandada por el mismo
+pasabajos que sufre el sensor. `S` informa el atraso medido y la ganancia
+encoder/pasos, que son los dos números para calibrar todo esto; `M` vuelca una
+traza en vivo a 20 Hz. Como el puerto serie suele estar tomado por la visión,
+todos los parámetros viven en `GuardConfig` y cada 15 s sale sola una línea
+`[GUARD]` con los mismos números.
+
+Contra falsos positivos hay tres defensas además del umbral, y conviene
+entender qué ataca cada una antes de tocarlas: el margen por velocidad decae
+con constante de tiempo (no con ventana fija) para que siga en pie durante
+todo el frenado; una sospecha cuyo error está **bajando** se cancela (el
+sensor poniéndose al día decae, un brazo trabado sostiene el error); y con el
+eje asentado la referencia se fuga despacio hacia lo medido, para que lo que
+sobra de cada tramo no se acumule ciclo a ciclo. Además la detección se
+silencia `BLANQUEO_NEUMATICA_MS` al conmutar la bomba: es una carga fuerte y
+la salida del AS5600 es ratiométrica a su VCC, así que una hundida del riel
+corre las tres lecturas juntas sin que se mueva nada (el guard imprime cuánto
+saltó cada eje, para poder distinguirlo). La comparación es DIFERENCIAL contra
+una referencia que se promedia durante la ventana de asentamiento del
+homing, así no depende de la calibración absoluta del encoder (±1° de
+ruido, no linealidad del AS5600 analógico, offset de home). `Robot` reacciona
+frenando los 3 ejes, soltando la pieza, esperando `COLLISION_PAUSE_MS` y
+rehomeando con `startHoming(true)` (conserva la cola de piezas: la cinta
+nunca se detuvo). Los parámetros a tocar están todos en `GuardConfig`, al
+principio de `CollisionGuard.h`, y se pueden barrer en caliente con los
+comandos `U`/`T` por Serial.
+
+**Registro de fallos** (`src/robot/FaultLog.h/.cpp`) guarda los últimos 16
+fallos (colisión, encoder caído, homing vencido, parada manual) con el
+contexto de la pieza involucrada, y los imprime en formato clave=valor
+pensado para que la interfaz de Python los parsee. Se vuelca con `D`.
+
 **Cinemática** (`src/kinematics/DeltaKinematics.h/.cpp`) es un namespace
 puramente matemático (sin I/O, sin llamadas a motores): `solveIK(x, y, z)`
 devuelve los ángulos de las articulaciones y los targets de pasos de motor
@@ -108,7 +151,10 @@ multi-eje, arriba), `Encoders` (encoders magnéticos AS5600, uno por motor,
 sobremuestreados + filtrados exponencialmente + con rechazo de saltos
 implausibles; también soporta promediado por ventana de asentamiento para
 la calibración de homing vía
-`iniciarAsentamientoHoming()`/`calibrarHoming()`), `Endstops` (lecturas de
+`iniciarAsentamientoHoming()`/`calibrarHoming()`; un canal que quedó
+enganchado rechazando todo se reengancha solo y levanta la bandera
+`huboResincronizacion()`, que le dice a `CollisionGuard` que deje de confiar
+en ese eje hasta el próximo homing), `Endstops` (lecturas de
 fin de carrera por motor, usadas solo durante el homing), `Pneumatics`
 (agarre/liberación por vacío), `Conveyor` (control de velocidad PWM de la cinta).
 
