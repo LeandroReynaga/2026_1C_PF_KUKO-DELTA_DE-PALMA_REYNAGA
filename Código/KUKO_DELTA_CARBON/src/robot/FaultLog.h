@@ -30,7 +30,8 @@
  *   pieza   1 si habia una pieza en curso, 0 si no
  *   enmano  1 si ya la tenia agarrada cuando fallo
  *   py, px  donde estaba esa pieza sobre la cinta, en cm
- *   tacho   a que compartimento iba (1-3), 0 si todavia no aplicaba
+ *   tacho   a donde iba: el compartimento (1-3), o la celda de la caja
+ *           (1-6) en modo alfajores. 0 si todavia no aplicaba
  */
 
 enum TipoFallo : uint8_t
@@ -58,7 +59,7 @@ struct RegistroFallo
     char        forma    = '-';
     float       piezaX   = 0.0f;
     float       piezaY   = 0.0f;
-    uint8_t     tacho    = 0;     // 1-3; 0 = no aplica
+    uint8_t     tacho    = 0;     // 1-3 tacho, o 1-6 celda; 0 = no aplica
 };
 
 class FaultLog

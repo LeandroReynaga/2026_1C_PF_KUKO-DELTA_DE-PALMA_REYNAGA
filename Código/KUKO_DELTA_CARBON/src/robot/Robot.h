@@ -36,16 +36,21 @@ public:
         GO_BIN,          // tramo 4: accel MAX hasta el tacho que corresponde
         BIN_SETTLE,      // 0,2 s quieto para que la pieza caiga vertical
         RELEASE_WAIT,    // bomba apagada, esperando que la pieza se despegue
+        BOX_TRANSIT,     // alfajores: accel MAX, cruza por encima de la caja
+        BOX_APPROACH,    // alfajores: accel MAX, baja hasta 3 cm sobre la celda
+        BOX_DESCEND,     // alfajores: accel MIN, apoya el alfajor en la celda
+        BOX_LIFT,        // alfajores: accel MAX, sale de la caja hacia arriba
         COLLISION_STOP,  // colision detectada: frenado y quieto antes de recalibrar
         ERROR
     };
 
-    // Como se decide a que tacho va cada pieza. Lo elige el operador desde
-    // la interfaz de Python ('C' o 'F' por Serial).
+    // Como se decide a donde va cada pieza. Lo elige el operador desde la
+    // interfaz de Python ('C', 'F' o 'A' por Serial).
     enum SortMode : uint8_t
     {
         SORT_BY_COLOR = 0, // tacho 1 rojo, 2 verde, 3 azul
-        SORT_BY_SHAPE = 1  // tacho 1 cuadrado, 2 hexagono, 3 circulo
+        SORT_BY_SHAPE = 1, // tacho 1 cuadrado, 2 hexagono, 3 circulo
+        SORT_ALFAJORES = 2 // llena una caja de 6 con circulos; el resto pasa
     };
 
     Robot();
@@ -124,19 +129,88 @@ private:
     // ------------------------------------------------------------------
     //  Modo de clasificacion
     // ------------------------------------------------------------------
-    // Al encender, el robot SIEMPRE arranca clasificando por COLOR; desde
-    // ahi el operador lo cambia con 'C' / 'F' desde la interfaz de Python.
+    // MODO CON EL QUE ARRANCA EL ROBOT. Es el unico lugar donde se elige:
+    // mientras la vision de Python tenga tomado el puerto serie no se le
+    // pueden mandar comandos a mano ('C' / 'F' / 'A'), asi que el modo de
+    // arranque se fija aca y se recompila.
+    //
+    // OJO: el robot NO pregunta nada al encender (no hay contra que
+    // comparar todavia), asi que la tapa de la caja tiene que estar puesta
+    // ANTES de darle energia si esto queda en SORT_ALFAJORES -- y sacada si
+    // queda en color o forma.
     //
     // Un cambio de modo que llega a mitad de una maniobra NO se aplica en
     // el momento: se guarda como pendiente y se aplica recien cuando el
-    // robot no tiene ninguna pieza en la mano, para no cambiarle el tacho
-    // de destino a una pieza que ya esta en vuelo.
-    SortMode sortMode        = SORT_BY_COLOR;
-    SortMode pendingSortMode = SORT_BY_COLOR;
+    // robot no tiene ninguna pieza en la mano, para no cambiarle el destino
+    // a una pieza que ya esta en vuelo.
+    SortMode sortMode        = SORT_ALFAJORES;
+    SortMode pendingSortMode = SORT_ALFAJORES;
     bool     sortModePending = false;
 
     void aplicarModoPendiente();
     const char *nombreModo(SortMode m) const;
+
+    static bool esAlfajores(SortMode m) { return m == SORT_ALFAJORES; }
+
+    // El modo al que el robot va a quedar: el pendiente si hay uno, el
+    // activo si no. Es contra este que se compara un pedido nuevo.
+    SortMode modoObjetivo() const { return sortModePending ? pendingSortMode : sortMode; }
+
+    // ------------------------------------------------------------------
+    //  Confirmacion de la tapa
+    // ------------------------------------------------------------------
+    // Entrar o salir del modo alfajores implica poner o sacar la tapa con
+    // forma de caja que va sobre los tachos. El firmware no tiene forma de
+    // ver si esta puesta, y arrancar el modo equivocado significa tirar
+    // piezas contra la tapa (o dentro de tachos tapados), asi que cualquier
+    // cambio que cruce ese limite se pide dos veces: el segundo pedido es
+    // la confirmacion de que la tapa ya esta como corresponde.
+    //
+    // Cuando exista la interfaz, este mismo mecanismo es el que se va a
+    // enganchar al dialogo de confirmacion (el firmware ya no depende de
+    // que alguien tipee la letra dos veces: le alcanza con recibirla).
+    SortMode modoAConfirmar        = SORT_BY_COLOR;
+    bool     esperandoConfirmacion = false;
+    uint32_t confirmacionPedida_ms = 0;
+
+    void pedirModo(SortMode nuevo, char letra);
+    void aplicarModo(SortMode nuevo);
+    void vencerConfirmacion();
+
+    // ------------------------------------------------------------------
+    //  Caja de alfajores (modo SORT_ALFAJORES)
+    // ------------------------------------------------------------------
+    // Grilla de 2 filas x 3 columnas. Las celdas se numeran 1 a 6 desde la
+    // fila mas cercana a la cinta; en el codigo van indexadas 0 a 5.
+    //
+    // boxLayout dice de que color tiene que ser el alfajor de cada celda, y
+    // boxFilled cuales ya estan puestas. Un circulo que llega sirve solo si
+    // queda alguna celda vacia de su color; todo lo demas (cuadrados,
+    // hexagonos, colores que ya no faltan) se deja pasar por la cinta.
+    static const uint8_t BOX_CELLS     = 6;
+    static const uint8_t CELDA_NINGUNA = 0xFF;
+
+    char    boxLayout[BOX_CELLS];
+    bool    boxFilled[BOX_CELLS];
+    bool    boxLayoutValido = true;
+    bool    boxComplete     = false;
+
+    // Celda que reservo la pieza que el robot tiene en la mano. Se marca
+    // como llena recien cuando la solto: si la maniobra se aborta a mitad
+    // (colision, ventana de agarre perdida), la celda queda libre.
+    uint8_t currentCell = CELDA_NINGUNA;
+
+    bool    piezaSirveParaCaja(const Piece &p, uint8_t &celda) const;
+    void    marcarCeldaLlena(uint8_t celda);
+    void    reiniciarCaja(bool avisar);
+    void    imprimirCaja() const;
+    uint8_t celdasLlenas() const;
+
+    // Una caja de 6 no se puede llenar con mas de 3 alfajores del mismo
+    // color (con 4 rojos y 2 verdes, o con 6 verdes, el robot esperaria
+    // para siempre una pieza que nunca va a poder ubicar).
+    static bool layoutValido(const char *layout);
+    void        aplicarLayout(const char *layout);
 
     // ------------------------------------------------------------------
     //  Pieza en curso y maniobra planificada
@@ -177,6 +251,10 @@ private:
     void updateGoBin();
     void updateBinSettle();
     void updateReleaseWait();
+    void updateBoxTransit();
+    void updateBoxApproach();
+    void updateBoxDescend();
+    void updateBoxLift();
     void updateCollisionStop();
 
     // ------------------------------------------------------------------

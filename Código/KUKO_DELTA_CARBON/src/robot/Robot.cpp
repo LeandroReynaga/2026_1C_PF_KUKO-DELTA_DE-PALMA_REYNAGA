@@ -21,7 +21,7 @@ Pneumatics pneumatics;
 //  aca (y recalibrar el PWM de Conveyor::begin(), que hoy arranca al 60%
 //  sin relacion medida con las rpm reales).
 // ============================================================
-static const float BELT_VELOCITY_CMS = 7.54f;
+static const float BELT_VELOCITY_CMS = 6.75f; //antes 7.54
 static const float DETECTION_LINE_X  = -23.0f; // donde la camara detecta las piezas
 
 // Ancho util de la cinta (Y). Fuera de esto el dato de vision es erroneo.
@@ -57,7 +57,7 @@ static const float BELT_MAX_Y = 11.2f;
 //
 // Valor actual: se midio 1,5 cm de atraso con la cinta a 7,54 cm/s
 //     1,5 / 7,54 = 0,199 s
-static const float VISION_LATENCY_S = -0.1f; // antes 0.2
+static const float VISION_LATENCY_S = 0.18f; // antes 0.2
 
 // ============================================================
 //  GEOMETRIA DE AGARRE (coordenadas de la PUNTA del gripper)
@@ -95,6 +95,91 @@ static const float WORK_AREA_MAX_X = 10.0f;
 static const float BIN_X[3] = {-12.0f, 0.0f, 12.0f};
 static const float BIN_Y    = -9.55f;
 static const float BIN_Z    = -26.5f; //antes -29.3cm
+
+// ============================================================
+//  CAJA DE ALFAJORES (modo SORT_ALFAJORES)
+// ============================================================
+//  Sobre los tachos se apoya una tapa con la forma de una caja de 6, y el
+//  robot la llena con circulos ordenados por color. Vista desde arriba:
+//
+//                        cinta (Y positivo)
+//          +---------------------------------+
+//          |    1        2        3          |   Y = -6,8   (fila de adelante)
+//          |    4        5        6          |   Y = -12,8  (fila del fondo)
+//          +---------------------------------+
+//              X=-6     X=0     X=+6
+//
+//  El piso de la caja esta a la misma altura que la cinta, asi que el Z de
+//  soltado es el mismo que el de agarre: la punta baja hasta BOX_Z y el
+//  alfajor, que cuelga 1 cm por debajo, queda apoyado en el piso.
+// ============================================================
+static const float BOX_X[6] = {-6.0f, 0.0f, 6.0f, -6.0f, 0.0f, 6.0f};
+static const float BOX_Y[6] = {-6.8f, -6.8f, -6.8f, -12.8f, -12.8f, -12.8f};
+
+// EL parametro de ajuste fino del modo: si los alfajores quedan colgados o
+// la ventosa aplasta la caja, se corrige aca (y en ningun otro lado).
+static const float BOX_Z = -32.6f;
+
+// Altura desde la que se hace la bajada lenta sobre la celda.
+static const float BOX_APPROACH_DZ = 3.0f;
+
+// Altura de CRUCE sobre la caja: a la que se entra, a la que se sale y a la
+// que se vuela de una celda a otra.
+//
+// No es un numero elegido por comodidad. moveSynchronized escala velocidad
+// y aceleracion de cada eje en proporcion a su recorrido, asi que los tres
+// motores siguen el mismo perfil normalizado: el movimiento es una RECTA EN
+// EL ESPACIO DE LAS ARTICULACIONES y en cartesiano se curva hacia abajo.
+// Yendo desde el extremo lejano de la cinta hasta la celda 4 con los 3 cm
+// de aproximacion como unica altura, esa curva hunde la punta hasta Z=-33,0
+// con la pieza colgando en -34,0: por debajo del piso de la caja (-33,6).
+// El brazo araria la caja antes de llegar a la celda.
+//
+// Con 6 cm de cruce el peor caso deja 1,4 cm de luz entre el alfajor que
+// lleva y la cara superior de los que ya estan puestos, y la salida hacia
+// la cinta deja 1,4 cm entre la punta y esos mismos alfajores.
+//
+// Si se cambia la geometria de la caja (celdas mas al fondo, piso mas bajo)
+// hay que rehacer esa cuenta: es lo que separa "pasa por encima" de "choca".
+static const float BOX_TRANSIT_DZ = 6.0f;
+
+// Disposicion por defecto de la caja: que color va en cada celda.
+//
+//      1 azul     2 rojo     3 verde
+//      4 rojo     5 azul     6 verde
+//
+// Es provisoria hasta que la interfaz deje elegir los 6 colores a mano; el
+// comando 'X' ya permite cambiarla sin recompilar.
+static const char BOX_LAYOUT_DEFECTO[6] = {'B', 'R', 'G',
+                                           'R', 'B', 'G'};
+
+// Tope de alfajores del mismo color en una caja de 6.
+static const uint8_t BOX_MAX_POR_COLOR = 3;
+
+// Cuando el color que llega sirve para mas de una celda, se elige SIEMPRE
+// la de numero mas grande (un rojo que puede ir en la 1 o en la 3 va a la
+// 3; un verde que puede ir en la 4, 5 o 6 va a la 6). Ver
+// piezaSirveParaCaja(), que recorre las celdas de la 6 a la 1.
+//
+// De paso, esto cumple solo la condicion que importa para no golpear nada:
+// como las celdas 4-6 son la fila del fondo, quedan llenas antes que la
+// fila de adelante (1-3). El brazo entra a la caja desde la cinta, o sea
+// desde Y positivo, asi que para llegar al fondo cruza por encima de la
+// fila de adelante; llenandola ultima, nunca sobrevuela un alfajor puesto.
+//
+// Esta eleccion NO decide a que pieza se va a buscar: eso lo fija el orden
+// en que las detecto la vision (la cola es FIFO, ver iniciarSiguientePieza).
+
+// Cuanto se espera con la bomba apagada antes de sacar el brazo de la caja.
+// Es mas que RELEASE_DETACH_MS a proposito: en el tacho la pieza se suelta
+// en el aire y se cae sola, pero en la caja queda APOYADA con la ventosa
+// todavia tocandola, asi que tiene menos ayuda para despegarse. Si igual
+// sale pegada al gripper, este es el numero a subir (y la solucion de
+// fondo, la misma que en el tacho: la electrovalvula que falta).
+static const uint32_t BOX_RELEASE_DETACH_MS = 175;
+
+// Ventana para confirmar un cambio de modo que cruza el limite de la tapa.
+static const uint32_t CONFIRMACION_TAPA_MS = 10000;
 
 // ============================================================
 //  TIEMPOS (todos no bloqueantes, con millis())
@@ -190,6 +275,13 @@ motor3(PUL3, DIR3, ENA, 2)
     axis1Homed = false;
     axis2Homed = false;
     axis3Homed = false;
+
+    memcpy(boxLayout, BOX_LAYOUT_DEFECTO, BOX_CELLS);
+
+    for (uint8_t i = 0; i < BOX_CELLS; i++)
+    {
+        boxFilled[i] = false;
+    }
 }
 
 void Robot::begin()
@@ -210,6 +302,11 @@ void Robot::begin()
     guard.setObservar(!supervisionHabilitada);
     fallos.begin();
 
+    // Una disposicion imposible de completar (mas de 3 alfajores de un mismo
+    // color) se detecta al arrancar y bloquea la entrada al modo: mejor eso
+    // que un robot esperando para siempre una pieza que no va a poder ubicar.
+    boxLayoutValido = layoutValido(boxLayout);
+
     Serial.println();
     Serial.println("=== KUKO DELTA CARBON ===");
     Serial.println("Comandos por Serial (uno por linea):");
@@ -217,6 +314,9 @@ void Robot::begin()
     Serial.println("                  color = R/G/B, forma = S/H/C");
     Serial.println("  C               clasificar por COLOR");
     Serial.println("  F               clasificar por FORMA");
+    Serial.println("  A               modo ALFAJORES (llenar la caja de 6)");
+    Serial.println("  N               caja nueva (marca las 6 celdas como vacias)");
+    Serial.println("  X<6 colores>    disposicion de la caja, celda 1 a 6. Ej: XBRGRBG");
     Serial.println("  R               parada de emergencia / reinicio");
     Serial.println("  D               historial de fallos");
     Serial.println("  S               estado de la supervision por encoders");
@@ -226,6 +326,13 @@ void Robot::begin()
     Serial.println("  T<ms>           tiempo de confirmacion. Ej: T80");
     Serial.println("  K<ms>           margen por velocidad. Ej: K80");
     Serial.println("  L<ms>           atraso del encoder a compensar. Ej: L70");
+
+    if (!boxLayoutValido)
+    {
+        Serial.print("[CAJA] disposicion invalida (maximo ");
+        Serial.print(BOX_MAX_POR_COLOR);
+        Serial.println(" alfajores por color): el modo ALFAJORES queda bloqueado");
+    }
 }
 
 void Robot::update()
@@ -237,6 +344,8 @@ void Robot::update()
     // detecta una colision cambia el estado a COLLISION_STOP y el switch de
     // abajo ya entra por ahi.
     supervisarColision();
+
+    vencerConfirmacion();
 
     if (trazaActiva && (uint32_t)(millis() - ultimaTraza_ms) >= TRAZA_INTERVALO_MS)
     {
@@ -263,6 +372,10 @@ void Robot::update()
         case GO_BIN:         updateGoBin();         break;
         case BIN_SETTLE:     updateBinSettle();     break;
         case RELEASE_WAIT:   updateReleaseWait();   break;
+        case BOX_TRANSIT:    updateBoxTransit();    break;
+        case BOX_APPROACH:   updateBoxApproach();   break;
+        case BOX_DESCEND:    updateBoxDescend();    break;
+        case BOX_LIFT:       updateBoxLift();       break;
         case COLLISION_STOP: updateCollisionStop(); break;
 
         default:                                    break;
@@ -400,38 +513,66 @@ void Robot::procesarComando(char *cmd, uint8_t len)
             return;
         }
 
-        if (c == 'C' || c == 'F')
+        if (c == 'C' || c == 'F' || c == 'A')
         {
-            const SortMode nuevo = (c == 'C') ? SORT_BY_COLOR : SORT_BY_SHAPE;
+            const SortMode nuevo = (c == 'C') ? SORT_BY_COLOR :
+                                   (c == 'F') ? SORT_BY_SHAPE :
+                                                SORT_ALFAJORES;
+            pedirModo(nuevo, c);
+            return;
+        }
 
-            // Si el robot tiene una pieza en la mano, el cambio queda
-            // pendiente hasta que la suelte: cambiarle el tacho de destino
-            // a una pieza en vuelo la mandaria al lugar equivocado.
-            const bool conPiezaEnMano = (state == PICK_DESCEND ||
-                                          state == PICK_LIFT   ||
-                                          state == GO_BIN      ||
-                                          state == BIN_SETTLE);
-
-            if (conPiezaEnMano)
-            {
-                pendingSortMode = nuevo;
-                sortModePending = true;
-                Serial.print("[MODO] pendiente -> ");
-                Serial.println(nombreModo(nuevo));
-            }
-            else
-            {
-                sortMode = nuevo;
-                sortModePending = false;
-                Serial.print("[MODO] ");
-                Serial.println(nombreModo(sortMode));
-            }
+        if (c == 'N')
+        {
+            // Caja nueva: se pide cuando la caja llena ya se retiro y se
+            // puso otra vacia. Es lo unico que borra el mapa de celdas.
+            reiniciarCaja(true);
             return;
         }
 
         Serial.print("[SERIAL] comando invalido: '");
         Serial.print(cmd);
-        Serial.println("'. Validos: 'C', 'F', 'R', 'D', 'S', 'G' o 'Y,color,forma'");
+        Serial.println("'. Validos: 'C', 'F', 'A', 'N', 'R', 'D', 'S', 'G' o 'Y,color,forma'");
+        return;
+    }
+
+    // --- Disposicion de la caja: 'X' + los 6 colores, de la celda 1 a la 6 ---
+    // Es el reemplazo provisorio de la interfaz que todavia no existe: deja
+    // elegir que color va en cada celda sin recompilar. Ej: XBRGRBG.
+    if (toupper(cmd[0]) == 'X' && strchr(cmd, ',') == NULL)
+    {
+        if (n != BOX_CELLS + 1)
+        {
+            Serial.print("[CAJA] se esperan ");
+            Serial.print(BOX_CELLS);
+            Serial.println(" colores (celda 1 a 6). Ej: XBRGRBG");
+            return;
+        }
+
+        char nuevo[BOX_CELLS];
+
+        for (uint8_t i = 0; i < BOX_CELLS; i++)
+        {
+            nuevo[i] = toupper(cmd[i + 1]);
+        }
+
+        if (!layoutValido(nuevo))
+        {
+            Serial.print("[CAJA] disposicion invalida: colores R/G/B y como maximo ");
+            Serial.print(BOX_MAX_POR_COLOR);
+            Serial.println(" de cada uno");
+            return;
+        }
+
+        // Cambiar la disposicion con una pieza en vuelo la mandaria a una
+        // celda que ya no significa lo mismo.
+        if (currentCell != CELDA_NINGUNA)
+        {
+            Serial.println("[CAJA] hay una pieza en camino a una celda: probar de nuevo en un momento");
+            return;
+        }
+
+        aplicarLayout(nuevo);
         return;
     }
 
@@ -497,7 +638,7 @@ void Robot::procesarComando(char *cmd, uint8_t len)
     {
         Serial.print("[SERIAL] comando invalido: '");
         Serial.print(cmd);
-        Serial.println("'. Validos: 'C', 'F', 'R', 'D', 'S', 'G' o 'Y,color,forma'");
+        Serial.println("'. Validos: 'C', 'F', 'A', 'N', 'R', 'D', 'S', 'G' o 'Y,color,forma'");
         return;
     }
 
@@ -610,7 +751,13 @@ void Robot::procesarComando(char *cmd, uint8_t len)
 
 const char *Robot::nombreModo(SortMode m) const
 {
-    return (m == SORT_BY_COLOR) ? "por COLOR" : "por FORMA";
+    switch (m)
+    {
+        case SORT_BY_COLOR:  return "por COLOR";
+        case SORT_BY_SHAPE:  return "por FORMA";
+        case SORT_ALFAJORES: return "ALFAJORES";
+        default:             return "?";
+    }
 }
 
 void Robot::aplicarModoPendiente()
@@ -625,6 +772,283 @@ void Robot::aplicarModoPendiente()
 
     Serial.print("[MODO] aplicado -> ");
     Serial.println(nombreModo(sortMode));
+
+    if (esAlfajores(sortMode))
+    {
+        imprimirCaja();
+    }
+}
+
+// ============================================================
+//  CAMBIO DE MODO Y CONFIRMACION DE LA TAPA
+// ============================================================
+
+void Robot::pedirModo(SortMode nuevo, char letra)
+{
+    if (esAlfajores(nuevo) && !boxLayoutValido)
+    {
+        Serial.println("[MODO] la disposicion de la caja es invalida: no se entra a ALFAJORES");
+        return;
+    }
+
+    if (nuevo == modoObjetivo())
+    {
+        Serial.print("[MODO] ya esta ");
+        Serial.println(nombreModo(nuevo));
+
+        // Pedir el modo en el que ya se esta sirve de consulta: es la unica
+        // forma de ver como viene la caja sin borrarla con 'N'.
+        if (esAlfajores(nuevo))
+        {
+            imprimirCaja();
+        }
+        return;
+    }
+
+    // Un cambio entre COLOR y FORMA no toca nada fisico y se aplica derecho.
+    // Entrar o salir de ALFAJORES, en cambio, significa poner o sacar la
+    // tapa: hasta que alguien confirme que ya esta asi, no se cambia nada.
+    if (esAlfajores(nuevo) == esAlfajores(modoObjetivo()))
+    {
+        aplicarModo(nuevo);
+        return;
+    }
+
+    const bool confirmando = esperandoConfirmacion &&
+                             modoAConfirmar == nuevo &&
+                             (uint32_t)(millis() - confirmacionPedida_ms) < CONFIRMACION_TAPA_MS;
+
+    if (!confirmando)
+    {
+        modoAConfirmar        = nuevo;
+        esperandoConfirmacion = true;
+        confirmacionPedida_ms = millis();
+
+        if (esAlfajores(nuevo))
+        {
+            Serial.println("[TAPA] para entrar al modo ALFAJORES hay que PONER la tapa sobre los tachos.");
+        }
+        else
+        {
+            Serial.println("[TAPA] para salir del modo ALFAJORES hay que SACAR la tapa de los tachos.");
+        }
+
+        Serial.print("[TAPA] si ya esta asi, confirmar con '");
+        Serial.print(letra);
+        Serial.print("' otra vez dentro de ");
+        Serial.print(CONFIRMACION_TAPA_MS / 1000);
+        Serial.print(" s. Queda: ");
+        Serial.println(nombreModo(nuevo));
+        return;
+    }
+
+    esperandoConfirmacion = false;
+    aplicarModo(nuevo);
+}
+
+void Robot::aplicarModo(SortMode nuevo)
+{
+    // Si el robot tiene una pieza en la mano, el cambio queda pendiente
+    // hasta que la suelte: cambiarle el destino a una pieza en vuelo la
+    // mandaria al lugar equivocado.
+    if (hayPiezaEnMano())
+    {
+        pendingSortMode = nuevo;
+        sortModePending = true;
+
+        Serial.print("[MODO] pendiente -> ");
+        Serial.println(nombreModo(nuevo));
+        return;
+    }
+
+    sortMode = nuevo;
+    sortModePending = false;
+
+    Serial.print("[MODO] ");
+    Serial.println(nombreModo(sortMode));
+
+    if (esAlfajores(sortMode))
+    {
+        imprimirCaja();
+    }
+}
+
+void Robot::vencerConfirmacion()
+{
+    if (!esperandoConfirmacion ||
+        (uint32_t)(millis() - confirmacionPedida_ms) < CONFIRMACION_TAPA_MS)
+    {
+        return;
+    }
+
+    esperandoConfirmacion = false;
+
+    Serial.print("[TAPA] sin confirmacion: el modo sigue ");
+    Serial.println(nombreModo(modoObjetivo()));
+}
+
+// ============================================================
+//  CAJA DE ALFAJORES
+// ============================================================
+
+bool Robot::layoutValido(const char *layout)
+{
+    uint8_t porColor[3] = {0, 0, 0}; // R, G, B
+
+    for (uint8_t i = 0; i < BOX_CELLS; i++)
+    {
+        switch (layout[i])
+        {
+            case 'R': porColor[0]++; break;
+            case 'G': porColor[1]++; break;
+            case 'B': porColor[2]++; break;
+            default:  return false;
+        }
+    }
+
+    // Con mas de 3 de un color la caja no se puede terminar nunca (4 rojos y
+    // 2 verdes, o 6 verdes, son los ejemplos tipicos): el robot se quedaria
+    // esperando indefinidamente una pieza que no tiene donde ir.
+    for (uint8_t i = 0; i < 3; i++)
+    {
+        if (porColor[i] > BOX_MAX_POR_COLOR)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void Robot::aplicarLayout(const char *layout)
+{
+    const uint8_t habia = celdasLlenas();
+
+    memcpy(boxLayout, layout, BOX_CELLS);
+    boxLayoutValido = true;
+
+    // La disposicion nueva no dice nada de los alfajores que ya estaban: el
+    // mapa arranca de cero y la caja tiene que estar vacia de verdad.
+    reiniciarCaja(false);
+
+    Serial.println("[CAJA] disposicion nueva");
+    imprimirCaja();
+
+    if (habia > 0)
+    {
+        Serial.print("[CAJA] ojo: habia ");
+        Serial.print(habia);
+        Serial.println(" alfajores puestos. Sacarlos antes de seguir.");
+    }
+}
+
+uint8_t Robot::celdasLlenas() const
+{
+    uint8_t n = 0;
+
+    for (uint8_t i = 0; i < BOX_CELLS; i++)
+    {
+        if (boxFilled[i])
+        {
+            n++;
+        }
+    }
+
+    return n;
+}
+
+bool Robot::piezaSirveParaCaja(const Piece &p, uint8_t &celda) const
+{
+    celda = CELDA_NINGUNA;
+
+    if (boxComplete || p.shape != 'C')
+    {
+        return false;
+    }
+
+    // De la celda 6 hacia la 1: entre varias del color que llega, gana
+    // siempre la de numero mas grande.
+    for (int8_t c = BOX_CELLS - 1; c >= 0; c--)
+    {
+        if (!boxFilled[c] && boxLayout[c] == p.color)
+        {
+            celda = (uint8_t)c;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void Robot::marcarCeldaLlena(uint8_t celda)
+{
+    boxFilled[celda] = true;
+
+    Serial.print("[CAJA] celda ");
+    Serial.print(celda + 1);
+    Serial.print(" (");
+    Serial.print(boxLayout[celda]);
+    Serial.print(") lista: ");
+    Serial.print(celdasLlenas());
+    Serial.print(" de ");
+    Serial.println(BOX_CELLS);
+
+    if (celdasLlenas() < BOX_CELLS)
+    {
+        return;
+    }
+
+    boxComplete = true;
+
+    imprimirCaja();
+    Serial.println("[CAJA] COMPLETA. Desde aca se deja pasar todo.");
+    Serial.println("[CAJA] Sacar la caja, poner una vacia y mandar 'N'.");
+}
+
+void Robot::reiniciarCaja(bool avisar)
+{
+    for (uint8_t i = 0; i < BOX_CELLS; i++)
+    {
+        boxFilled[i] = false;
+    }
+
+    boxComplete = false;
+
+    if (avisar)
+    {
+        Serial.println("[CAJA] caja nueva: las 6 celdas quedan libres");
+        imprimirCaja();
+    }
+}
+
+void Robot::imprimirCaja() const
+{
+    // Dos lineas con la forma fisica de la caja: el color que pide cada
+    // celda y si ya esta puesta. La primera fila es la mas cercana a la
+    // cinta.
+    for (uint8_t fila = 0; fila < 2; fila++)
+    {
+        Serial.print("[CAJA] ");
+
+        for (uint8_t col = 0; col < 3; col++)
+        {
+            const uint8_t i = fila * 3 + col;
+
+            Serial.print(i + 1);
+            Serial.print(':');
+            Serial.print(boxLayout[i]);
+            Serial.print(boxFilled[i] ? "[x] " : "[ ] ");
+        }
+
+        Serial.println(fila == 0 ? "  (Y=-6.8, fila de adelante)"
+                                 : "  (Y=-12.8, fila del fondo)");
+    }
+
+    Serial.print("[CAJA] ");
+    Serial.print(celdasLlenas());
+    Serial.print(" de ");
+    Serial.print(BOX_CELLS);
+    Serial.println(boxComplete ? " -- COMPLETA, mandar 'N' para empezar otra" : "");
 }
 
 // ============================================================
@@ -718,6 +1142,15 @@ void Robot::startHoming(bool conservarContexto)
     // arrancar el ciclo con el gripper vacio y en estado conocido.
     pneumatics.release();
     pumpOn = false;
+
+    // La celda que tenia reservada la pieza perdida vuelve a quedar libre.
+    // El MAPA de la caja, en cambio, no se toca ni con el reset manual: los
+    // alfajores que ya estan puestos siguen fisicamente ahi. Solo 'N' lo
+    // borra, que es cuando alguien saco la caja y puso otra.
+    currentCell = CELDA_NINGUNA;
+
+    // Un cambio de modo a medio confirmar pertenecia al ciclo que se corto.
+    esperandoConfirmacion = false;
 
     moveIssued = false;
     replanCount = 0;
@@ -835,6 +1268,12 @@ void Robot::updateHoming()
         Serial.println("[HOMING] OK. Robot listo.");
         Serial.print("[MODO] ");
         Serial.println(nombreModo(sortMode));
+
+        if (esAlfajores(sortMode))
+        {
+            imprimirCaja();
+        }
+
         Serial.print("[GUARD] ");
         Serial.print(guard.nombreEstado());
         Serial.print("  umbral=");
@@ -924,7 +1363,18 @@ bool Robot::planificarPieza(const Piece &p)
     geom.approachDX = APPROACH_DX;
     geom.approachDZ = APPROACH_DZ;
     geom.pressDZ = PRESS_DZ;
-    geom.liftDZ = LIFT_DZ;
+
+    // En modo alfajores el brazo despega mas alto: desde la cinta tiene que
+    // cruzar por encima de la pared de la caja y de los alfajores ya
+    // colocados, y el camino entre dos puntos se curva hacia abajo (ver
+    // BOX_TRANSIT_DZ). Con los 3 cm de siempre, ese hundimiento mete la
+    // pieza por debajo del piso de la caja antes de llegar a la celda.
+    //
+    // ConveyorIntercept valida el punto de despegue con la cinematica, asi
+    // que si algun agarre no admitiera la subida mas alta, esa pieza queda
+    // marcada como no alcanzable y se deja pasar en vez de forzarla.
+    geom.liftDZ = esAlfajores(sortMode) ? BOX_TRANSIT_DZ : LIFT_DZ;
+
     geom.workAreaMinX = WORK_AREA_MIN_X;
     geom.workAreaMaxX = WORK_AREA_MAX_X;
 
@@ -966,8 +1416,40 @@ bool Robot::iniciarSiguientePieza()
 
     Piece p;
 
+    // ORDEN DE AGARRE: el de deteccion, siempre. La cola es FIFO, asi que
+    // queuePop() devuelve la pieza mas vieja, que es la MAS ADELANTADA sobre
+    // la cinta (todas avanzan a la misma velocidad). Esa es la que menos
+    // tiempo queda antes de pasarse de largo, asi que es la que hay que
+    // atender primero.
+    //
+    // Lo unico que puede saltear una pieza es que ya no se llegue a agarrar
+    // (planificarPieza) o que no sirva para la caja (piezaSirveParaCaja). Ni
+    // el color, ni la forma, ni la celda de destino adelantan a una pieza
+    // sobre otra: el modo alfajores decide DONDE va cada pieza, nunca en que
+    // orden se van a buscar.
     while (queuePop(p))
     {
+        // En modo alfajores el destino se decide ANTES de planificar el
+        // agarre: la mayoria de las piezas no se agarran (cuadrados,
+        // hexagonos, y los circulos de un color que ya no falta) y no tiene
+        // sentido calcularles la intercepcion.
+        uint8_t celda = CELDA_NINGUNA;
+
+        if (esAlfajores(sortMode) && !piezaSirveParaCaja(p, celda))
+        {
+            // Con la caja ya completa no se avisa pieza por pieza: pasarian
+            // todas y el aviso de caja llena ya explico lo que va a pasar.
+            if (!boxComplete)
+            {
+                Serial.print("[CAJA] no hace falta (color=");
+                Serial.print(p.color);
+                Serial.print(" forma=");
+                Serial.print(p.shape);
+                Serial.println("), se deja pasar");
+            }
+            continue;
+        }
+
         if (!planificarPieza(p))
         {
             Serial.print("[PIEZA] no alcanzable (Y=");
@@ -977,6 +1459,7 @@ bool Robot::iniciarSiguientePieza()
         }
 
         currentPiece = p;
+        currentCell = celda;
         currentBin = binIndexFor(p);
         replanCount = 0;
         moveIssued = false;
@@ -990,8 +1473,17 @@ bool Robot::iniciarSiguientePieza()
         Serial.print(lastContactSpeedX);
         Serial.print(" cm/s (cinta ");
         Serial.print(BELT_VELOCITY_CMS);
-        Serial.print(") -> tacho ");
-        Serial.println(currentBin + 1);
+
+        if (currentCell != CELDA_NINGUNA)
+        {
+            Serial.print(") -> celda ");
+            Serial.println(currentCell + 1);
+        }
+        else
+        {
+            Serial.print(") -> tacho ");
+            Serial.println(currentBin + 1);
+        }
 
         return true;
     }
@@ -1033,6 +1525,7 @@ void Robot::updatePickApproach()
         {
             // No deberia pasar: ConveyorIntercept ya valido este punto.
             Serial.println("[PIEZA] punto de aproximacion invalido, se descarta");
+            currentCell = CELDA_NINGUNA; // la celda vuelve a quedar libre
             moveIssued = false;
             state = GO_HOME_IDLE;
             return;
@@ -1082,6 +1575,7 @@ void Robot::updatePickApproach()
         Serial.println("[PIEZA] se perdio la ventana de agarre, se deja pasar");
         pneumatics.release();
         pumpOn = false;
+        currentCell = CELDA_NINGUNA; // la celda vuelve a quedar libre
         moveIssued = false;
         state = GO_HOME_IDLE;
         return;
@@ -1106,6 +1600,7 @@ void Robot::updatePickDescend()
             Serial.println("[PIEZA] punto de agarre invalido, se descarta");
             pneumatics.release();
             pumpOn = false;
+            currentCell = CELDA_NINGUNA; // la celda vuelve a quedar libre
             moveIssued = false;
             state = GO_HOME_IDLE;
             return;
@@ -1131,6 +1626,7 @@ void Robot::updatePickLift()
         if (!goToPositionIK(liftX, liftY, liftZ, Motors::FAST_LIMITS))
         {
             Serial.println("[PIEZA] punto de despegue invalido");
+            currentCell = CELDA_NINGUNA; // la celda vuelve a quedar libre
             moveIssued = false;
             state = GO_HOME_IDLE;
             return;
@@ -1141,7 +1637,11 @@ void Robot::updatePickLift()
     if (enPosicion())
     {
         moveIssued = false;
-        state = GO_BIN;
+
+        // La celda reservada es lo que decide el destino, no el modo: si el
+        // modo cambiara justo ahora, esta pieza ya salio con una celda
+        // asignada y tiene que terminar ahi.
+        state = (currentCell != CELDA_NINGUNA) ? BOX_TRANSIT : GO_BIN;
     }
 }
 
@@ -1194,8 +1694,13 @@ void Robot::updateBinSettle()
 void Robot::updateReleaseWait()
 {
     // Espera a que la pieza se despegue sola del gripper (ver
-    // RELEASE_DETACH_MS: es un parche hasta montar la electrovalvula).
-    if (millis() - releaseStart_ms < RELEASE_DETACH_MS)
+    // RELEASE_DETACH_MS: es un parche hasta montar la electrovalvula). En la
+    // caja la espera es mas larga porque el alfajor queda apoyado y la
+    // ventosa sigue tocandolo (ver BOX_RELEASE_DETACH_MS).
+    const uint32_t espera = (currentCell != CELDA_NINGUNA) ? BOX_RELEASE_DETACH_MS
+                                                           : RELEASE_DETACH_MS;
+
+    if (millis() - releaseStart_ms < espera)
     {
         return;
     }
@@ -1203,6 +1708,20 @@ void Robot::updateReleaseWait()
     // Pieza entregada: el ciclo cerro bien, asi que la racha de colisiones
     // seguidas se corta aca (lo que hubiera chocado antes, ya se resolvio).
     colisionesSeguidas = 0;
+
+    // En la caja el brazo esta METIDO ENTRE LAS PAREDES: antes de decidir
+    // nada tiene que salir derecho para arriba. Ir desde adentro de la caja
+    // a cualquier otro lado hunde el camino contra los alfajores puestos.
+    if (currentCell != CELDA_NINGUNA)
+    {
+        // La celda pasa a llena, pero currentCell se conserva hasta haber
+        // salido: es de donde el tramo de salida tiene que subir.
+        marcarCeldaLlena(currentCell);
+
+        moveIssued = false;
+        state = BOX_LIFT;
+        return;
+    }
 
     // Recien ahora, con la pieza ya soltada, se puede cambiar de modo.
     aplicarModoPendiente();
@@ -1214,6 +1733,130 @@ void Robot::updateReleaseWait()
     }
 
     moveIssued = false;
+    state = GO_HOME_IDLE;
+}
+
+// ============================================================
+//  CAJA DE ALFAJORES: los cuatro tramos hasta dejar el alfajor
+// ============================================================
+//
+//  1. TRANSIT   accel MAX, hasta 6 cm sobre la celda. Es el tramo que cruza
+//               por encima de la pared de la caja y de los alfajores ya
+//               puestos (ver BOX_TRANSIT_DZ: con menos altura, la curva del
+//               movimiento los baaria).
+//  2. APPROACH  accel MAX, baja en vertical hasta 3 cm sobre la celda.
+//  3. DESCEND   accel MIN, apoya el alfajor. Se suelta abajo, no antes.
+//  4. LIFT      accel MAX, sale en vertical a la altura de cruce.
+//
+//  Los tramos 2 y 4 son verticales sobre la misma celda: ahi el camino no
+//  se desvia (menos de 1,3 mm de deriva lateral medida en toda la bajada).
+// ============================================================
+
+void Robot::updateBoxTransit()
+{
+    if (!moveIssued)
+    {
+        if (!goToPositionIK(BOX_X[currentCell], BOX_Y[currentCell],
+                            BOX_Z + BOX_TRANSIT_DZ, Motors::FAST_LIMITS))
+        {
+            Serial.println("[CAJA] altura de cruce invalida");
+            emergencyStop();
+            return;
+        }
+        moveIssued = true;
+    }
+
+    if (enPosicion())
+    {
+        moveIssued = false;
+        state = BOX_APPROACH;
+    }
+}
+
+void Robot::updateBoxApproach()
+{
+    if (!moveIssued)
+    {
+        if (!goToPositionIK(BOX_X[currentCell], BOX_Y[currentCell],
+                            BOX_Z + BOX_APPROACH_DZ, Motors::FAST_LIMITS))
+        {
+            Serial.println("[CAJA] punto de aproximacion invalido");
+            emergencyStop();
+            return;
+        }
+        moveIssued = true;
+    }
+
+    if (enPosicion())
+    {
+        moveIssued = false;
+        state = BOX_DESCEND;
+    }
+}
+
+void Robot::updateBoxDescend()
+{
+    if (!moveIssued)
+    {
+        // Aceleracion minima, igual que al entrar a la pieza sobre la cinta:
+        // el alfajor se APOYA en el piso de la caja, no se deja caer.
+        //
+        // A diferencia del agarre, aca NO se silencia la supervision: no hay
+        // conmutacion de la bomba ni un contacto buscado a proposito (la
+        // punta baja justo hasta donde la pieza queda apoyada), y en cambio
+        // la caja es un obstaculo rigido. Si esta corrida de lugar o la tapa
+        // no esta donde deberia, esto es exactamente lo que hay que detectar.
+        if (!goToPositionIK(BOX_X[currentCell], BOX_Y[currentCell],
+                            BOX_Z, Motors::SOFT_LIMITS))
+        {
+            Serial.println("[CAJA] punto de soltado invalido");
+            emergencyStop();
+            return;
+        }
+        moveIssued = true;
+    }
+
+    if (enPosicion())
+    {
+        moveIssued = false;
+        binSettleStart_ms = millis();
+        state = BIN_SETTLE; // suelta la pieza, igual que en el tacho
+    }
+}
+
+void Robot::updateBoxLift()
+{
+    if (!moveIssued)
+    {
+        if (!goToPositionIK(BOX_X[currentCell], BOX_Y[currentCell],
+                            BOX_Z + BOX_TRANSIT_DZ, Motors::FAST_LIMITS))
+        {
+            Serial.println("[CAJA] salida invalida");
+            emergencyStop();
+            return;
+        }
+        moveIssued = true;
+    }
+
+    if (!enPosicion())
+    {
+        return;
+    }
+
+    moveIssued = false;
+
+    // Recien aca la pieza queda del todo entregada y el brazo libre.
+    currentCell = CELDA_NINGUNA;
+
+    // Ya fuera de la caja: recien ahora se puede cambiar de modo o salir a
+    // buscar la pieza siguiente.
+    aplicarModoPendiente();
+
+    if (queueCount > 0 && iniciarSiguientePieza())
+    {
+        return;
+    }
+
     state = GO_HOME_IDLE;
 }
 
@@ -1377,7 +2020,11 @@ void Robot::registrarFallo(uint8_t tipo, uint8_t eje,
         r.forma    = currentPiece.shape;
         r.piezaY   = currentPiece.y;
         r.piezaX   = piezaXEstimada(currentPiece);
-        r.tacho    = (uint8_t)(currentBin + 1);
+
+        // En modo alfajores el destino es una celda de la caja (1-6); en los
+        // otros dos, uno de los tres tachos.
+        r.tacho    = (currentCell != CELDA_NINGUNA) ? (uint8_t)(currentCell + 1)
+                                                    : (uint8_t)(currentBin + 1);
     }
 
     fallos.registrar(r);
@@ -1398,17 +2045,25 @@ bool Robot::hayManiobraEnCurso() const
            state == PICK_LIFT     ||
            state == GO_BIN        ||
            state == BIN_SETTLE    ||
-           state == RELEASE_WAIT;
+           state == RELEASE_WAIT  ||
+           state == BOX_TRANSIT   ||
+           state == BOX_APPROACH  ||
+           state == BOX_DESCEND   ||
+           state == BOX_LIFT;
 }
 
 bool Robot::hayPiezaEnMano() const
 {
     // Desde que empieza la bajada de agarre ya se cuenta como "en la mano":
-    // el contacto ocurre a mitad del tramo 2, no al final.
+    // el contacto ocurre a mitad del tramo 2, no al final. BOX_LIFT queda
+    // afuera a proposito: ahi el alfajor ya esta apoyado en la caja.
     return state == PICK_DESCEND ||
            state == PICK_LIFT    ||
            state == GO_BIN       ||
-           state == BIN_SETTLE;
+           state == BIN_SETTLE   ||
+           state == BOX_TRANSIT  ||
+           state == BOX_APPROACH ||
+           state == BOX_DESCEND;
 }
 
 const char *Robot::nombreEstado(RobotState s) const
@@ -1425,6 +2080,10 @@ const char *Robot::nombreEstado(RobotState s) const
         case GO_BIN:         return "GO_BIN";
         case BIN_SETTLE:     return "BIN_SETTLE";
         case RELEASE_WAIT:   return "RELEASE_WAIT";
+        case BOX_TRANSIT:    return "BOX_TRANSIT";
+        case BOX_APPROACH:   return "BOX_APPROACH";
+        case BOX_DESCEND:    return "BOX_DESCEND";
+        case BOX_LIFT:       return "BOX_LIFT";
         case COLLISION_STOP: return "COLLISION_STOP";
         case ERROR:          return "ERROR";
         default:             return "?";
