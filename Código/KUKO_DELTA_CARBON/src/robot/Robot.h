@@ -143,8 +143,8 @@ private:
     // el momento: se guarda como pendiente y se aplica recien cuando el
     // robot no tiene ninguna pieza en la mano, para no cambiarle el destino
     // a una pieza que ya esta en vuelo.
-    SortMode sortMode        = SORT_ALFAJORES;
-    SortMode pendingSortMode = SORT_ALFAJORES;
+    SortMode sortMode        = SORT_BY_COLOR;
+    SortMode pendingSortMode = SORT_BY_COLOR;
     bool     sortModePending = false;
 
     void aplicarModoPendiente();
@@ -237,6 +237,7 @@ private:
     uint8_t  replanCount     = 0; // reintentos de la pieza actual
 
     bool moveIssued = false; // el movimiento del estado actual ya se comando
+
     bool pumpOn     = false;
 
     // ------------------------------------------------------------------

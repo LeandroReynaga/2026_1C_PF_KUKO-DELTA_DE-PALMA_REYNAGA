@@ -91,12 +91,45 @@ void CollisionGuard::begin()
         caido[i]         = false;
         avisoCaido[i]    = false;
         ultimoAvisoCaido_ms[i] = 0;
+        enFaltaRep[i]       = false;
+        faltaRepDesde_ms[i] = 0;
+        picoRep[i]          = 0.0f;
+        avisoDeriva[i]      = false;
+        desvioRep[i]        = 0.0f;
+        desvioRepListo[i]   = false;
+        firmaRep[i]         = 0.0f;
+        firmaLista[i]       = false;
+        reposoDesde_ms[i]   = 0;
     }
 
+    umbralReposoDeg      = GuardConfig::UMBRAL_REPOSO_DEG;
+    confirmacionReposoMs = GuardConfig::CONFIRMACION_REPOSO_MS;
+    enHome               = false;
+
+    motivoFallo   = MOTIVO_COLISION;
     ejeFallo      = 0;
     errorFallo    = 0.0f;
     cmdDeltaFallo = 0.0f;
     encDeltaFallo = 0.0f;
+}
+
+// ------------------------------------------------------------------
+void CollisionGuard::setEnHome(bool estaEnHome)
+{
+    if (!estaEnHome)
+    {
+        // Al salir de home se descarta cualquier sospecha de reposo a medio
+        // confirmar: desde que el brazo arranca a moverse, lo que se mida ya
+        // no es comparable con la pose de referencia.
+        for (uint8_t i = 0; i < NUM_EJES; i++)
+        {
+            enFaltaRep[i]     = false;
+            desvioRepListo[i] = false;
+            firmaLista[i]     = false;
+        }
+    }
+
+    enHome = estaEnHome;
 }
 
 // ------------------------------------------------------------------
@@ -213,6 +246,19 @@ void CollisionGuard::fijarReferencia()
         cmdCompensado[i]   = 0.0f;
         faltaMax[i]        = 0.0f;
         fugaAcumulada[i]   = 0.0f;
+
+        // El chequeo en reposo se reevalua desde cero en cada homing: la
+        // referencia es nueva, asi que el piso de ruido de la pose de home
+        // hay que volver a medirlo.
+        enFaltaRep[i]       = false;
+        faltaRepDesde_ms[i] = 0;
+        picoRep[i]          = 0.0f;
+        avisoDeriva[i]      = false;
+        desvioRep[i]        = 0.0f;
+        desvioRepListo[i]   = false;
+        firmaRep[i]         = 0.0f;
+        firmaLista[i]       = false;
+        reposoDesde_ms[i]   = 0;
 
         // atrasoSeg NO se reinicia: es una propiedad de la cadena de
         // medicion (sensor + filtro + muestreo), no de esta corrida, y
@@ -534,10 +580,156 @@ bool CollisionGuard::actualizar(long pasos1, long pasos2, long pasos3)
         const float umbralEf = umbralDeg +
                                (margenVelocidadMs / 1000.0f) * picoVel[i];
 
+        // --- Chequeo en reposo: quieto en home, el umbral es MUCHO menor ---
+        //
+        // Aca no hay atraso de medicion ni dinamica que tolerar: el brazo
+        // esta frenado en la misma pose de siempre. Cualquier diferencia
+        // sostenida es real (pasos perdidos, alguien movio el brazo, una
+        // polea floja), y es justo lo que el umbral grande deja pasar.
+        //
+        // La confirmacion es larga a proposito: el robot esta parado, no hay
+        // ninguna urgencia, y 1,5 s de error sostenido no lo produce el
+        // ruido del encoder.
+        bool sospechaReposo = false;
+
+        if (enHome && asentado && !enSilencio)
+        {
+            // Se compara contra la calibracion DEL HOMING, no contra la
+            // referencia de ahora: hay que devolverle lo que la fuga ya se
+            // llevo. Sin esto el chequeo no sirve para nada en el caso mas
+            // importante -- la descalibracion que entra de a poco, que es
+            // justamente como se pierden pasos: la fuga la va absorbiendo a
+            // medida que aparece y el error nunca llega a cruzar el umbral.
+            //
+            // (Medido en el banco: con un desvio real de 7 grados metido de
+            // a poco, la fuga absorbio 5,9 y el error se quedo en 1,1.)
+            const float crudo = error - comun + fugaAcumulada[i];
+
+            // Y se promedia, porque el encoder tira picos sueltos de hasta
+            // 5 grados con el brazo perfectamente quieto (ver la tabla en
+            // CollisionGuard.h). Promediado un segundo ese ruido se cae a
+            // 0,8 grados y un corrimiento real pasa entero.
+            if (!desvioRepListo[i])
+            {
+                desvioRep[i]       = crudo;
+                desvioRepListo[i]  = true;
+                reposoDesde_ms[i]  = ahora;
+            }
+            else
+            {
+                const float alfa = dt / (GuardConfig::TAU_REPOSO_S + dt);
+                desvioRep[i] += alfa * (crudo - desvioRep[i]);
+            }
+
+            // La firma se anota en CADA parada, cuando el promedio ya se
+            // asento: es el error sistematico acumulado hasta este momento
+            // (ganancia del encoder ciclo a ciclo), que no hay que detectar
+            // sino descontar. A partir de ahi solo se mira lo que cambie
+            // mientras el robot sigue quieto.
+            if (!firmaLista[i] &&
+                (uint32_t)(ahora - reposoDesde_ms[i]) >= GuardConfig::FIRMA_REPOSO_MS)
+            {
+                firmaRep[i]   = desvioRep[i];
+                firmaLista[i] = true;
+
+                Serial.print("[GUARD] eje ");
+                Serial.print(i + 1);
+                Serial.print(": firma de reposo en home = ");
+                Serial.print(firmaRep[i], 2);
+                Serial.println(" grados");
+            }
+
+            // Sin firma no hay contra que comparar: no se evalua nada.
+            const float desvioReposo =
+                firmaLista[i] ? fabsf(desvioRep[i] - firmaRep[i]) : 0.0f;
+
+            if (desvioReposo > picoRep[i])
+            {
+                picoRep[i] = desvioReposo; // para elegir el umbral con datos
+            }
+
+            if (desvioReposo > umbralReposoDeg)
+            {
+                sospechaReposo = true;
+
+                if (!enFaltaRep[i])
+                {
+                    enFaltaRep[i]       = true;
+                    faltaRepDesde_ms[i] = ahora;
+                }
+                else if ((uint32_t)(ahora - faltaRepDesde_ms[i]) >= confirmacionReposoMs)
+                {
+                    if (observar)
+                    {
+                        if (ultimoAvisoObs_ms == 0 ||
+                            (uint32_t)(ahora - ultimoAvisoObs_ms) > REPETIR_AVISO_OBS_MS)
+                        {
+                            ultimoAvisoObs_ms = ahora;
+                            Serial.print("[GUARD] (observando) descalibracion en home: eje ");
+                            Serial.print(i + 1);
+                            Serial.print(" err=");
+                            Serial.print(error, 1);
+                            Serial.print(" umbral_reposo=");
+                            Serial.println(umbralReposoDeg, 1);
+                        }
+                        enFaltaRep[i] = false;
+                    }
+                    else
+                    {
+                        motivoFallo   = MOTIVO_DESCALIBRACION;
+                        ejeFallo      = i;
+
+                        // Se informa el desvio TOTAL contra el homing (con
+                        // lo que la fuga absorbio ya devuelto), que es el
+                        // numero que significa algo: el error crudo puede
+                        // ser mucho menor y confundir a quien lea el log.
+                        errorFallo    = error - comun + fugaAcumulada[i];
+                        cmdDeltaFallo = cmdDelta[i];
+                        encDeltaFallo = encDelta[i] + fugaAcumulada[i];
+
+                        desarmar();
+                        return true;
+                    }
+                }
+            }
+            else
+            {
+                enFaltaRep[i] = false;
+            }
+        }
+        else
+        {
+            // Fuera de home (o todavia asentandose): la sospecha se descarta,
+            // y tanto el promedio como la firma se rehacen en la proxima
+            // parada. Lo segundo es lo que hace al chequeo inmune a la
+            // deriva de medicion que se acumula ciclo a ciclo (ver
+            // CollisionGuard.h): cada parada empieza de cero.
+            enFaltaRep[i]     = false;
+            desvioRepListo[i] = false;
+            firmaLista[i]     = false;
+        }
+
+        // --- Aviso por deriva absorbida (red lenta, no frena) ---
+        if (!avisoDeriva[i] && fabsf(fugaAcumulada[i]) > GuardConfig::DERIVA_AVISO_DEG)
+        {
+            avisoDeriva[i] = true;
+
+            Serial.print("[GUARD] eje ");
+            Serial.print(i + 1);
+            Serial.print(": la fuga lleva absorbidos ");
+            Serial.print(fugaAcumulada[i], 1);
+            Serial.println(" grados desde el homing. Si sigue creciendo para el");
+            Serial.println("        mismo lado, se estan perdiendo pasos de verdad.");
+        }
+
         // --- Fuga de la referencia con el eje en reposo ---
         // Borra despacio lo que haya quedado de cada tramo, para que no se
         // vaya acumulando ciclo a ciclo hasta llegar al umbral solo.
-        if (GuardConfig::FUGA_REPOSO_SEG > 0.0f && asentado)
+        //
+        // Se suspende mientras hay una sospecha de reposo en curso: si no,
+        // se comeria en 1,5 s justo el error que se esta tratando de
+        // confirmar, y el chequeo de arriba no dispararia nunca.
+        if (GuardConfig::FUGA_REPOSO_SEG > 0.0f && asentado && !sospechaReposo)
         {
             const float fraccion = dt / GuardConfig::FUGA_REPOSO_SEG;
             const float corrimiento = error * (fraccion < 1.0f ? fraccion : 1.0f);
@@ -634,6 +826,7 @@ bool CollisionGuard::actualizar(long pasos1, long pasos2, long pasos3)
         }
 
         colision      = true;
+        motivoFallo   = MOTIVO_COLISION;
         ejeFallo      = i;
         errorFallo    = error;
         cmdDeltaFallo = cmdDelta[i];
@@ -692,6 +885,12 @@ float CollisionGuard::picoHistorico(uint8_t eje) const
 {
     if (eje >= NUM_EJES) return 0.0f;
     return picoHist[eje];
+}
+
+float CollisionGuard::picoEnReposo(uint8_t eje) const
+{
+    if (eje >= NUM_EJES) return 0.0f;
+    return picoRep[eje];
 }
 
 float CollisionGuard::encDeltaActual(uint8_t eje) const
@@ -780,6 +979,15 @@ void CollisionGuard::setUmbral(float grados)
     if (grados < 1.0f)  grados = 1.0f;   // por debajo de esto es todo ruido
     if (grados > 90.0f) grados = 90.0f;
     umbralDeg = grados;
+}
+
+void CollisionGuard::setUmbralReposo(float grados)
+{
+    // Por debajo de 2 grados se entra en el ruido propio del encoder; por
+    // encima de 20 ya no distingue nada que el umbral normal no viera.
+    if (grados < 2.0f)  grados = 2.0f;
+    if (grados > 20.0f) grados = 20.0f;
+    umbralReposoDeg = grados;
 }
 
 void CollisionGuard::setConfirmacion(uint32_t ms)

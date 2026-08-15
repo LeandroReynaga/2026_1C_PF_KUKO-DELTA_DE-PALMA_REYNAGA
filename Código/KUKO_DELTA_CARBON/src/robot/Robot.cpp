@@ -21,7 +21,7 @@ Pneumatics pneumatics;
 //  aca (y recalibrar el PWM de Conveyor::begin(), que hoy arranca al 60%
 //  sin relacion medida con las rpm reales).
 // ============================================================
-static const float BELT_VELOCITY_CMS = 6.75f; //antes 7.54
+static const float BELT_VELOCITY_CMS = 7.2f; //antes 7.54, despues 6.75
 static const float DETECTION_LINE_X  = -23.0f; // donde la camara detecta las piezas
 
 // Ancho util de la cinta (Y). Fuera de esto el dato de vision es erroneo.
@@ -57,7 +57,7 @@ static const float BELT_MAX_Y = 11.2f;
 //
 // Valor actual: se midio 1,5 cm de atraso con la cinta a 7,54 cm/s
 //     1,5 / 7,54 = 0,199 s
-static const float VISION_LATENCY_S = 0.18f; // antes 0.2
+static const float VISION_LATENCY_S = 0.15f; // antes 0.2
 
 // ============================================================
 //  GEOMETRIA DE AGARRE (coordenadas de la PUNTA del gripper)
@@ -176,7 +176,7 @@ static const uint8_t BOX_MAX_POR_COLOR = 3;
 // todavia tocandola, asi que tiene menos ayuda para despegarse. Si igual
 // sale pegada al gripper, este es el numero a subir (y la solucion de
 // fondo, la misma que en el tacho: la electrovalvula que falta).
-static const uint32_t BOX_RELEASE_DETACH_MS = 175;
+static const uint32_t BOX_RELEASE_DETACH_MS = 0;
 
 // Ventana para confirmar un cambio de modo que cruza el limite de la tapa.
 static const uint32_t CONFIRMACION_TAPA_MS = 10000;
@@ -192,7 +192,7 @@ static const uint32_t BIN_SETTLE_MS         = 5;  // quieto sobre el tacho antes
 // la linea de vacio al apagar la bomba. Cuando este montada (misma senal
 // que la bomba, no cambia el pinout) la pieza cae en el instante y este
 // tiempo se puede bajar a ~100 ms.
-static const uint32_t RELEASE_DETACH_MS = 50;
+static const uint32_t RELEASE_DETACH_MS = 80;
 
 // Margen de atraso tolerable al llegar al punto de aproximacion antes de
 // dar por perdido el instante de encuentro y replanificar.
@@ -326,6 +326,7 @@ void Robot::begin()
     Serial.println("  T<ms>           tiempo de confirmacion. Ej: T80");
     Serial.println("  K<ms>           margen por velocidad. Ej: K80");
     Serial.println("  L<ms>           atraso del encoder a compensar. Ej: L70");
+    Serial.println("  Q<grados>       umbral con el robot quieto en home. Ej: Q5");
 
     if (!boxLayoutValido)
     {
@@ -577,14 +578,16 @@ void Robot::procesarComando(char *cmd, uint8_t len)
     }
 
     // --- Ajuste en caliente de la supervision: 'U<grados>', 'T<ms>',
-    //     'K<ms>' (margen por velocidad) y 'L<ms>' (atraso a compensar) ---
+    //     'K<ms>' (margen por velocidad), 'L<ms>' (atraso a compensar) y
+    //     'Q<grados>' (umbral con el robot quieto en home) ---
     // No llevan coma, asi que no se confunden nunca con un mensaje de pieza
     // (que siempre tiene dos). Sirven para barrer valores sin recompilar;
     // el definitivo va en GuardConfig, en CollisionGuard.h.
     {
         const char letra = toupper(cmd[0]);
 
-        if ((letra == 'U' || letra == 'T' || letra == 'K' || letra == 'L') &&
+        if ((letra == 'U' || letra == 'T' || letra == 'K' || letra == 'L' ||
+             letra == 'Q') &&
             strchr(cmd, ',') == NULL)
         {
             char *finValor = NULL;
@@ -619,6 +622,13 @@ void Robot::procesarComando(char *cmd, uint8_t len)
                     Serial.print("[GUARD] margen por velocidad = ");
                     Serial.print(guard.margenVelocidad());
                     Serial.println(" ms");
+                    break;
+
+                case 'Q':
+                    guard.setUmbralReposo(valor);
+                    Serial.print("[GUARD] umbral en reposo (home) = ");
+                    Serial.print(guard.umbralReposo(), 1);
+                    Serial.println(" grados");
                     break;
 
                 default:
@@ -1318,10 +1328,42 @@ bool Robot::goToPositionIK(float x, float y, float z, const Motors::MotionLimits
 
 void Robot::updateGoHomeIdle()
 {
-    // Si aparece una pieza mientras vuelve a home, se interrumpe el regreso
-    // y sale a buscarla desde donde este: el proximo moveSynchronized
-    // recalcula todo desde la posicion actual.
-    if (queueCount > 0 && iniciarSiguientePieza())
+    // Si aparece una pieza mientras vuelve a home, se sale a buscarla --
+    // pero SOLO con el brazo ya frenado (el enPosicion()).
+    //
+    // POR QUE: Stepper::moveTo() fija el pin de direccion y reinicia la
+    // rampa sin mirar si el eje ya venia andando (ver el comentario en
+    // Stepper.cpp). Si el destino nuevo queda del otro lado, el driver
+    // invierte el sentido con el rotor girando, cosa que ningun paso a paso
+    // puede seguir. Medido en el banco de pruebas: cada interrupcion del
+    // regreso invertia un eje a hasta 36.000 pasos/s.
+    //
+    // HONESTIDAD SOBRE LO QUE ESTO ARREGLA: se sospechaba que era la causa
+    // de la descalibracion que aparecia sola cada tantas piezas, y NO LO
+    // ES. Probado en el robot, con 9 de cada 10 ciclos interrumpidos a
+    // proposito (disparando la pieza justo cuando arranca el regreso):
+    //
+    //     sin esta espera   deriva max por eje  19,1 / 21,0 / 19,1
+    //     con esta espera   deriva max por eje  22,1 / 19,7 / 16,5
+    //
+    // O sea lo mismo. Se deja igual porque la inversion en movimiento es
+    // real y no cuesta nada evitarla, pero la descalibracion hay que
+    // buscarla en otro lado.
+    //
+    // Esperar cuesta muy poco: el regreso a home dura menos de medio
+    // segundo, y la pieza recien detectada necesita ~1,7 s para llegar al
+    // area de agarre, asi que el brazo la va a esperar igual parado en el
+    // punto de aproximacion. Medido: 18 de 18 piezas agarradas, ninguna
+    // perdida por esperar.
+    //
+    // De paso el plan sale mejor: ConveyorIntercept estima el tiempo de
+    // viaje suponiendo que el brazo ARRANCA DETENIDO, cosa que solo es
+    // cierta si efectivamente lo esta.
+    //
+    // Ojo: en la primera vuelta de este estado el brazo todavia esta parado
+    // sobre el tacho (el movimiento a home ni se lanzo), asi que ahi la
+    // pieza se toma en el acto y no se pierde nada de productividad.
+    if (queueCount > 0 && enPosicion() && iniciarSiguientePieza())
     {
         return;
     }
@@ -1884,6 +1926,13 @@ void Robot::updateBoxLift()
 
 void Robot::supervisarColision()
 {
+    // Quieto en home esperando piezas: la unica situacion en la que el guard
+    // puede exigir un umbral chico (ver el chequeo en reposo en
+    // CollisionGuard.h). WAIT_PIECE es exactamente eso -- se entra recien
+    // cuando el movimiento a home termino -- asi que no hace falta mirar
+    // nada mas.
+    guard.setEnHome(state == WAIT_PIECE);
+
     // Se llama SIEMPRE, aunque las paradas esten apagadas: con 'G' el guard
     // pasa a modo observador (mide y avisa, no frena), asi la traza, los
     // picos y la ganancia medida siguen sirviendo mientras se calibra.
@@ -1936,17 +1985,37 @@ void Robot::dispararColision(uint8_t eje, float errorDeg, float cmdDelta, float 
     // recalibrado y listo para trabajar.
     conveyor.stop();
 
-    registrarFallo(FALLO_COLISION, (uint8_t)(eje + 1), errorDeg, cmdDelta, encDelta);
+    // Los dos motivos terminan igual (frenar y recalibrar), pero no son lo
+    // mismo para quien despues lee el registro: uno es un golpe, el otro es
+    // el robot perdiendo la calibracion solo, sin que nadie lo toque.
+    const bool descalibracion =
+        (guard.motivoDelFallo() == CollisionGuard::MOTIVO_DESCALIBRACION);
 
-    Serial.print("[COLISION] eje ");
-    Serial.print(eje + 1);
-    Serial.print(": el encoder marca ");
-    Serial.print(errorDeg, 1);
-    Serial.print(" grados de diferencia con los pasos (pasos ");
-    Serial.print(cmdDelta, 1);
-    Serial.print(" / encoder ");
-    Serial.print(encDelta, 1);
-    Serial.println(")");
+    registrarFallo(descalibracion ? FALLO_DESCALIBRACION : FALLO_COLISION,
+                   (uint8_t)(eje + 1), errorDeg, cmdDelta, encDelta);
+
+    if (descalibracion)
+    {
+        Serial.print("[DESCALIBRACION] eje ");
+        Serial.print(eje + 1);
+        Serial.print(": quieto en home el encoder marca ");
+        Serial.print(errorDeg, 1);
+        Serial.println(" grados de diferencia con los pasos.");
+        Serial.println("[DESCALIBRACION] No es un choque: se perdieron pasos, o alguien");
+        Serial.println("        movio el brazo, o hay algo flojo. Se recalibra.");
+    }
+    else
+    {
+        Serial.print("[COLISION] eje ");
+        Serial.print(eje + 1);
+        Serial.print(": el encoder marca ");
+        Serial.print(errorDeg, 1);
+        Serial.print(" grados de diferencia con los pasos (pasos ");
+        Serial.print(cmdDelta, 1);
+        Serial.print(" / encoder ");
+        Serial.print(encDelta, 1);
+        Serial.println(")");
+    }
 
     colisionesSeguidas++;
 
@@ -2105,6 +2174,12 @@ void Robot::imprimirEstadoSupervision() const
     Serial.print(guard.retardo());
     Serial.println(" ms");
 
+    Serial.print("[GUARD] en reposo (home): umbral=");
+    Serial.print(guard.umbralReposo(), 1);
+    Serial.print(" grados  confirmacion=");
+    Serial.print(GuardConfig::CONFIRMACION_REPOSO_MS);
+    Serial.println(" ms");
+
     for (uint8_t i = 0; i < 3; i++)
     {
         // err     lo que ve el guard ahora mismo
@@ -2124,6 +2199,12 @@ void Robot::imprimirEstadoSupervision() const
         Serial.print(guard.picoDesdeHoming(i), 2);
         Serial.print("  pico_total=");
         Serial.print(guard.picoHistorico(i), 2);
+        // pico_reposo  el peor error visto QUIETO EN HOME: es el piso de
+        //              ruido real de esa pose, y con el se elige
+        //              UMBRAL_REPOSO_DEG (que tiene que quedarle 2 o 3
+        //              veces por encima)
+        Serial.print("  pico_reposo=");
+        Serial.print(guard.picoEnReposo(i), 2);
         Serial.print("  umbral_ef=");
         Serial.print(guard.umbralEfectivo(i), 1);
         Serial.print("  gan=");
@@ -2164,6 +2245,7 @@ void Robot::imprimirEstadoSupervision() const
 // cuando no se puede pedir 'S' a mano:
 //
 //   pico  peor error desde el homing -> con esto se elige el umbral fijo
+//   prep  peor error QUIETO EN HOME -> con esto se elige UMBRAL_REPOSO_DEG
 //   gan   encoder/pasos con el eje frenado; tiene que dar ~1.00
 //   atr   atraso de la medicion en ms (error/velocidad en marcha)
 //   fuga  grados de deriva que la fuga en reposo lleva absorbidos: si crece
@@ -2180,6 +2262,8 @@ void Robot::imprimirDiagnosticoCorto() const
         Serial.print(guard.errorActual(i), 1);
         Serial.print(" pico=");
         Serial.print(guard.picoDesdeHoming(i), 1);
+        Serial.print(" prep=");
+        Serial.print(guard.picoEnReposo(i), 1);
         Serial.print(" gan=");
         Serial.print(guard.gananciaMedida(i), 3);
         Serial.print(" atr=");

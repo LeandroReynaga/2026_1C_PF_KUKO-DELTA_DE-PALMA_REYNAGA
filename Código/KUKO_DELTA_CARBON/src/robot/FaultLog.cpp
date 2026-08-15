@@ -17,11 +17,12 @@ const char *FaultLog::nombreTipo(uint8_t tipo)
 {
     switch (tipo)
     {
-        case FALLO_COLISION: return "COLISION";
-        case FALLO_ENCODER:  return "ENCODER";
-        case FALLO_HOMING:   return "HOMING";
-        case FALLO_MANUAL:   return "MANUAL";
-        default:             return "?";
+        case FALLO_COLISION:      return "COLISION";
+        case FALLO_ENCODER:       return "ENCODER";
+        case FALLO_HOMING:        return "HOMING";
+        case FALLO_MANUAL:        return "MANUAL";
+        case FALLO_DESCALIBRACION: return "DESCALIBRACION";
+        default:                  return "?";
     }
 }
 

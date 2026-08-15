@@ -128,7 +128,21 @@ CAMERA_ROTATION = "90_CLOCKWISE"
 # OJO: es una fracción del recorte, no de la imagen completa. Si se
 # cambian los CROP_X_*_RATIO, la línea se mueve sola y hay que
 # reajustar este número.
-LINE_X_RATIO = 0.60
+#
+# Corrido 0,5 cm a la IZQUIERDA (antes 0.60): la línea dibujada caía
+# medio centímetro corriente abajo de la línea real medida sobre la
+# cinta, así que el cruce se avisaba con la pieza ya un poco pasada.
+#
+# La cuenta, con el fotograma recortado de 598 px de ancho y
+# IMAGE_WIDTH_CM = 21,5:
+#
+#   escala   21,5 / 597 = 0,036 cm/px  ->  27,8 px/cm
+#   0,5 cm   = 13,9 px
+#   main.py usa int(598 * ratio): 0.60 -> 358 px, 0.576 -> 344 px
+#   corrimiento real = 14 px = 0,504 cm
+#
+# A 6,75 cm/s de cinta, eso adelanta el aviso unos 74 ms.
+LINE_X_RATIO = 0.576
 
 # Sentido de movimiento de la cinta en pantalla:
 #
@@ -269,18 +283,58 @@ COLOR_HSV_RANGES = {
     #   S llega a 255 y no a 200   -> recupera las zonas más
     #       intensas de la pieza, que el tope viejo recortaba.
     "AZUL": (
-        ((96, 95, 100), (112, 255, 255)),
+        ((98, 95, 100), (112, 255, 255)),
     ),
-    # Verde. TODAVÍA SIN CALIBRAR: las piezas verdes no están
-    # impresas. Este rango es un punto de partida razonable (el
-    # verde ocupa un sector ancho y despejado de la rueda de Hue,
-    # lejos del gris de la cinta), pero apenas tengas las piezas
-    # pasale hsv_calibrator.py y reemplazá estos números.
+    # Verde. Calibrado sobre la pieza CLARA, que es la problemática:
+    # es tan brillante que se sobreexpone y llega a V=255 en toda su
+    # superficie. Aun así conserva color (S≈99), así que se detecta
+    # bien; lo que la hacía fallar no era el color sino el BORDE.
     #
-    # Se verificó lo único verificable sin piezas: que sobre la
-    # cinta vacía no dispare falsos positivos.
+    # Medido con la cinta quieta, 30 fotogramas por zona:
+    #
+    #                    H (p5-p95)   S (p5-p95)   V (p5-p95)
+    #     pieza verde       74-77       78-109      255-255
+    #     cinta gris        82-95       31-56       138-174
+    #
+    # El problema estaba en el piso de V. Con V bajo entraba en la
+    # máscara el halo de píxeles de CINTA que rodea la pieza, y ese
+    # halo le comía el contorno: el círculo dejaba de llenar el 90%
+    # de su círculo envolvente y classify_shape lo leía HEXÁGONO
+    # (ver HEXAGON_FILL_RATIO_MAX). O sea que el síntoma no era
+    # "no la detecta" sino "la detecta con la forma equivocada".
+    #
+    # Barrido sobre 60 fotogramas, midiendo lo mismo que se midió
+    # para elegir el rango del azul (calidad de forma, no cantidad
+    # de píxeles capturados):
+    #
+    #                            círculo OK   llenado (mín)   falsas
+    #   (40,60,60)-(85,255,255)     50/60       0.896 (0.50)     0
+    #   (40,50,80)-(85,255,255)     25/60       0.761 (0.62)     5
+    #   (55,55,200)-(85,255,255)    60/60       0.974 (0.97)     0
+    #   (55,60,200)-(85,255,255)    60/60       0.974 (0.97)     0  <- este
+    #   (60,60,190)-(85,255,255)    60/60       0.972 (0.97)     0
+    #
+    # Los tres umbrales del mínimo, y por qué cada uno:
+    #
+    #   V=200  es EL número. La cinta llega a V=174, así que 200 la
+    #       deja afuera con margen. Y hay acantilado: con V=170 se
+    #       cae a 12/25 círculos. La pieza está clavada en 255, así
+    #       que subir hasta 200 no le cuesta nada.
+    #   S=60   segunda barrera, apenas por encima del techo de la
+    #       cinta (56). No se puede subir mucho más: la pieza tiene
+    #       zonas de S≈78 y se empezaría a agujerear.
+    #   H=55-85 tercera barrera. La pieza está en 74-77, bien
+    #       centrada, y el techo 85 queda por debajo del piso de Hue
+    #       de la cinta (82-95). No subirlo.
+    #
+    # Cuando lleguen las piezas de verde OSCURO Y PURO hay que
+    # rehacer esto: van a tener S alta y V media, o sea que el piso
+    # de V va a tener que BAJAR bastante (200 las dejaría afuera) y
+    # el de S va a poder subir. El procedimiento es este mismo:
+    # hsv_calibrator.py para los números, y después mirar cuántos
+    # círculos de 60 salen bien, que es lo único que importa.
     "VERDE": (
-        ((40, 60, 60), (85, 255, 255)),
+        ((55, 60, 200), (85, 255, 255)),
     ),
 }
 

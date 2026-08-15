@@ -157,6 +157,25 @@ void Stepper::moveSteps(long steps)
     moveTo(currentPosition + steps);
 }
 
+// OJO: ESTO SE LLAMA CON EL EJE DETENIDO.
+//
+// No hay ninguna transicion suave. Se fija el pin de direccion segun el
+// destino nuevo y se reinicia la rampa (n = 0, o sea que el tren de pulsos
+// vuelve al intervalo de arranque). Si el eje YA VENIA ANDANDO y el destino
+// nuevo queda del otro lado, el driver invierte el sentido con el rotor
+// girando: eso no lo puede seguir ningun paso a paso y se pierden pasos, sin
+// que el robot choque contra nada ni se entere.
+//
+// Paso de verdad: cuando una pieza entraba justo mientras el brazo volvia a
+// home, Robot le cambiaba el destino a mitad de camino y un eje se invertia
+// a 36.000 pasos/s. El sintoma era una descalibracion que aparecia "sola"
+// cada tantas piezas. Se arreglo en updateGoHomeIdle() esperando a
+// enPosicion() antes de salir a buscar la pieza.
+//
+// Si alguna vez hace falta redirigir el brazo en movimiento de verdad (para
+// no perder productividad), no alcanza con llamar aca: hay que frenar
+// primero con rampa y recien despues fijar el destino nuevo. stop() TAMPOCO
+// sirve para eso, porque corta los pulsos de golpe.
 void Stepper::moveTo(long position)
 {
     portENTER_CRITICAL(&mux);

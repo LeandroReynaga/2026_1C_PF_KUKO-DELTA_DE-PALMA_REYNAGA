@@ -37,13 +37,41 @@ constexpr float UMBRAL_DEG = 12.0f;
 // detectarse una colision a maxima velocidad: el error de un brazo trabado
 // crece a la velocidad comandada, asi que pasa el margen en ~este tiempo.
 //
-// Arranca generoso a proposito (120 ms): tiene que ser mayor que el atraso
-// real de la medicion. Con el atraso ya medido y compensado
-// (RETARDO_ENCODER_MS) este margen puede bajar a 30-40 ms, y ahi la
-// deteccion pasa a ser bastante mas rapida.
+// Arrancaba en 120 ms, elegido a ojo por ser "mayor que el atraso real".
+// Medido despues sobre el robot -- traza a 20 Hz durante ciclos completos,
+// mirando la magnitud que el detector realmente evalua, o sea el error YA
+// sin el modo comun -- resulto muy sobredimensionado:
 //
-// En caliente se cambia con 'K120' por Serial.
-constexpr uint32_t MARGEN_VELOCIDAD_MS = 120;
+//                    |err| max    |err - comun| max    margen necesario
+//     eje 1             24,9              13,9                7 ms
+//     eje 2             25,6              10,3            no hizo falta
+//     eje 3             30,9              37,1              181 ms
+//
+// La primera columna es lo que asusta, pero no es lo que se compara: los
+// tres ejes se mueven juntos y ese error comun se cancela con la mediana.
+// Lo que queda es chico en los ejes 1 y 2.
+//
+// Y lo que decide un falso positivo no es el pico sino cuanto se SOSTIENE.
+// Barriendo el registro con umbrales de 12 a 6 grados y margenes de 120 a
+// 40 ms, en ningun caso hubo dos muestras seguidas por encima del umbral:
+// solo 3 cruces aislados, todos del eje 3, que los 60 ms de confirmacion
+// descartan. O sea que habia margen de sobra para bajarlo.
+//
+// Se baja a la mitad y no mas, para dejar factor 1,5 sobre los 40 ms que
+// todavia daban cero cruces sostenidos. Validado en el robot con 'K60': 7
+// ciclos completos, cero falsos positivos.
+//
+// Efecto: a 280 grados/s el umbral efectivo pasa de 12+34=46 grados a
+// 12+17=29. Las colisiones medianas, que antes se colaban enteras por
+// debajo, ahora entran.
+//
+// El eje 3 es el que manda en este numero: se desvia del modo comun mucho
+// mas que los otros dos (37 grados contra 14 y 10) y su "atraso medido" da
+// con el signo cambiado. Vale la pena mirarle el iman y el filtro RC; si se
+// le encuentra la vuelta, este margen puede bajar bastante mas.
+//
+// En caliente se cambia con 'K60' por Serial.
+constexpr uint32_t MARGEN_VELOCIDAD_MS = 60;
 
 // El margen no sigue a la velocidad instantanea sino a un PICO que decae.
 // Al terminar un movimiento la velocidad comandada se va a cero, pero el
@@ -103,6 +131,136 @@ constexpr bool FRENAR_POR_COLISION = true;
 //
 // En caliente se cambia con 'T80' por Serial.
 constexpr uint32_t CONFIRMACION_MS = 60;
+
+// ============================================================
+//  CHEQUEO EN REPOSO (el robot quieto en home)
+// ============================================================
+// El umbral de arriba tiene que aguantar el peor caso: brazo a maxima
+// velocidad, con el encoder llegando tarde y el ruido de la rampa encima.
+// Por eso es grande, y por eso una colision que no llega a ser brutal
+// puede pasar desapercibida.
+//
+// Pero cuando el robot esta QUIETO EN HOME esperando piezas, ninguna de
+// esas fuentes de error existe: no hay atraso de medicion (no se mueve
+// nada), no hay rampa, no hay vibracion. Lo unico que queda es el ruido
+// propio del encoder (~1 grado) y lo que le erre la linealidad del AS5600
+// entre esta pose y la del homing, que se puede leer en la ganancia (con
+// gan=0,98 sobre los 45 grados que separan home del endstop, es 1 grado).
+//
+// O sea que ahi se puede exigir MUCHO mas: si con el brazo frenado en la
+// misma pose de siempre el encoder marca 5 grados de mas, no es ruido ni
+// atraso -- se perdieron pasos, o alguien movio el brazo, o se aflojo una
+// polea. Nada de eso lo ve el umbral de 12 grados, y todo eso arruina la
+// precision del ciclo siguiente sin avisar.
+//
+// Como no hay ninguna urgencia (el robot esta parado), la confirmacion se
+// puede hacer LARGA: 1,5 segundos de error sostenido no lo produce ningun
+// ruido, y elimina de raiz los falsos positivos.
+//
+// LO QUE NO SE PUEDE HACER es comparar el error instantaneo contra un
+// umbral chico. Medido sobre este robot, con el brazo frenado en home
+// (traza a 20 Hz, 42 s):
+//
+//                 sigma    pico instantaneo    pico promediando 1 s
+//     eje 1       1,22          4,00                  0,81
+//     eje 2       1,30          5,62                  0,77
+//     eje 3       1,16          5,08                  0,77
+//
+// O sea que el encoder tira picos sueltos de hasta 5 grados estando todo
+// perfecto -- por eso el umbral en marcha es de 12. Pero ese ruido es
+// RAPIDO y de media cero: promediado un segundo se cae a 0,8 grados. Una
+// descalibracion, en cambio, es un corrimiento que no se va, y atraviesa el
+// promedio sin perder nada.
+//
+// Por eso el chequeo compara el desvio PROMEDIADO (constante de tiempo
+// TAU_REPOSO_S) y no el instantaneo.
+//
+// Aun asi queda un resto que no es ruido: promediado, el desvio en home da
+// 1,5 a 2,5 grados segun el eje, siempre el mismo y siempre para el mismo
+// lado. Es ERROR DE GANANCIA del encoder, no descalibracion: con gan=0,94
+// sobre los 45 grados que separan home del endstop salen justo 2,7. Es una
+// propiedad fija de la cadena de medicion, no algo que haya que detectar.
+//
+// Por eso el desvio se mide contra una FIRMA: al quedarse quieto se anota
+// cuanto marca, y a partir de ahi se compara contra eso. Lo sistematico se
+// cancela solo y el umbral queda midiendo unicamente lo que CAMBIA.
+//
+// Y LA FIRMA SE REHACE EN CADA PARADA, no una vez por homing. Esto es lo
+// mas importante de todo el chequeo y se descubrio midiendo: contra la
+// referencia del homing el desvio en reposo CRECE COMO UN GRADO POR CICLO,
+// y despues de 6 u 8 piezas se pasa de cualquier umbral razonable. Medido
+// con 8 agarres seguidos: la fuga tuvo que absorber 6,4 / 7,2 / 4,0 grados,
+// y el chequeo disparo dos veces (-7,2 y -9,0 grados) con el robot
+// funcionando perfecto.
+//
+// Eso NO es perdida de pasos: 9 grados de eje son 2,8 cm en la punta del
+// gripper, y con semejante corrimiento el robot no habria agarrado una sola
+// pieza -- agarro las 8, sin perder una ventana. Lo que se corre es la
+// MEDICION: el angulo continuo del encoder no cierra exactamente cada
+// excursion de 45 grados (se ve en la ganancia, 0,92 a 0,98), y esa
+// diferencia se acumula vuelta a vuelta. Para eso existe la fuga.
+//
+// Rehaciendo la firma en cada parada, el chequeo mide solo lo que pasa
+// MIENTRAS el robot esta quieto -- un empujon, alguien que se apoya, el
+// brazo que se cae por su peso si algo se aflojo -- y es inmune a esa
+// acumulacion. Lo que se descalibre durante un movimiento es problema del
+// umbral en marcha, no de este.
+//
+// Con eso el piso queda en el ruido del promedio. Medido sobre el robot,
+// "pico_reposo" durante produccion normal:
+//
+//     tipico          0,3 a 1,1 grados
+//     picos           hasta 4,0 (aparecen despues de un ciclo, no en el
+//                     reposo largo, donde se queda clavado en 0,3-0,5)
+//
+// Por eso el umbral va en 6 y no en 4: con 4 el margen contra el peor caso
+// medido era del 0% y lo unico que evitaba el disparo era la confirmacion
+// de 1,5 s -- o sea que se estaba dependiendo de la red de atras en vez del
+// umbral. Con 6 quedan 1,5x sobre ese peor caso y sigue siendo menos de la
+// mitad del umbral en marcha. En la punta del gripper son ~1,8 cm.
+//
+// Si en tu banco "pico_reposo" se queda siempre por debajo de 1, se puede
+// bajar a 3 o 4 con 'Q' y ganar sensibilidad; el criterio es dejar al menos
+// el doble del peor pico que veas en una corrida larga.
+//
+// COMO REVISARLO: 'S' informa "pico_reposo" por eje, que es el peor desvio
+// (ya promediado y ya sin la firma) desde el homing. Tiene que quedar bien
+// por debajo del umbral; si se le acerca, no hay que subir el umbral sin
+// entender por que -- eso ya es una descalibracion de verdad.
+constexpr float    UMBRAL_REPOSO_DEG      = 4.0f; // antes 6 sin falsos positivos.
+constexpr float    TAU_REPOSO_S           = 1.0f;
+
+// La confirmacion es lo que separa una descalibracion de una perturbacion
+// de la medicion: si el brazo se movio de verdad el desvio es permanente
+// (se queda hasta el proximo homing), mientras que una perturbacion
+// electrica pasa. Un segundo y medio ya deja afuera las conocidas de este
+// robot -- la conmutacion de la bomba dura ~300 ms -- y como el robot esta
+// parado esperando piezas, esperar no cuesta nada.
+//
+// Verificado en el robot: empujando un brazo con la mano en home, lo
+// detecto ~5 s despues (el promedio tarda en cargar y despues confirma), en
+// el eje correcto, con denc=48,5 contra dcmd=45,1.
+constexpr uint32_t CONFIRMACION_REPOSO_MS = 1500;
+
+// Cuanto tiene que llevar quieto en home antes de anotar la firma: lo
+// suficiente para que el promedio se asiente (3 constantes de tiempo).
+//
+// De paso es lo que hace que el chequeo NO moleste durante la produccion:
+// entre pieza y pieza el robot no se queda 3 segundos quieto, asi que el
+// chequeo ni se arma. Corre en los ratos muertos, que es justo para lo que
+// se pidio.
+//
+// Medido con estos valores: firma tomada a los 3 s de llegar a home, y
+// despues 100 segundos con "pico_reposo" entre 0,5 y 0,9 grados, sin
+// moverse de ahi y sin un solo disparo en falso.
+constexpr uint32_t FIRMA_REPOSO_MS = 3000;
+
+// Aviso (NO frena) cuando la fuga en reposo lleva absorbidos mas de estos
+// grados desde el homing. La fuga existe para borrar lo que sobra de cada
+// tramo, pero si lo que borra crece sin parar y siempre para el mismo lado,
+// no esta limpiando ruido: esta tapando perdida de pasos. Es la red lenta,
+// complementaria del chequeo de arriba.
+constexpr float DERIVA_AVISO_DEG = 15.0f;
 
 // ============================================================
 //  ZONA CIEGA DEL ADC (limites de lectura confiable)
@@ -209,7 +367,22 @@ public:
         ARMADO       // supervisando
     };
 
+    // Que disparo el ultimo fallo. Los dos terminan igual (frenar y
+    // recalibrar), pero no significan lo mismo para el que mira el log: uno
+    // es un golpe, el otro es el robot perdiendo la calibracion solo.
+    enum Motivo : uint8_t
+    {
+        MOTIVO_COLISION = 0,      // el brazo no llego donde decian los pasos
+        MOTIVO_DESCALIBRACION = 1 // quieto en home, el encoder no marca lo de siempre
+    };
+
     void begin();
+
+    // Robot avisa si esta parado en home esperando piezas. Es la unica
+    // situacion en la que se puede exigir un umbral chico, porque es la
+    // unica en la que no hay ni atraso de medicion ni dinamica: misma pose
+    // conocida, brazo frenado y sin nada en la mano.
+    void setEnHome(bool enHome);
 
     // Arranca la ventana de promediado de la referencia. Se llama con el
     // robot QUIETO (los 3 ejes ya en su endstop), al mismo tiempo que
@@ -247,6 +420,7 @@ public:
     bool    armado() const   { return est == ARMADO; }
     bool    inhibido() const { return inhibidoPorConfig; }
 
+    Motivo  motivoDelFallo() const   { return motivoFallo; }
     uint8_t ejeDelFallo() const      { return ejeFallo; }      // 0-2
     float   errorDelFallo() const    { return errorFallo; }    // grados
     float   cmdDeltaDelFallo() const { return cmdDeltaFallo; } // grados recorridos segun los pasos
@@ -254,6 +428,11 @@ public:
 
     float errorActual(uint8_t eje) const;
     float picoDesdeHoming(uint8_t eje) const;
+
+    // Peor error visto con el robot QUIETO EN HOME desde el ultimo homing.
+    // Es el numero con el que se elige UMBRAL_REPOSO_DEG: mide el piso de
+    // ruido real de esa pose, sin nada de dinamica encima.
+    float picoEnReposo(uint8_t eje) const;
     float picoHistorico(uint8_t eje) const;
     bool  sensorCaido(uint8_t eje) const;
 
@@ -305,10 +484,12 @@ public:
     void     setConfirmacion(uint32_t ms);
     void     setMargenVelocidad(uint32_t ms);
     void     setRetardo(uint32_t ms);
+    void     setUmbralReposo(float grados);
     float    umbral() const           { return umbralDeg; }
     uint32_t confirmacion() const     { return confirmacionMs; }
     uint32_t margenVelocidad() const  { return margenVelocidadMs; }
     uint32_t retardo() const          { return retardoMs; }
+    float    umbralReposo() const     { return umbralReposoDeg; }
 
     const char *nombreEstado() const;
 
@@ -322,6 +503,34 @@ private:
     uint32_t confirmacionMs    = GuardConfig::CONFIRMACION_MS;
     uint32_t margenVelocidadMs = GuardConfig::MARGEN_VELOCIDAD_MS;
     uint32_t retardoMs         = GuardConfig::RETARDO_ENCODER_MS;
+
+    // --- Chequeo en reposo ---
+    float    umbralReposoDeg      = GuardConfig::UMBRAL_REPOSO_DEG;
+    uint32_t confirmacionReposoMs = GuardConfig::CONFIRMACION_REPOSO_MS;
+
+    // Lo pone Robot: true solo mientras espera piezas, parado en home.
+    bool     enHome = false;
+
+    bool     enFaltaRep[NUM_EJES]       = {false, false, false};
+    uint32_t faltaRepDesde_ms[NUM_EJES] = {0, 0, 0};
+    float    picoRep[NUM_EJES]          = {0.0f, 0.0f, 0.0f};
+
+    // Desvio contra la calibracion del homing, promediado: es lo que se
+    // compara contra el umbral. Sin promediar, los picos sueltos del
+    // encoder (hasta 5 grados) harian imposible bajar el umbral.
+    float    desvioRep[NUM_EJES]        = {0.0f, 0.0f, 0.0f};
+    bool     desvioRepListo[NUM_EJES]   = {false, false, false};
+
+    // Firma: cuanto marcaba ese desvio la primera vez que el robot se quedo
+    // quieto en home despues del homing. Es el cero contra el que se mide.
+    float    firmaRep[NUM_EJES]         = {0.0f, 0.0f, 0.0f};
+    bool     firmaLista[NUM_EJES]       = {false, false, false};
+    uint32_t reposoDesde_ms[NUM_EJES]   = {0, 0, 0};
+
+    // Se avisa una sola vez por homing, no en cada vuelta del loop.
+    bool     avisoDeriva[NUM_EJES]      = {false, false, false};
+
+    Motivo   motivoFallo = MOTIVO_COLISION;
 
     // Referencia: de donde se empiezan a contar los incrementos.
     float refEnc[NUM_EJES] = {0.0f, 0.0f, 0.0f}; // grados de encoder (ya con el signo aplicado)

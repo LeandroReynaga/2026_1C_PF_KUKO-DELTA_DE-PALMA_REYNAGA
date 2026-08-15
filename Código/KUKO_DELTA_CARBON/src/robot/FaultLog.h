@@ -36,10 +36,11 @@
 
 enum TipoFallo : uint8_t
 {
-    FALLO_COLISION = 0, // encoder y pasos discrepan: el brazo choco o se trabo
-    FALLO_ENCODER,      // un encoder dejo de ser confiable (se sigue trabajando sin supervisar ese eje)
-    FALLO_HOMING,       // el homing no termino en el tiempo maximo
-    FALLO_MANUAL,       // parada de emergencia pedida por el operador
+    FALLO_COLISION = 0,   // encoder y pasos discrepan: el brazo choco o se trabo
+    FALLO_ENCODER,        // un encoder dejo de ser confiable (se sigue trabajando sin supervisar ese eje)
+    FALLO_HOMING,         // el homing no termino en el tiempo maximo
+    FALLO_MANUAL,         // parada de emergencia pedida por el operador
+    FALLO_DESCALIBRACION, // quieto en home el encoder no marca lo que deberia
     FALLO_CANT_TIPOS
 };
 
@@ -90,7 +91,7 @@ private:
     uint8_t       cabeza   = 0; // proximo lugar a escribir
     uint8_t       cantidad = 0; // cuantos hay guardados (<= CAPACIDAD)
     uint32_t      contador = 0; // fallos totales desde el encendido
-    uint32_t      porTipo[FALLO_CANT_TIPOS] = {0, 0, 0, 0};
+    uint32_t      porTipo[FALLO_CANT_TIPOS] = {0, 0, 0, 0, 0};
 
     static void imprimirLinea(const RegistroFallo &r);
 };
