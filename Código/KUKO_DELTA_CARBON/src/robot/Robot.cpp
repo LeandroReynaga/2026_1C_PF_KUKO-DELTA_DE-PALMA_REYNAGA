@@ -21,12 +21,12 @@ Pneumatics pneumatics;
 //  aca (y recalibrar el PWM de Conveyor::begin(), que hoy arranca al 60%
 //  sin relacion medida con las rpm reales).
 // ============================================================
-static const float BELT_VELOCITY_CMS = 7.2f; //antes 7.54, despues 6.75
-static const float DETECTION_LINE_X  = -23.0f; // donde la camara detecta las piezas
+static float BELT_VELOCITY_CMS = 7.2f; //antes 7.54, despues 6.75
+static float DETECTION_LINE_X  = -23.0f; // donde la camara detecta las piezas
 
 // Ancho util de la cinta (Y). Fuera de esto el dato de vision es erroneo.
-static const float BELT_MIN_Y = -2.8f;
-static const float BELT_MAX_Y = 11.2f;
+static const float BELT_MIN_Y = -1.95f;
+static const float BELT_MAX_Y = 12.05f;
 
 // ============================================================
 //  LATENCIA DE LA VISION
@@ -57,15 +57,15 @@ static const float BELT_MAX_Y = 11.2f;
 //
 // Valor actual: se midio 1,5 cm de atraso con la cinta a 7,54 cm/s
 //     1,5 / 7,54 = 0,199 s
-static const float VISION_LATENCY_S = 0.15f; // antes 0.2
+static float VISION_LATENCY_S = 0.0f; // antes 0.2
 
 // ============================================================
 //  GEOMETRIA DE AGARRE (coordenadas de la PUNTA del gripper)
 //  DeltaKinematics ya descuenta el offset de herramienta (0,0,-2.8).
 // ============================================================
-static const float GRAB_Z      = -32.6f; // -32.3 antes, -32.9 despues. cara superior de la pieza (1 cm de alto)
-static const float APPROACH_DX = -2.0f;  // 2 cm por detras: rampa a favor de la cinta
-static const float APPROACH_DZ = 2.7f;   // 0.4 antes, despues 0.7. 4 mm por arriba
+static float GRAB_Z      = -32.6f; // -32.3 antes, -32.9 despues. cara superior de la pieza (1 cm de alto)
+static float APPROACH_DX = -2.0f;  // 2 cm por detras: rampa a favor de la cinta
+static float APPROACH_DZ = 2.7f;   // 0.4 antes, despues 0.7. 4 mm por arriba
 
 // Cuanto baja el tramo 2 por DEBAJO de la cara de la pieza. Es lo que hace
 // que el contacto ocurra a mitad del movimiento y no al final, o sea con el
@@ -77,9 +77,9 @@ static const float APPROACH_DZ = 2.7f;   // 0.4 antes, despues 0.7. 4 mm por arr
 //   0,25 mm -> toca a 7,54 cm/s = velocidad de cinta (velocity-matched)
 //   menos    -> toca mas lento que la cinta (la pieza se le adelanta)
 //   mas      -> toca mas rapido que la cinta (el gripper la alcanza)
-static const float PRESS_DZ = 0.025f;
+static float PRESS_DZ = 0.025f;
 
-static const float LIFT_DZ = 3.0f;       // despegue de la pieza de la cinta (antes 2)
+static float LIFT_DZ = 3.0f;       // despegue de la pieza de la cinta (antes 2)
 
 // Area donde es seguro agarrar, validada a mano sobre el robot real
 // (inspeccion visual de las rotulas en todas las posiciones). El punto de
@@ -92,9 +92,9 @@ static const float WORK_AREA_MAX_X = 10.0f;
 //  Modo COLOR: 1 rojo, 2 verde, 3 azul
 //  Modo FORMA: 1 cuadrado, 2 hexagono, 3 circulo
 // ============================================================
-static const float BIN_X[3] = {-12.0f, 0.0f, 12.0f};
-static const float BIN_Y    = -9.55f;
-static const float BIN_Z    = -26.5f; //antes -29.3cm
+static float BIN_X[3] = {-12.0f, 0.0f, 12.0f};
+static float BIN_Y    = -9.55f;
+static float BIN_Z    = -26.5f; //antes -29.3cm
 
 // ============================================================
 //  CAJA DE ALFAJORES (modo SORT_ALFAJORES)
@@ -118,10 +118,10 @@ static const float BOX_Y[6] = {-6.8f, -6.8f, -6.8f, -12.8f, -12.8f, -12.8f};
 
 // EL parametro de ajuste fino del modo: si los alfajores quedan colgados o
 // la ventosa aplasta la caja, se corrige aca (y en ningun otro lado).
-static const float BOX_Z = -32.6f;
+static float BOX_Z = -32.6f;
 
 // Altura desde la que se hace la bajada lenta sobre la celda.
-static const float BOX_APPROACH_DZ = 3.0f;
+static float BOX_APPROACH_DZ = 3.0f;
 
 // Altura de CRUCE sobre la caja: a la que se entra, a la que se sale y a la
 // que se vuela de una celda a otra.
@@ -141,7 +141,7 @@ static const float BOX_APPROACH_DZ = 3.0f;
 //
 // Si se cambia la geometria de la caja (celdas mas al fondo, piso mas bajo)
 // hay que rehacer esa cuenta: es lo que separa "pasa por encima" de "choca".
-static const float BOX_TRANSIT_DZ = 6.0f;
+static float BOX_TRANSIT_DZ = 6.0f;
 
 // Disposicion por defecto de la caja: que color va en cada celda.
 //
@@ -176,23 +176,40 @@ static const uint8_t BOX_MAX_POR_COLOR = 3;
 // todavia tocandola, asi que tiene menos ayuda para despegarse. Si igual
 // sale pegada al gripper, este es el numero a subir (y la solucion de
 // fondo, la misma que en el tacho: la electrovalvula que falta).
-static const uint32_t BOX_RELEASE_DETACH_MS = 0;
+static float BOX_RELEASE_DETACH_MS = 0;
 
 // Ventana para confirmar un cambio de modo que cruza el limite de la tapa.
 static const uint32_t CONFIRMACION_TAPA_MS = 10000;
 
 // ============================================================
+//  ANGULOS DE HOMING
+// ============================================================
+// Angulo real de cada brazo cuando su final de carrera esta pisado. Es la
+// referencia de TODO: con estos numeros se fija la posicion en pasos al
+// terminar el homing y se calibra el cero de los encoders.
+//
+// Estaban en Robot.h como constantes de compilacion. Se mudaron aca porque
+// ahora son ajustables desde la tabla de parametros (nivel servicio) y la
+// tabla trabaja con punteros a float.
+//
+// Se miden a mano contra el robot: son de los pocos valores que no se
+// pueden calcular, solo verificar.
+static float HOME_ANGLE_M1 = -45.1f;
+static float HOME_ANGLE_M2 = -44.3f;
+static float HOME_ANGLE_M3 = -44.5f;
+
+// ============================================================
 //  TIEMPOS (todos no bloqueantes, con millis())
 // ============================================================
 static const uint32_t HOMING_SETTLE_WAIT_MS = 2500; // ventana de promediado de encoders
-static const uint32_t BIN_SETTLE_MS         = 5;  // quieto sobre el tacho antes de soltar antes 200
+static float BIN_SETTLE_MS         = 5;  // quieto sobre el tacho antes de soltar antes 200
 
 // Cuanto se espera con la bomba apagada para que la pieza se despegue del
 // gripper. Es un parche temporal: falta la electrovalvula que mete aire en
 // la linea de vacio al apagar la bomba. Cuando este montada (misma senal
 // que la bomba, no cambia el pinout) la pieza cae en el instante y este
 // tiempo se puede bajar a ~100 ms.
-static const uint32_t RELEASE_DETACH_MS = 80;
+static float RELEASE_DETACH_MS = 80;
 
 // Margen de atraso tolerable al llegar al punto de aproximacion antes de
 // dar por perdido el instante de encuentro y replanificar.
@@ -206,7 +223,7 @@ static const uint8_t  MAX_REPLAN_ATTEMPTS    = 2;
 // de arrancar la recalibracion. No es para que "se acomode" nada: es para
 // que quien este mirando alcance a ver que paso y a sacar la mano o el
 // obstaculo antes de que el brazo vuelva a moverse solo.
-static const uint32_t COLLISION_PAUSE_MS = 3000;
+static float COLLISION_PAUSE_MS = 3000;
 
 // Colisiones seguidas (sin completar ninguna pieza en el medio) despues de
 // las cuales se deja de reintentar. Si el brazo choca contra lo mismo tres
@@ -302,6 +319,16 @@ void Robot::begin()
     guard.setObservar(!supervisionHabilitada);
     fallos.begin();
 
+    // Parametros: primero se registran con los valores compilados (que
+    // quedan como los "de fabrica") y recien despues se carga lo guardado
+    // en la NVS. El orden importa: al reves, lo guardado se tomaria por
+    // valor de fabrica y 'P0' no volveria a ningun lado conocido.
+    params.begin();
+    registrarParametros();
+    params.cargarGuardados();
+    sincronizarGuard();
+    generacionParams = params.generacion();
+
     // Una disposicion imposible de completar (mas de 3 alfajores de un mismo
     // color) se detecta al arrancar y bloquea la entrada al modo: mejor eso
     // que un robot esperando para siempre una pieza que no va a poder ubicar.
@@ -327,6 +354,12 @@ void Robot::begin()
     Serial.println("  K<ms>           margen por velocidad. Ej: K80");
     Serial.println("  L<ms>           atraso del encoder a compensar. Ej: L70");
     Serial.println("  Q<grados>       umbral con el robot quieto en home. Ej: Q5");
+    Serial.println("  V1 / V0 / V?    telemetria: encender / apagar / una foto");
+    Serial.println("  P?              listar parametros ajustables");
+    Serial.println("  P<nombre>=<val> fijar un parametro. Ej: Pvis_lat=0.18");
+    Serial.println("  P* / P0         guardar en la NVS / volver a fabrica");
+
+    telemetria.anunciar((uint8_t)(ERROR + 1), params.cantidad());
 
     if (!boxLayoutValido)
     {
@@ -361,6 +394,16 @@ void Robot::update()
         ultimoDiagnostico_ms = millis();
         imprimirDiagnosticoCorto();
     }
+
+    // Un parametro que cambio (por 'P', por 'U'/'T'/'K'/'L'/'Q', o al
+    // cargar la NVS) puede tener que bajarse a un objeto que guarda copia.
+    if (params.generacion() != generacionParams)
+    {
+        generacionParams = params.generacion();
+        sincronizarGuard();
+    }
+
+    emitirTelemetria(millis());
 
     switch (state)
     {
@@ -537,6 +580,16 @@ void Robot::procesarComando(char *cmd, uint8_t len)
         return;
     }
 
+    // --- Telemetria ('V1', 'V0', 'V?') y parametros ('P?', 'P*', 'P0',
+    //     'Pnombre=valor') ---
+    // Van antes que todo lo demas de varios caracteres porque son los
+    // unicos que puede mandar la interfaz sin intervencion de una persona:
+    // conviene que ni siquiera pasen por el resto del parser.
+    if (procesarComandoTelemetria(cmd) || procesarComandoParametro(cmd))
+    {
+        return;
+    }
+
     // --- Disposicion de la caja: 'X' + los 6 colores, de la celda 1 a la 6 ---
     // Es el reemplazo provisorio de la interfaz que todavia no existe: deja
     // elegir que color va en cada celda sin recompilar. Ej: XBRGRBG.
@@ -581,8 +634,11 @@ void Robot::procesarComando(char *cmd, uint8_t len)
     //     'K<ms>' (margen por velocidad), 'L<ms>' (atraso a compensar) y
     //     'Q<grados>' (umbral con el robot quieto en home) ---
     // No llevan coma, asi que no se confunden nunca con un mensaje de pieza
-    // (que siempre tiene dos). Sirven para barrer valores sin recompilar;
-    // el definitivo va en GuardConfig, en CollisionGuard.h.
+    // (que siempre tiene dos). Se conservan porque son cortos de tipear con
+    // el robot delante, pero NO tocan el guard directamente: escriben en la
+    // tabla de parametros igual que 'P'. Si escribieran el guard por su
+    // cuenta, la tabla quedaria diciendo el valor viejo y el proximo
+    // sincronizarGuard() pisaria el cambio hecho a mano.
     {
         const char letra = toupper(cmd[0]);
 
@@ -604,38 +660,23 @@ void Robot::procesarComando(char *cmd, uint8_t len)
             switch (letra)
             {
                 case 'U':
-                    guard.setUmbral(valor);
-                    Serial.print("[GUARD] umbral fijo = ");
-                    Serial.print(guard.umbral(), 1);
-                    Serial.println(" grados");
+                    aplicarParametro("g_umbral", valor);
                     break;
 
                 case 'T':
-                    guard.setConfirmacion((uint32_t)valor);
-                    Serial.print("[GUARD] confirmacion = ");
-                    Serial.print(guard.confirmacion());
-                    Serial.println(" ms");
+                    aplicarParametro("g_conf", valor);
                     break;
 
                 case 'K':
-                    guard.setMargenVelocidad((uint32_t)valor);
-                    Serial.print("[GUARD] margen por velocidad = ");
-                    Serial.print(guard.margenVelocidad());
-                    Serial.println(" ms");
+                    aplicarParametro("g_margen", valor);
                     break;
 
                 case 'Q':
-                    guard.setUmbralReposo(valor);
-                    Serial.print("[GUARD] umbral en reposo (home) = ");
-                    Serial.print(guard.umbralReposo(), 1);
-                    Serial.println(" grados");
+                    aplicarParametro("g_reposo", valor);
                     break;
 
-                default:
-                    guard.setRetardo((uint32_t)valor);
-                    Serial.print("[GUARD] compensacion de atraso = ");
-                    Serial.print(guard.retardo());
-                    Serial.println(" ms");
+                default: // 'L'
+                    aplicarParametro("g_retardo", valor);
                     break;
             }
             return;
@@ -746,8 +787,14 @@ void Robot::procesarComando(char *cmd, uint8_t len)
     if (!queuePush(p))
     {
         Serial.println("[COLA] llena, se descarta la pieza mas nueva");
+        piezasDescartadas++;
         return;
     }
+
+    // Se cuenta al ENTRAR a la cola, no al detectarla la vision: son las
+    // piezas que el robot efectivamente tuvo la oportunidad de agarrar, que
+    // es contra lo que tiene sentido medir cuantas termino depositando.
+    piezasDetectadas++;
 
     Serial.print("[PIEZA] Y=");
     Serial.print(p.y);
@@ -757,6 +804,165 @@ void Robot::procesarComando(char *cmd, uint8_t len)
     Serial.print(p.shape);
     Serial.print("  en cola: ");
     Serial.println(queueCount);
+}
+
+// ============================================================
+//  COMANDOS DE TELEMETRIA Y PARAMETROS
+// ============================================================
+//  Los dos devuelven true si consumieron el comando (aunque haya sido para
+//  contestar un error): un comando que empieza con 'V' o con 'P' no puede
+//  ser ninguna otra cosa, asi que dejarlo seguir al resto del parser solo
+//  lograria un segundo mensaje de error mas confuso que el primero.
+
+bool Robot::procesarComandoTelemetria(const char *cmd)
+{
+    if (toupper(cmd[0]) != 'V' || strchr(cmd, ',') != NULL)
+    {
+        return false;
+    }
+
+    if (strlen(cmd) == 2)
+    {
+        switch (cmd[1])
+        {
+            case '1':
+                telemetria.setActiva(true);
+                return true;
+
+            case '0':
+                telemetria.setActiva(false);
+                return true;
+
+            case '?':
+                // Una foto de [E] y [H] sin encender el stream: es lo que
+                // pide la interfaz al conectarse, para pintar la pantalla
+                // antes de decidir nada.
+                telemetria.pedirFoto();
+                return true;
+
+            default:
+                break;
+        }
+    }
+
+    Serial.print("[SERIAL] comando de telemetria invalido: '");
+    Serial.print(cmd);
+    Serial.println("'. Validos: 'V1' (on), 'V0' (off), 'V?' (una foto)");
+
+    return true;
+}
+
+// ------------------------------------------------------------------
+void Robot::aplicarParametro(const char *nombre, float valor)
+{
+    const TablaParametros::Resultado r = params.fijar(nombre, valor, hayPiezaEnMano());
+
+    // La respuesta sale SIEMPRE, salga bien o mal, y con el mismo formato:
+    // es lo que mantiene sincronizada a la interfaz sin que tenga que
+    // volver a pedir la tabla entera despues de cada cambio.
+    Serial.print("[P] set n=");
+    Serial.print(nombre);
+
+    if (r == TablaParametros::FIJADO)
+    {
+        Serial.print(" v=");
+        Serial.print(params.leer(nombre), 4);
+        Serial.println(" ok");
+        return;
+    }
+
+    Serial.print(" v=");
+    Serial.print(valor, 4);
+
+    switch (r)
+    {
+        case TablaParametros::DESCONOCIDO:
+            Serial.println(" err=desconocido");
+            break;
+
+        case TablaParametros::FUERA_RANGO:
+            Serial.println(" err=rango");
+            break;
+
+        default:
+            // Cambiar la altura de un tacho con la pieza ya en el aire la
+            // mandaria a un lugar distinto del que se planifico.
+            Serial.println(" err=bloqueado");
+            break;
+    }
+}
+
+// ------------------------------------------------------------------
+bool Robot::procesarComandoParametro(const char *cmd)
+{
+    if (toupper(cmd[0]) != 'P')
+    {
+        return false;
+    }
+
+    const char *igual = strchr(cmd, '=');
+
+    if (igual == NULL)
+    {
+        if (strlen(cmd) == 2 && cmd[1] == '?')
+        {
+            params.volcar();
+            return true;
+        }
+
+        if (strlen(cmd) == 2 && cmd[1] == '*')
+        {
+            params.guardar();
+            return true;
+        }
+
+        if (strlen(cmd) == 2 && cmd[1] == '0')
+        {
+            params.restaurarDeFabrica();
+            return true;
+        }
+
+        Serial.print("[SERIAL] comando de parametros invalido: '");
+        Serial.print(cmd);
+        Serial.println("'. Validos: 'P?', 'P*', 'P0' o 'Pnombre=valor'");
+        return true;
+    }
+
+    // El nombre se copia en vez de partir la linea en el lugar: el buffer
+    // de comandos se reutiliza y prefiero no dejarlo modificado a mitad de
+    // camino por si mas adelante alguien agrega algo despues de esto.
+    char nombre[16];
+
+    const size_t largo = (size_t)(igual - (cmd + 1));
+
+    if (largo == 0 || largo >= sizeof(nombre))
+    {
+        Serial.println("[SERIAL] nombre de parametro vacio o demasiado largo");
+        return true;
+    }
+
+    memcpy(nombre, cmd + 1, largo);
+    nombre[largo] = '\0';
+
+    char       *fin   = NULL;
+    const float valor = strtof(igual + 1, &fin);
+
+    // Se exige que el numero se consuma ENTERO. Con atof() un "0.18cm"
+    // pasaria como 0.18 y un "hola" como 0.0, que en un parametro de
+    // altura significa clavar la ventosa contra la cinta.
+    if (fin == igual + 1 || *fin != '\0')
+    {
+        Serial.print("[SERIAL] valor invalido para '");
+        Serial.print(nombre);
+        Serial.print("': '");
+        Serial.print(igual + 1);
+        Serial.println("'. Se espera un numero. Ej: Pvis_lat=0.18");
+        return true;
+    }
+
+    aplicarParametro(nombre, valor);
+
+    return true;
 }
 
 const char *Robot::nombreModo(SortMode m) const
@@ -785,6 +991,12 @@ void Robot::aplicarModoPendiente()
 
     if (esAlfajores(sortMode))
     {
+        // La caja arranca SIEMPRE vacia al entrar al modo. El mapa de celdas
+        // que hubiera quedado de una tanda anterior no dice nada de la caja
+        // que hay puesta ahora: entre una y otra alguien la retiro y puso
+        // otra, y creer que ya hay alfajores puestos hace que el robot
+        // saltee celdas que estan vacias.
+        reiniciarCaja(false);
         imprimirCaja();
     }
 }
@@ -879,6 +1091,12 @@ void Robot::aplicarModo(SortMode nuevo)
 
     if (esAlfajores(sortMode))
     {
+        // La caja arranca SIEMPRE vacia al entrar al modo. El mapa de celdas
+        // que hubiera quedado de una tanda anterior no dice nada de la caja
+        // que hay puesta ahora: entre una y otra alguien la retiro y puso
+        // otra, y creer que ya hay alfajores puestos hace que el robot
+        // saltee celdas que estan vacias.
+        reiniciarCaja(false);
         imprimirCaja();
     }
 }
@@ -1497,6 +1715,12 @@ bool Robot::iniciarSiguientePieza()
             Serial.print("[PIEZA] no alcanzable (Y=");
             Serial.print(p.y);
             Serial.println("), se deja pasar");
+
+            // Esta SI es una perdida: la pieza estaba para agarrar y no se
+            // llego. Las que se dejan pasar en modo caja por no hacer falta
+            // no se cuentan aca, que esas son el modo funcionando bien.
+            piezasDescartadas++;
+
             continue; // se prueba con la siguiente de la cola
         }
 
@@ -1750,6 +1974,12 @@ void Robot::updateReleaseWait()
     // Pieza entregada: el ciclo cerro bien, asi que la racha de colisiones
     // seguidas se corta aca (lo que hubiera chocado antes, ya se resolvio).
     colisionesSeguidas = 0;
+
+    // Y recien aca se cuenta como depositada: soltada de verdad, en su
+    // destino. Contarla al agarrarla habria inflado el numero con las que
+    // se pierden a mitad de camino, que son justamente las que interesa
+    // que aparezcan en la diferencia.
+    contarDepositada(currentPiece);
 
     // En la caja el brazo esta METIDO ENTRE LAS PAREDES: antes de decidir
     // nada tiene que salir derecho para arriba. Ir desde adentro de la caja
@@ -2298,6 +2528,282 @@ void Robot::imprimirTraza()
     }
 
     Serial.println();
+}
+
+// ============================================================
+//  TABLA DE PARAMETROS
+// ============================================================
+//  Lo que la interfaz puede ajustar sin recompilar. El nivel decide en que
+//  pestana aparece; el rango es lo que el firmware hace cumplir.
+//
+//  QUE NO ESTA ACA, Y POR QUE
+//  --------------------------
+//  La geometria del delta (DeltaKinematics.h), los micropasos, el ancho
+//  util de la cinta y el area de trabajo NO son parametros: son limites de
+//  seguridad y calibraciones de las que depende que el robot no se clave
+//  contra la mesa. Un slider para eso no es flexibilidad, es una trampa.
+//  Se cambian en el codigo, recompilando, que es lo que corresponde a algo
+//  que hay que volver a validar despues de tocarlo.
+// ============================================================
+
+void Robot::registrarParametros()
+{
+    // --- Nivel 1: operacion ---
+    // La latencia de vision es EL ajuste fino de cada arranque: cuanto
+    // avanza la pieza entre que cruza la linea y que llega el mensaje.
+    // Admite negativos a proposito (ver PROTOCOLO.md): si alguna vez la
+    // correccion tuviera que ir para el otro lado, el rango ya lo permite.
+    params.registrar("vis_lat", &VISION_LATENCY_S, -0.10f, 0.30f, "s", NIVEL_OPERACION);
+
+    // --- Nivel 2: proceso (afinado del agarre y de la supervision) ---
+    params.registrar("press_dz", &PRESS_DZ,    0.0f,   0.30f, "cm", NIVEL_PROCESO);
+    params.registrar("apr_dx",   &APPROACH_DX, -6.0f,  0.0f,  "cm", NIVEL_PROCESO);
+    params.registrar("apr_dz",   &APPROACH_DZ, 0.5f,   6.0f,  "cm", NIVEL_PROCESO);
+    params.registrar("lift_dz",  &LIFT_DZ,     1.0f,   8.0f,  "cm", NIVEL_PROCESO);
+    params.registrar("rel_ms",   &RELEASE_DETACH_MS, 0.0f, 2000.0f, "ms", NIVEL_PROCESO, 'i');
+    params.registrar("bin_ms",   &BIN_SETTLE_MS,     0.0f, 2000.0f, "ms", NIVEL_PROCESO, 'i');
+
+    params.registrar("g_umbral",  &pGuardUmbral,   1.0f,  45.0f,  "deg", NIVEL_PROCESO);
+    params.registrar("g_reposo",  &pGuardReposo,   2.0f,  20.0f,  "deg", NIVEL_PROCESO);
+    params.registrar("g_conf",    &pGuardConfirma, 10.0f, 1000.0f, "ms", NIVEL_PROCESO, 'i');
+    params.registrar("g_margen",  &pGuardMargen,   0.0f,  500.0f,  "ms", NIVEL_PROCESO, 'i');
+    params.registrar("g_retardo", &pGuardRetardo,  0.0f,  500.0f,  "ms", NIVEL_PROCESO, 'i');
+
+    params.registrar("col_pausa", &COLLISION_PAUSE_MS, 0.0f, 15000.0f, "ms", NIVEL_PROCESO, 'i');
+
+    params.registrar("tele_ms", &telemetria.periodoRapida_ms,  20.0f, 2000.0f,  "ms", NIVEL_PROCESO, 'i');
+    params.registrar("est_ms",  &telemetria.periodoProceso_ms, 100.0f, 10000.0f, "ms", NIVEL_PROCESO, 'i');
+    params.registrar("sal_ms",  &telemetria.periodoSalud_ms,   500.0f, 30000.0f, "ms", NIVEL_PROCESO, 'i');
+
+    // --- Nivel 3: servicio ---
+    // Los Z son los que aplastan cosas si se equivoca el signo o la coma,
+    // y ademas no se pueden cambiar con una pieza en la mano: le cambiarian
+    // el destino a una maniobra ya planificada.
+    params.registrar("grab_z", &GRAB_Z, -36.0f, -28.0f, "cm", NIVEL_SERVICIO, 'f', true);
+    params.registrar("box_z",  &BOX_Z,  -36.0f, -28.0f, "cm", NIVEL_SERVICIO, 'f', true);
+    params.registrar("box_apr", &BOX_APPROACH_DZ, 1.0f, 8.0f,  "cm", NIVEL_SERVICIO, 'f', true);
+    params.registrar("box_tr",  &BOX_TRANSIT_DZ,  3.0f, 12.0f, "cm", NIVEL_SERVICIO, 'f', true);
+    params.registrar("box_rel", &BOX_RELEASE_DETACH_MS, 0.0f, 2000.0f, "ms", NIVEL_SERVICIO, 'i');
+
+    params.registrar("bin_x1", &BIN_X[0], -20.0f, 20.0f, "cm", NIVEL_SERVICIO, 'f', true);
+    params.registrar("bin_x2", &BIN_X[1], -20.0f, 20.0f, "cm", NIVEL_SERVICIO, 'f', true);
+    params.registrar("bin_x3", &BIN_X[2], -20.0f, 20.0f, "cm", NIVEL_SERVICIO, 'f', true);
+    params.registrar("bin_y",  &BIN_Y,    -20.0f, 0.0f,  "cm", NIVEL_SERVICIO, 'f', true);
+    params.registrar("bin_z",  &BIN_Z,    -34.0f, -20.0f, "cm", NIVEL_SERVICIO, 'f', true);
+
+    params.registrar("home_a1", &HOME_ANGLE_M1, -60.0f, -30.0f, "deg", NIVEL_SERVICIO);
+    params.registrar("home_a2", &HOME_ANGLE_M2, -60.0f, -30.0f, "deg", NIVEL_SERVICIO);
+    params.registrar("home_a3", &HOME_ANGLE_M3, -60.0f, -30.0f, "deg", NIVEL_SERVICIO);
+
+    // Estos dos existen TAMBIEN del lado de Python (config.py). Si se
+    // cambian de un solo lado, el robot le empieza a errar a las piezas sin
+    // que nada avise: el nucleo compara los dos al conectarse.
+    params.registrar("cinta_cms", &BELT_VELOCITY_CMS, 1.0f, 30.0f, "cm/s", NIVEL_SERVICIO);
+    params.registrar("linea_x",   &DETECTION_LINE_X, -40.0f, 0.0f, "cm", NIVEL_SERVICIO);
+}
+
+// ------------------------------------------------------------------
+void Robot::sincronizarGuard()
+{
+    guard.setUmbral(pGuardUmbral);
+    guard.setUmbralReposo(pGuardReposo);
+    guard.setConfirmacion((uint32_t)pGuardConfirma);
+    guard.setMargenVelocidad((uint32_t)pGuardMargen);
+    guard.setRetardo((uint32_t)pGuardRetardo);
+}
+
+// ============================================================
+//  TELEMETRIA
+// ============================================================
+
+// Modo -> la letra con la que viaja por serie. Es la MISMA letra que se usa
+// para pedirlo ('C', 'F', 'A'), asi que la interfaz no necesita una segunda
+// tabla de traduccion para leer lo que informa el firmware.
+static char letraModo(Robot::SortMode m)
+{
+    switch (m)
+    {
+        case Robot::SORT_BY_COLOR:  return 'C';
+        case Robot::SORT_BY_SHAPE:  return 'F';
+        case Robot::SORT_ALFAJORES: return 'A';
+        default:                    return '?';
+    }
+}
+
+void Robot::emitirTelemetria(uint32_t ahora)
+{
+    if (telemetria.tocaRapida(ahora))
+    {
+        TeleRapida d;
+
+        d.t_ms   = ahora;
+        d.estado = (uint8_t)state;
+        d.bomba  = pneumatics.isActive();
+
+        // Los finales se leen aca y no se guardan de la ultima vez que los
+        // miro el homing: la idea es justamente poder verificar uno
+        // empujandolo con el dedo y ver si se pinta en la pantalla.
+        d.finales[0] = endstops.readMotor1();
+        d.finales[1] = endstops.readMotor2();
+        d.finales[2] = endstops.readMotor3();
+
+        const long pasos[3] = {motor1.getPosition(),
+                               motor2.getPosition(),
+                               motor3.getPosition()};
+
+        for (uint8_t i = 0; i < 3; i++)
+        {
+            d.ang[i] = encoders.leerGrados(i);
+            d.cmd[i] = stepsToAngle(pasos[i]);
+            d.err[i] = guard.errorActual(i);
+            d.umb[i] = guard.umbralEfectivo(i);
+            d.vel[i] = guard.velocidadCmd(i);
+        }
+
+        telemetria.emitirRapida(d);
+    }
+
+    if (telemetria.tocaProceso(ahora))
+    {
+        TeleProceso d;
+
+        d.t_ms         = ahora;
+        d.estado       = (uint8_t)state;
+        d.estadoNombre = nombreEstado(state);
+
+        d.modo          = letraModo(sortMode);
+        d.modoPendiente = sortModePending ? letraModo(pendingSortMode) : '-';
+
+        d.esperandoTapa = esperandoConfirmacion;
+        d.tapaRestante_ms = 0;
+
+        if (esperandoConfirmacion)
+        {
+            const uint32_t pasado = ahora - confirmacionPedida_ms;
+
+            d.tapaRestante_ms = (pasado < CONFIRMACION_TAPA_MS)
+                                    ? (uint32_t)(CONFIRMACION_TAPA_MS - pasado)
+                                    : 0;
+        }
+
+        d.cola              = queueCount;
+        d.colaAntiguedad_ms = antiguedadCola();
+
+        d.homed          = homed;
+        d.guard          = (uint8_t)guard.estado();
+        d.observando     = guard.observando();
+        d.paradasActivas = supervisionHabilitada;
+
+        const int pwm = conveyor.getSpeed();
+
+        d.cinta    = (pwm > 0);
+        d.cintaPwm = (uint8_t)((pwm * 100) / 255);
+
+        // La caja solo tiene sentido en el modo que la usa: fuera de ahi se
+        // manda '-' para que la interfaz no dibuje una grilla que no
+        // corresponde a nada.
+        const bool enCaja = esAlfajores(sortMode);
+
+        d.layout         = enCaja ? boxLayout : NULL;
+        d.llenas         = enCaja ? boxFilled : NULL;
+        d.celdaReservada = (currentCell == CELDA_NINGUNA) ? 0 : (uint8_t)(currentCell + 1);
+
+        if (hayManiobraEnCurso())
+        {
+            d.piezaColor = currentPiece.color;
+            d.piezaForma = currentPiece.shape;
+            d.piezaY     = currentPiece.y;
+            d.tacho      = (uint8_t)(currentBin + 1);
+        }
+        else
+        {
+            d.piezaColor = '-';
+            d.piezaForma = '-';
+            d.piezaY     = 0.0f;
+            d.tacho      = 0;
+        }
+
+        d.detectadas  = piezasDetectadas;
+        d.depositadas = piezasDepositadas;
+        d.descartadas = piezasDescartadas;
+        d.fallos      = fallos.total();
+
+        for (uint8_t i = 0; i < 3; i++)
+        {
+            d.porColor[i] = porColorOk[i];
+            d.porForma[i] = porFormaOk[i];
+        }
+
+        telemetria.emitirProceso(d);
+    }
+
+    if (telemetria.tocaSalud(ahora))
+    {
+        TeleSalud d;
+
+        d.t_ms      = ahora;
+        d.uptime_s  = ahora / 1000UL;
+        d.loopHz    = telemetria.loopHz();
+        d.heapLibre = ESP.getFreeHeap();
+
+        for (uint8_t i = 0; i < 3; i++)
+        {
+            TeleSalud::Eje &e = d.ejes[i];
+
+            // El orden importa: un encoder fuera de rango tambien aparece
+            // como caido, y lo primero es mas especifico (dice DONDE esta
+            // el problema, no solo que lo hay).
+            e.encoder = guard.fueraDeRango(i) ? "rango"
+                        : (guard.sensorCaido(i) ? "caido" : "ok");
+
+            e.ganancia   = guard.gananciaMedida(i);
+            e.atraso_ms  = guard.atrasoMedido_ms(i);
+            e.pico       = guard.picoDesdeHoming(i);
+            e.picoReposo = guard.picoEnReposo(i);
+            e.fuga       = guard.derivaAbsorbida(i);
+            e.rawMin     = guard.rawMinimo(i);
+            e.rawMax     = guard.rawMaximo(i);
+            e.resincronizaciones = encoders.cuentaResincronizaciones(i);
+        }
+
+        telemetria.emitirSalud(d);
+    }
+}
+
+// ------------------------------------------------------------------
+uint32_t Robot::antiguedadCola() const
+{
+    if (queueCount == 0)
+    {
+        return 0;
+    }
+
+    // queueHead es la mas VIEJA (la cola es FIFO), que es tambien la mas
+    // adelantada sobre la cinta: la que menos tiempo tiene antes de
+    // pasarse de largo.
+    return (uint32_t)(millis() - pieceQueue[queueHead].detectedAt_ms);
+}
+
+// ------------------------------------------------------------------
+void Robot::contarDepositada(const Piece &p)
+{
+    piezasDepositadas++;
+
+    switch (p.color)
+    {
+        case 'R': porColorOk[0]++; break;
+        case 'G': porColorOk[1]++; break;
+        case 'B': porColorOk[2]++; break;
+        default:                   break;
+    }
+
+    switch (p.shape)
+    {
+        case 'S': porFormaOk[0]++; break;
+        case 'H': porFormaOk[1]++; break;
+        case 'C': porFormaOk[2]++; break;
+        default:                   break;
+    }
 }
 
 // ============================================================

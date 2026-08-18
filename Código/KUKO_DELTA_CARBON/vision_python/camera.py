@@ -158,6 +158,21 @@ class Camera:
 
         return width, height
 
+    # Píxeles que se corrió el recorte respecto de los CROP_*_RATIO de
+    # config.py. Lo mueve la interfaz; positivo = la ventana baja.
+    offset_y = 0
+
+    def mover_recorte(self, delta_px: int) -> int:
+        """Corre el recorte y devuelve el desplazamiento efectivo."""
+
+        self.offset_y += int(delta_px)
+
+        # El recorte se recalcula con el próximo fotograma: ahí es donde se
+        # satura contra el borde de la imagen.
+        self._crop_bounds = None
+
+        return self.offset_y
+
     def _compute_crop_bounds(
         self,
         frame: object,
@@ -171,6 +186,27 @@ class Camera:
 
         y_min = int(frame_height * CROP_Y_MIN_RATIO)
         y_max = int(frame_height * CROP_Y_MAX_RATIO)
+
+        # Desplazamiento vertical que ajusta el operador desde la interfaz.
+        # Los dos límites se mueven JUNTOS: el alto del recorte no cambia,
+        # sólo se corre la ventana. Si cambiara el alto, cambiaría también
+        # la escala píxel->cm y con ella todas las coordenadas que se le
+        # mandan al robot.
+        #
+        # Existe porque la cámara se corre un poco cuando se mueve el robot,
+        # y porque la cinta se desliza sobre el rodillo hacia un extremo.
+        # Recentrar eso a mano en config.py obligaba a reiniciar el programa.
+        alto_recorte = y_max - y_min
+
+        desplazamiento = max(-y_min, min(self.offset_y, frame_height - y_max))
+
+        y_min += desplazamiento
+        y_max = y_min + alto_recorte
+
+        # Se guarda el efectivo: si el pedido se salió del fotograma, la
+        # interfaz tiene que mostrar dónde quedó de verdad y no seguir
+        # contando clicks que no mueven nada.
+        self.offset_y = desplazamiento
 
         # Un recorte vacío o invertido dejaría un fotograma de 0
         # píxeles y el error recién aparecería mucho más abajo, en

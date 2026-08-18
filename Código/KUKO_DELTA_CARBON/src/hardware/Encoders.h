@@ -65,6 +65,12 @@ private:
     // que el homing rehaga la referencia.
     bool resincronizado[NUM_ENCODERS] = {false, false, false};
 
+    // Cuantas veces se reengancho cada canal desde el arranque. A
+    // diferencia de la bandera de arriba, NO se limpia en el homing: es
+    // historia acumulada, y es lo que la interfaz muestra para distinguir
+    // un mal momento de un canal que viene fallando.
+    uint16_t resincronizaciones[NUM_ENCODERS] = {0, 0, 0};
+
     uint16_t leerRawPromediado(uint8_t indiceMotor);
     void     procesarLecturaValida(uint8_t indiceMotor, uint16_t raw);
     void     registrarError(uint8_t indiceMotor);
@@ -101,6 +107,9 @@ public:
     // en el homing.
     bool     huboResincronizacion(uint8_t motor) const;
     void     limpiarResincronizacion(uint8_t motor);
+
+    // Acumulado desde el arranque, para la linea de salud de la telemetria.
+    uint16_t cuentaResincronizaciones(uint8_t motor) const;
     uint32_t tiempoDesdeUltimaLecturaOk_ms(uint8_t motor) const;
     float    leerVelocidad(uint8_t motor) const;
 

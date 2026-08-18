@@ -5,6 +5,8 @@
 #include "Stepper.h"
 #include "CollisionGuard.h"
 #include "FaultLog.h"
+#include "Telemetry.h"
+#include "Params.h"
 #include "../hardware/Endstops.h"
 #include "Pinout.h"
 #include "../hardware/Motors.h"
@@ -58,6 +60,10 @@ public:
     void begin();
 
     void update();
+
+    // La llama loop() en cada vuelta. Alimenta el contador de vueltas por
+    // segundo que sale en la linea de salud de la telemetria.
+    void contarVuelta() { telemetria.contarVuelta(); }
 
     // conservarContexto = true se usa SOLO en la recalibracion posterior a
     // una colision: la cinta nunca se detuvo, asi que las piezas que estaban
@@ -143,8 +149,8 @@ private:
     // el momento: se guarda como pendiente y se aplica recien cuando el
     // robot no tiene ninguna pieza en la mano, para no cambiarle el destino
     // a una pieza que ya esta en vuelo.
-    SortMode sortMode        = SORT_BY_COLOR;
-    SortMode pendingSortMode = SORT_BY_COLOR;
+    SortMode sortMode        = SORT_ALFAJORES;
+    SortMode pendingSortMode = SORT_ALFAJORES;
     bool     sortModePending = false;
 
     void aplicarModoPendiente();
@@ -324,6 +330,71 @@ private:
     uint8_t binIndexFor(const Piece &p) const;
 
     // ------------------------------------------------------------------
+    //  Telemetria y parametros
+    // ------------------------------------------------------------------
+    // Robot es el unico que ve al mismo tiempo la maquina de estados, el
+    // guard, los encoders y los finales de carrera, asi que es el que llena
+    // las structs. El formato y los relojes viven en Telemetria.
+    Telemetria telemetria;
+
+    void emitirTelemetria(uint32_t ahora);
+    void registrarParametros();
+
+    // Empuja a los objetos que guardan copia propia de un parametro (hoy
+    // solo el CollisionGuard) los valores que estan en la tabla. Se llama
+    // cuando la generacion de la tabla cambia, sin averiguar cual cambio:
+    // son cinco setters, sale mas barato aplicarlos todos que llevar
+    // cuenta de cual fue.
+    void sincronizarGuard();
+
+    uint32_t generacionParams = 0;
+
+    // Comandos 'P...' y 'V...'. Devuelven true si consumieron el comando.
+    bool procesarComandoParametro(const char *cmd);
+    bool procesarComandoTelemetria(const char *cmd);
+
+    // Fija un parametro y contesta con la linea [P] set. Es el unico camino
+    // por el que se cambia un parametro: los comandos historicos
+    // ('U', 'T', 'K', 'L', 'Q') tambien pasan por aca, para que la tabla no
+    // quede diciendo una cosa y el guard otra.
+    void aplicarParametro(const char *nombre, float valor);
+
+    // Copia local de los parametros que el guard guarda adentro. La tabla
+    // necesita punteros a float estables y el guard los tiene privados con
+    // setters, asi que la fuente de verdad de estos cinco es esta copia y
+    // sincronizarGuard() se encarga de bajarlos.
+    float pGuardUmbral    = GuardConfig::UMBRAL_DEG;
+    float pGuardReposo    = GuardConfig::UMBRAL_REPOSO_DEG;
+    float pGuardConfirma  = GuardConfig::CONFIRMACION_MS;
+    float pGuardMargen    = GuardConfig::MARGEN_VELOCIDAD_MS;
+    float pGuardRetardo   = GuardConfig::RETARDO_ENCODER_MS;
+
+    // ------------------------------------------------------------------
+    //  Contadores de produccion
+    // ------------------------------------------------------------------
+    // Viven en el firmware y no en la interfaz para que sobrevivan a que
+    // se cierre la interfaz, que es lo primero que uno hace cuando algo
+    // anda mal. Se reinician solo con el reinicio del ESP32.
+    //
+    //   detectadas   piezas que la vision informo y entraron en la cola
+    //   depositadas  piezas efectivamente soltadas en su destino
+    //   descartadas  piezas que se dejaron pasar por no llegar a tiempo
+    //
+    // Las que se dejan pasar en modo caja por no hacer falta NO cuentan
+    // como descartadas: no son una perdida, son el modo funcionando.
+    uint32_t piezasDetectadas  = 0;
+    uint32_t piezasDepositadas = 0;
+    uint32_t piezasDescartadas = 0;
+
+    uint32_t porColorOk[3] = {0, 0, 0}; // R, G, B
+    uint32_t porFormaOk[3] = {0, 0, 0}; // S, H, C
+
+    void contarDepositada(const Piece &p);
+
+    // Antiguedad de la pieza mas vieja de la cola, en ms (0 si no hay).
+    uint32_t antiguedadCola() const;
+
+    // ------------------------------------------------------------------
     //  Consola serie
     // ------------------------------------------------------------------
     void procesarSerial();
@@ -339,13 +410,20 @@ private:
 
     static constexpr long MICROPASOS = 10000;
 
-    static constexpr float HOME_ANGLE_M1 = -45.1f;
-    static constexpr float HOME_ANGLE_M2 = -44.3f;
-    static constexpr float HOME_ANGLE_M3 = -44.5f;
+    // Los angulos de homing se mudaron a Robot.cpp: ahora son ajustables
+    // desde la tabla de parametros ('home_a1'..'home_a3', nivel servicio) y
+    // la tabla necesita punteros a variables, no constantes de compilacion.
 
     static long angleToSteps(float angle)
     {
         return lround(angle * MICROPASOS / 360.0f);
+    }
+
+    // La vuelta: pasos -> grados. Es lo que informa la telemetria como
+    // angulo comandado de cada eje, para poder dibujarlo contra el medido.
+    static float stepsToAngle(long steps)
+    {
+        return (float)steps * 360.0f / (float)MICROPASOS;
     }
 
     // Los 3 motores llegaron a su objetivo.

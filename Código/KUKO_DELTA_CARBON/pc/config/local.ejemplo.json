@@ -1,0 +1,5 @@
+{
+  "_comentario": "Copiar a local.json y ajustar. local.json NO va al repositorio: cada PC tiene la suya.",
+  "puerto": "AUTO",
+  "puerto_web": 8080
+}

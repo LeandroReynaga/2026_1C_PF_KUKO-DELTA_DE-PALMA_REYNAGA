@@ -156,6 +156,13 @@ void Encoders::resincronizar(uint8_t indiceMotor, uint16_t raw,
     // referencia desde cero) no hay forma de saberlo. La limpia
     // CollisionGuard al rearmarse.
     resincronizado[indiceMotor] = true;
+
+    // Contador aparte de la bandera: la bandera la limpia CollisionGuard en
+    // cada homing, y lo que la interfaz necesita mostrar es OTRA cosa --
+    // cuantas veces se reengancho el canal desde que arranco el robot. Un
+    // canal que se resincroniza una vez tuvo un mal momento; uno que lleva
+    // veinte tiene un problema de cableado o de alimentación.
+    resincronizaciones[indiceMotor]++;
 }
 
 // ------------------------------------------------------------------
@@ -163,6 +170,12 @@ bool Encoders::huboResincronizacion(uint8_t motor) const
 {
     if (motor >= NUM_ENCODERS) return false;
     return resincronizado[motor];
+}
+
+uint16_t Encoders::cuentaResincronizaciones(uint8_t motor) const
+{
+    if (motor >= NUM_ENCODERS) return 0;
+    return resincronizaciones[motor];
 }
 
 void Encoders::limpiarResincronizacion(uint8_t motor)

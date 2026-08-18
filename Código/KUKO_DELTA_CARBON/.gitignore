@@ -3,3 +3,17 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# --- Python ---
+# El entorno virtual NUNCA va al repositorio: adentro tiene rutas absolutas
+# de la maquina donde se creo (pyvenv.cfg y los .exe de Scripts/ apuntan al
+# interprete de ESA maquina), asi que en la otra PC no arranca. Cada uno
+# crea el suyo con pc/requirements.txt, que es lo que si se comparte.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Configuracion local de la aplicacion de PC: puerto COM, indice de camara
+# y calibracion de esta maquina. Es distinta en cada PC a proposito.
+pc/config/local.json

@@ -1,0 +1,21 @@
+# Dependencias de la aplicacion de PC del KUKO Delta Carbon.
+#
+# Se instala con:
+#
+#     python -m venv pc/.venv
+#     pc\.venv\Scripts\pip install -r pc/requirements.txt
+#
+# El entorno virtual NO va al repositorio (ver .gitignore): adentro tiene
+# rutas absolutas de la maquina donde se creo. Cada uno crea el suyo.
+
+# Vision: camara, deteccion de color y forma, seguimiento.
+opencv-python>=4.10
+numpy>=2.0
+
+# Enlace serie con el ESP32.
+pyserial>=3.5
+
+# Interfaz. NiceGUI ya trae adentro FastAPI y uvicorn, asi que no hace falta
+# pedirlos aparte: el servidor de la interfaz y el que sirve el video son el
+# mismo, y por eso alcanza con un solo proceso.
+nicegui>=2.0

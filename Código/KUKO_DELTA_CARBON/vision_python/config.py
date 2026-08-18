@@ -462,4 +462,14 @@ LINE_X_CM = -23.0
 # Ancla del eje Y: en qué Y del robot cae el borde INFERIOR de la
 # imagen. El borde superior queda entonces en
 # IMAGE_BOTTOM_Y_CM + IMAGE_HEIGHT_CM = 11.2 cm.
-IMAGE_BOTTOM_Y_CM = -2.8
+# Calibrado contra el robot: con -2.8 el gripper agarraba 0,85 cm corrido,
+# y habia que compensarlo moviendo el recorte 24 px (que ademas desencuadraba
+# la imagen). El encuadre no era el problema: lo que estaba mal medido era
+# donde cae el borde inferior de la imagen en el sistema del robot.
+#
+#     24 px * (14,0 cm / 396 px) = 0,85 cm
+#
+# OJO: este valor tiene su par en el firmware (BELT_MIN_Y en Robot.cpp) y los
+# dos tienen que moverse juntos, o el firmware empieza a rechazar piezas de
+# un borde de la cinta por creerlas fuera de rango.
+IMAGE_BOTTOM_Y_CM = -1.95

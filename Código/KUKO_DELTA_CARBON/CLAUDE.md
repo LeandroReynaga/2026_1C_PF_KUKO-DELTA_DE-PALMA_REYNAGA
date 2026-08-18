@@ -120,6 +120,34 @@ fallos (colisión, encoder caído, homing vencido, parada manual) con el
 contexto de la pieza involucrada, y los imprime en formato clave=valor
 pensado para que la interfaz de Python los parsee. Se vuelca con `D`.
 
+**Telemetría** (`src/robot/Telemetry.h/.cpp`) son las tres líneas periódicas
+que consume la interfaz: `[T]` a 10 Hz (ángulos medidos y comandados, error
+del guard, umbral efectivo, finales de carrera, bomba), `[E]` a 1 Hz (modo,
+cola, caja, contadores de producción) y `[H]` cada 2 s (salud de encoders,
+vueltas de loop por segundo, RAM libre). Arranca **apagada**: se enciende con
+`V1`, se apaga con `V0` y `V?` pide una foto sin encender el stream. La clase
+no sabe nada del robot — `Robot::emitirTelemetria()` llena structs planas y
+`Telemetria` sólo formatea y lleva los relojes.
+
+**Tabla de parámetros** (`src/robot/Params.h/.cpp`) es lo que la interfaz
+puede ajustar sin recompilar: cada entrada lleva su rango, unidad y nivel
+(1 operación / 2 proceso / 3 servicio), el firmware **rechaza** lo que se va
+de rango, y `P*` persiste en NVS (sobrevive al reflasheo, que es donde antes
+se perdía toda la calibración hecha a mano). Se registran en
+`Robot::registrarParametros()`; las constantes correspondientes de
+`Robot.cpp` dejaron de ser `const` pero **los puntos de uso no cambiaron**.
+Los cinco parámetros del guard tienen copia local en `Robot`
+(`pGuardUmbral`…) porque el guard los guarda adentro con setters:
+`sincronizarGuard()` los baja cuando cambia la generación de la tabla. Por
+eso los comandos históricos `U`/`T`/`K`/`L`/`Q` ahora escriben en la tabla en
+vez de tocar el guard directo — si no, la tabla diría una cosa y el guard
+otra, y el próximo cambio de cualquier parámetro pisaría el ajuste hecho a
+mano.
+
+El contrato completo de todo esto está en `pc/PROTOCOLO.md`, y es la
+referencia válida: si el firmware y ese documento no coinciden, el que se
+apartó es el firmware.
+
 **Cinemática** (`src/kinematics/DeltaKinematics.h/.cpp`) es un namespace
 puramente matemático (sin I/O, sin llamadas a motores): `solveIK(x, y, z)`
 devuelve los ángulos de las articulaciones y los targets de pasos de motor
@@ -169,7 +197,10 @@ actualmente pero están vacíos.
 - `src/vision/Vision.*`, `src/tasks/TaskManager.*`, `src/motion/Trajectory.*`
   son archivos stub vacíos — todavía sin implementación.
 - `ConveyorIntercept` está implementado pero todavía no llamado desde `Robot`.
-- Los ángulos de homing (`HOME_ANGLE_M1/2/3` en `Robot.h`) y las coordenadas
-  del target de pick (`TARGET_X/Y/Z` en `Robot::updateGoPosition()`) se
-  ajustan a mano contra el robot físico — se espera que sigan cambiando a
-  medida que se calibra el hardware.
+- Los ángulos de homing (`HOME_ANGLE_M1/2/3`, ahora en `Robot.cpp` y
+  registrados como parámetros de nivel servicio) se ajustan a mano contra el
+  robot físico — se espera que sigan cambiando a medida que se calibra el
+  hardware.
+- La aplicación de PC vive en `pc/`: `pc/kuko/protocolo.py` es la mitad en
+  Python del contrato serie (con pruebas en `pc/tests/`), y todavía faltan
+  el núcleo (dueño de la cámara y del puerto) y la interfaz NiceGUI.

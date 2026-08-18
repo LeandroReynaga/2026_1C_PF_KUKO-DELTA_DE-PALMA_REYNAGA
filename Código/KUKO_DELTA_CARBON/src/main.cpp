@@ -47,6 +47,12 @@ void loop()
 
     robot.update();
 
+    // Cuenta las vueltas para poder informar el ritmo del loop en la línea
+    // de salud. Es el primer síntoma de que algo empezó a bloquear: si las
+    // vueltas por segundo se desploman, hay un delay(), un Serial.print()
+    // que llenó la FIFO o un encoder reintentando lecturas.
+    robot.contarVuelta();
+
     uint32_t ahora = millis();
     if (ahora - ultimoPrint_ms >= INTERVALO_PRINT_MS)
     {
