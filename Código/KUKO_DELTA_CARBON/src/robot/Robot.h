@@ -345,7 +345,7 @@ private:
     // cuando la generacion de la tabla cambia, sin averiguar cual cambio:
     // son cinco setters, sale mas barato aplicarlos todos que llevar
     // cuenta de cual fue.
-    void sincronizarGuard();
+    void sincronizarParametros();
 
     uint32_t generacionParams = 0;
 
@@ -362,9 +362,11 @@ private:
     // Copia local de los parametros que el guard guarda adentro. La tabla
     // necesita punteros a float estables y el guard los tiene privados con
     // setters, asi que la fuente de verdad de estos cinco es esta copia y
-    // sincronizarGuard() se encarga de bajarlos.
+    // sincronizarParametros() se encarga de bajarlos.
     float pGuardUmbral    = GuardConfig::UMBRAL_DEG;
     float pGuardReposo    = GuardConfig::UMBRAL_REPOSO_DEG;
+    float pGuardSalto     = GuardConfig::SALTO_PARADA_DEG;
+    float pGuardSaltoPct  = GuardConfig::SALTO_PARADA_FRAC * 100.0f;
     float pGuardConfirma  = GuardConfig::CONFIRMACION_MS;
     float pGuardMargen    = GuardConfig::MARGEN_VELOCIDAD_MS;
     float pGuardRetardo   = GuardConfig::RETARDO_ENCODER_MS;

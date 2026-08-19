@@ -12,6 +12,7 @@ scrollear para ver completo no sirve para eso.
 from __future__ import annotations
 
 import math
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +20,7 @@ from fastapi import Response
 from fastapi.responses import StreamingResponse
 from nicegui import app, ui
 
+from . import parametros as par
 from . import protocolo as pr
 from .estado import AMBAR, GRIS, ROJO, VERDE, EstadoSistema
 
@@ -76,16 +78,26 @@ def _svg_dial(indice: int, comandado: Optional[float], medido: Optional[float]) 
             f'A {r - 6} {r - 6} 0 0 {1 if limite < 0 else 0} {x1:.1f} {y1:.1f} Z" '
             f'fill="{CELESTE}" fill-opacity="0.30" stroke="{CELESTE}" stroke-width="1.5"/>')
 
+    # Un valor fuera de la escala del dial se recortaba sin decir nada, y la
+    # aguja clavada en el tope se lee como "el brazo esta ahi". Fue justo lo
+    # que tapo un angulo de 355 grados que llegaba de un encoder mal
+    # filtrado: el numero decia la verdad y la aguja decia otra cosa. Ahora
+    # el numero se pinta en ambar cuando esta fuera de escala.
+    fuera_de_escala = medido is not None and not (DIAL_MIN <= medido <= DIAL_MAX)
+
     if medido is not None:
         x, y = punto(max(DIAL_MIN, min(DIAL_MAX, medido)), r - 4)
         partes.append(f'<line x1="{cx}" y1="{cy}" x2="{x:.1f}" y2="{y:.1f}" '
-                      f'stroke="#F5D442" stroke-width="3" stroke-linecap="round"/>')
+                      f'stroke="{"#F5B942" if fuera_de_escala else "#F5D442"}" '
+                      f'stroke-width="3" stroke-linecap="round" '
+                      f'stroke-dasharray="{"4 3" if fuera_de_escala else "none"}"/>')
 
     partes.append(f'<circle cx="{cx}" cy="{cy}" r="4" fill="{TEXTO}"/>')
     partes.append(f'<text x="{cx}" y="15" fill="{APAGADO}" font-size="13" '
                   f'text-anchor="middle" font-family="system-ui">{indice}</text>')
-    partes.append(f'<text x="{cx}" y="119" fill="{TEXTO}" font-size="14" '
-                  f'text-anchor="middle" font-family="system-ui">'
+    partes.append(f'<text x="{cx}" y="119" '
+                  f'fill="{COLOR_ESTADO[AMBAR] if fuera_de_escala else TEXTO}" '
+                  f'font-size="14" text-anchor="middle" font-family="system-ui">'
                   f'{f"{medido:.1f}°" if medido is not None else "--"}</text>')
     partes.append("</svg>")
 
@@ -190,6 +202,17 @@ class Interfaz:
         self._dialogo_caja = None
         self._repeticion = None
 
+        # Ajustes: los controles se arman con lo que contesta 'P?', asi que
+        # no existen hasta que llega. `_firma` guarda que parametros habia la
+        # ultima vez para rearmar la lista SOLO cuando cambia el conjunto --
+        # rearmarla en cada refresco perderia el foco del teclado a mitad de
+        # tipear un numero.
+        self._firma: dict[int, tuple] = {}
+        self._nav: dict[int, object] = {}
+        self._lista: dict[int, object] = {}
+        self._pie_texto: dict[int, object] = {}
+        self._filas: dict[str, dict] = {}
+
         self._registrar_rutas()
 
     # ------------------------------------------------------------------
@@ -273,11 +296,11 @@ class Interfaz:
             with ui.tab_panel(self.tab_operacion).classes("p-0").style("height:100%"):
                 self._operacion()
 
-            with ui.tab_panel(self.tab_proceso):
-                ui.label("Parametros de proceso — en construccion").classes("titulo")
+            with ui.tab_panel(self.tab_proceso).classes("p-0").style("height:100%"):
+                self._ajustes(pr.NIVEL_PROCESO, self._panel_en_vivo)
 
-            with ui.tab_panel(self.tab_servicio):
-                ui.label("Calibracion de servicio — en construccion").classes("titulo")
+            with ui.tab_panel(self.tab_servicio).classes("p-0").style("height:100%"):
+                self._ajustes(pr.NIVEL_SERVICIO, self._panel_servicio)
 
         ui.timer(0.1, self._refrescar_rapido)
         ui.timer(0.5, self._refrescar_lento)
@@ -357,9 +380,16 @@ class Interfaz:
                             .style("flex:1 1 0"):
                         ui.label("Latencia").classes("titulo").style("flex:0 0 auto")
 
-                        self.slider_latencia = ui.slider(
-                            min=-0.10, max=0.30, step=0.005,
-                            on_change=self._cambiar_latencia).props("dense").style("flex:1 1 0")
+                        # El slider no se crea aca: sus topes son el rango que
+                        # declara el firmware para 'vis_lat', y eso llega con
+                        # el 'P?' un par de segundos despues. Tenerlos escritos
+                        # tambien de este lado es la receta para que un dia el
+                        # slider ofrezca un rango que el robot rechaza -- ya
+                        # paso con el minimo, que quedo en -0,10 s despues de
+                        # que el firmware pasara a -0,20 s.
+                        self.caja_latencia = ui.row() \
+                            .classes("items-center no-wrap").style("flex:1 1 0")
+                        self.slider_latencia = None
 
                         # Los botones ajustan de a 0,1 cm y no de a
                         # milisegundos: el centimetro es lo que se ve errarle
@@ -428,6 +458,558 @@ class Interfaz:
                 .classes("w-full")
                 .style("font-size:15px;font-weight:600;letter-spacing:.07em;"
                        "text-transform:uppercase;padding:2px 8px"))
+
+    # ==================================================================
+    #  AJUSTES  (pestanas de proceso y servicio)
+    # ==================================================================
+    #
+    #  Una lista larga y scrolleable, con indice a la izquierda: el mismo
+    #  patron que un menu de opciones de un juego, y por el mismo motivo --
+    #  hay muchos valores, cada uno se toca poco, y lo que importa es
+    #  encontrar rapido el que se busca y entender que hace antes de moverlo.
+    #
+    #  NINGUN parametro esta escrito aca. La lista se arma recorriendo lo que
+    #  contesto 'P?', con el rango y el nivel que declaro el firmware, asi que
+    #  agregar uno es una linea de C++ y aparece solo, en la pestana que le
+    #  corresponde. Lo unico que pone Python es el nombre en castellano y la
+    #  explicacion (parametros.py), y hasta eso es opcional.
+
+    def _ajustes(self, nivel: int, extra=None) -> None:
+        with ui.row().classes("w-full gap-2 p-2 no-wrap").style("height:100%"):
+            with ui.column().classes("panel p-2 gap-1 no-wrap") \
+                    .style("flex:0 0 186px;height:100%;overflow-y:auto"):
+                ui.label("Secciones").classes("titulo").style("padding:0 6px 4px")
+                self._nav[nivel] = ui.column().classes("w-full gap-0")
+
+            with ui.column().classes("panel no-wrap") \
+                    .style("flex:1 1 0;height:100%;min-height:0;gap:0;overflow:hidden"):
+                # La clase 'lista-ajustes' la usa _ir_a() para encontrar
+                # ESTE contenedor desde el ancla de la seccion.
+                self._lista[nivel] = ui.column().classes("w-full gap-0 lista-ajustes") \
+                    .style("flex:1 1 0;min-height:0;overflow-y:auto;"
+                           "overscroll-behavior:contain")
+                self._barra_inferior(nivel)
+
+            if extra is not None:
+                with ui.column().classes("gap-2 no-wrap") \
+                        .style("flex:0 0 336px;height:100%;min-height:0"):
+                    extra()
+
+    def _barra_inferior(self, nivel: int) -> None:
+        """Guardar / restaurar / releer, y cuantos difieren de fabrica.
+
+        Va abajo y siempre visible: 'P*' es lo que hace que la calibracion
+        sobreviva al proximo reflasheo, y si hubiera que scrollear hasta el
+        final de la lista para encontrarlo, tarde o temprano alguien ajusta
+        media hora el robot y despues sube firmware sin haber guardado.
+        """
+
+        with ui.row().classes("w-full items-center gap-2 no-wrap px-3 py-2") \
+                .style(f"flex:0 0 auto;border-top:1px solid {BORDE}"):
+            self._pie_texto[nivel] = ui.label("").style(
+                f"color:{APAGADO};font-size:12px;flex:1 1 0")
+
+            ui.button("Releer", on_click=lambda: self.enviar(pr.cmd_listar_parametros())) \
+                .props("flat dense no-caps").style(f"color:{APAGADO}")
+            ui.button("De fabrica", on_click=self._confirmar_de_fabrica) \
+                .props("flat dense no-caps").style(f"color:{APAGADO}")
+            ui.button("Guardar en la placa", on_click=self._guardar_parametros) \
+                .props("unelevated dense no-caps") \
+                .style(f"background:{CELESTE}!important;color:#0B1220!important")
+
+    # ------------------------------------------------------------------
+    def _reconstruir(self, nivel: int) -> None:
+        """Rearma la lista solo si cambio el conjunto de parametros.
+
+        Rearmarla en cada refresco perderia el foco del teclado a mitad de
+        tipear un numero, dos veces por segundo.
+        """
+
+        contenedor = self._lista.get(nivel)
+
+        if contenedor is None:
+            return
+
+        grupos = par.agrupar(self.estado.parametros.values(), nivel)
+        firma = tuple(p.nombre for _, ps in grupos for p in ps)
+
+        if firma == self._firma.get(nivel):
+            return
+
+        self._firma[nivel] = firma
+
+        for nombre in firma:
+            self._filas.pop(nombre, None)
+
+        contenedor.clear()
+        self._nav[nivel].clear()
+
+        if not firma:
+            with contenedor:
+                ui.label("Esperando la tabla de parametros del robot...") \
+                    .style(f"color:{APAGADO};padding:14px")
+            return
+
+        for i, (grupo, ps) in enumerate(grupos):
+            ident = f"sec-{nivel}-{i}"
+
+            with self._nav[nivel]:
+                ui.button(grupo, on_click=lambda _, d=ident: self._ir_a(d)) \
+                    .props("flat dense no-caps align=left").classes("w-full") \
+                    .style(f"color:{APAGADO};font-size:13px;padding:3px 6px")
+
+            with contenedor:
+                ui.html(f'<div id="{ident}"></div>').style("height:0")
+
+                with ui.row().classes("w-full items-center no-wrap") \
+                        .style(f"background:{INACTIVO};padding:6px 12px;"
+                               "position:sticky;top:0;z-index:2"):
+                    ui.label(grupo).classes("titulo").style("font-size:13px")
+
+                for parametro in ps:
+                    self._fila_param(parametro)
+
+    def _ir_a(self, ident: str) -> None:
+        """Scrollea SOLO la lista, no la pagina.
+
+        Aca habia un scrollIntoView(), y estaba mal: ese metodo scrollea
+        todos los ancestros scrolleables del elemento, y el navegador
+        considera scrolleable tambien un contenedor con overflow:hidden --
+        no deja que lo mueva la rueda del mouse, pero si lo mueve por
+        codigo. Resultado: al saltar a una seccion del final, la pagina
+        entera se corria hacia arriba, la barra de pestanas quedaba fuera de
+        vista y no habia forma de volver, porque justamente la rueda no
+        actua sobre un overflow:hidden.
+
+        Movemos el scrollTop del contenedor de la lista a mano y de paso
+        enderezamos cualquier ancestro que haya quedado corrido de antes.
+        """
+
+        ui.run_javascript(f"""
+            const ancla = document.getElementById("{ident}");
+            const lista = ancla ? ancla.closest(".lista-ajustes") : null;
+
+            if (lista) {{
+                lista.scrollTop += ancla.getBoundingClientRect().top
+                                 - lista.getBoundingClientRect().top;
+
+                for (let n = lista.parentElement; n; n = n.parentElement) {{
+                    if (n.scrollTop) {{ n.scrollTop = 0; }}
+                }}
+
+                window.scrollTo(0, 0);
+            }}
+        """)
+
+    # ------------------------------------------------------------------
+    def _fila_param(self, p: pr.Parametro) -> None:
+        ficha = par.describir(p.nombre)
+        entero = p.tipo in ("i", "b")
+
+        minimo = p.minimo if p.minimo is not None else 0.0
+        maximo = p.maximo if p.maximo is not None else 1.0
+        rango = max(maximo - minimo, 1e-6)
+
+        # El paso sale del rango declarado y no de una tabla de casos: un
+        # parametro que va de 0 a 0,3 cm necesita milesimas y uno que va de
+        # 20000 a 150000 pasos/s no necesita ni decimas.
+        if entero:
+            paso = 1.0
+        elif rango <= 1.0:
+            paso = 0.005
+        elif rango <= 15.0:
+            paso = 0.01
+        elif rango <= 60.0:
+            paso = 0.05
+        else:
+            paso = 0.5
+
+        decimales = 0 if entero else max(0, -int(math.floor(math.log10(paso))))
+
+        fila = {"paso": paso, "hasta": 0.0, "timer": None, "mudo": False,
+                "pendiente": None, "editando": False}
+        self._filas[p.nombre] = fila
+
+        with ui.row().classes("w-full items-center no-wrap gap-3") \
+                .style(f"padding:7px 12px;border-bottom:1px solid {BORDE}"):
+            with ui.column().classes("gap-0").style("flex:1 1 0;min-width:0"):
+                with ui.row().classes("items-center gap-2 no-wrap"):
+                    fila["punto"] = ui.html()
+                    ui.label(ficha.etiqueta).style(f"color:{TEXTO};font-size:14px")
+                    ui.label(p.nombre).style(
+                        f"color:{APAGADO};font-size:11px;opacity:.55;"
+                        "font-family:ui-monospace,monospace")
+
+                ui.label(ficha.ayuda).style(
+                    f"color:{APAGADO};font-size:12px;line-height:1.35;"
+                    "white-space:normal")
+
+            fila["slider"] = ui.slider(
+                min=minimo, max=maximo, step=paso, value=p.valor,
+                on_change=lambda e, n=p.nombre: self._tocar(n, e.value)) \
+                .props("dense").style("flex:0 0 176px")
+
+            fila["num"] = ui.number(
+                value=p.valor, format=f"%.{decimales}f",
+                step=paso, min=minimo, max=maximo,
+                on_change=lambda e, n=p.nombre: self._tocar(n, e.value, 0.8)) \
+                .props("dense outlined").style("flex:0 0 92px")
+
+            # Mientras el cursor esta DENTRO del campo, el refresco no lo
+            # toca. Sin esto es imposible escribir un numero: a los 0,5 s el
+            # refresco reescribe el valor que dice el firmware y se pierde lo
+            # tipeado a medio tipear.
+            fila["num"].on("focus", lambda _, n=p.nombre: self._editando(n, True))
+            fila["num"].on("blur", lambda _, n=p.nombre: self._editando(n, False))
+
+            # Y la demora de 0,8 s de arriba es para que escribir "-32" no
+            # mande primero un 3 y despues un -3 (que esta dentro de rango
+            # para varios de estos parametros). Enter no espera.
+            fila["num"].on("keydown.enter", lambda _, n=p.nombre: self._tocar_numero(n))
+
+            ui.label(p.unidad or "").style(
+                f"color:{APAGADO};font-size:12px;flex:0 0 46px")
+
+            fila["reset"] = ui.button(
+                icon="restart_alt", on_click=lambda _, n=p.nombre: self._de_fabrica(n)) \
+                .props("flat dense round size=sm").style(f"color:{APAGADO}")
+
+            if p.defecto is not None:
+                fila["reset"].tooltip(
+                    f"de fabrica: {p.defecto:.{decimales}f} {p.unidad}".rstrip())
+
+    # ------------------------------------------------------------------
+    def _tocar(self, nombre: str, valor, demora: float = 0.22) -> None:
+        """Un control se movio. Se manda con un respiro, no en el acto.
+
+        Arrastrar un slider genera decenas de eventos por segundo y el
+        puerto serie lo comparte la vision: mandarlos todos llenaria el
+        enlace de escrituras de un valor que el operador todavia esta
+        eligiendo. Tipear un numero es igual, pero mas lento (de ahi la
+        demora mas larga del campo de texto).
+        """
+
+        fila = self._filas.get(nombre)
+
+        if fila is None or fila["mudo"] or valor is None:
+            return
+
+        # Mientras el operador toca, el refresco no le pisa el control con
+        # lo que dice el firmware (que todavia es el valor viejo). Se marca
+        # ANTES del descarte de abajo: si no, volver al valor original con
+        # las flechitas dejaria el campo destapado a mitad de la edicion.
+        fila["hasta"] = time.monotonic() + max(1.5, demora + 1.0)
+
+        actual = self.estado.parametros.get(nombre)
+
+        if actual is not None and actual.valor is not None and \
+                abs(actual.valor - float(valor)) < fila["paso"] / 4:
+            return
+
+        fila["pendiente"] = float(valor)
+
+        if fila["timer"] is not None:
+            fila["timer"].cancel()
+            fila["timer"] = None
+
+        if demora <= 0.0:
+            self._despachar_param(nombre)
+            return
+
+        fila["timer"] = ui.timer(demora, lambda n=nombre: self._despachar_param(n),
+                                 once=True)
+
+    def _tocar_numero(self, nombre: str) -> None:
+        fila = self._filas.get(nombre)
+
+        if fila is not None:
+            self._tocar(nombre, fila["num"].value, 0.0)
+
+    def _editando(self, nombre: str, activo: bool) -> None:
+        """El campo de texto gano o perdio el foco.
+
+        Con el foco adentro el refresco no lo toca en absoluto (ni por
+        tiempo): alguien puede quedarse pensando delante del campo mas de lo
+        que dure cualquier ventana. Al salir se manda lo que quedo escrito,
+        sin esperar la demora.
+        """
+
+        fila = self._filas.get(nombre)
+
+        if fila is None:
+            return
+
+        fila["editando"] = activo
+
+        if not activo:
+            self._tocar(nombre, fila["num"].value, 0.0)
+
+    def _despachar_param(self, nombre: str) -> None:
+        fila = self._filas.get(nombre)
+
+        if fila is None or fila["pendiente"] is None:
+            return
+
+        valor = fila["pendiente"]
+        fila["pendiente"] = None
+        fila["timer"] = None
+
+        if not self.enviar(pr.cmd_parametro(nombre, valor)):
+            ui.notify("sin enlace con el robot", color="negative")
+
+    def _de_fabrica(self, nombre: str) -> None:
+        fila = self._filas.get(nombre)
+        parametro = self.estado.parametros.get(nombre)
+
+        if fila is None or parametro is None or parametro.defecto is None:
+            return
+
+        fila["hasta"] = 0.0
+        self.enviar(pr.cmd_parametro(nombre, parametro.defecto))
+
+    def _guardar_parametros(self) -> None:
+        if self.enviar(pr.cmd_guardar_parametros()):
+            ui.notify("Guardado en la placa: sobrevive al reinicio y al reflasheo",
+                      color="positive")
+
+    def _confirmar_de_fabrica(self) -> None:
+        modificados = [p for p in self.estado.parametros.values() if p.modificado]
+
+        with ui.dialog() as dialogo, ui.card().style(f"background:{PANEL};color:{TEXTO}"):
+            ui.label("Volver todo a los valores de fabrica").classes("text-lg")
+            ui.label(f"Se pierden los {len(modificados)} valores ajustados a mano, "
+                     "de las tres pestanas, no solo de esta. Los de fabrica son "
+                     "los que estan escritos en el codigo del firmware.") \
+                .style(f"color:{APAGADO};max-width:400px")
+
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Cancelar", on_click=dialogo.close).props("flat dense no-caps")
+                ui.button("Restaurar", on_click=lambda: self._restaurar(dialogo)) \
+                    .props("dense unelevated no-caps") \
+                    .style(f"background:{ROJO_STOP}!important;color:#fff!important")
+
+        dialogo.open()
+
+    def _restaurar(self, dialogo) -> None:
+        self.enviar(pr.cmd_parametros_de_fabrica())
+
+        # El firmware no vuelca la tabla despues de 'P0': sin este pedido, la
+        # pantalla seguiria mostrando los valores viejos hasta el proximo
+        # arranque.
+        self.enviar(pr.cmd_listar_parametros())
+
+        for fila in self._filas.values():
+            fila["hasta"] = 0.0
+
+        dialogo.close()
+        ui.notify("Valores de fabrica restaurados", color="warning")
+
+    # ------------------------------------------------------------------
+    def _refrescar_ajustes(self) -> None:
+        self._reconstruir(pr.NIVEL_PROCESO)
+        self._reconstruir(pr.NIVEL_SERVICIO)
+
+        ahora = time.monotonic()
+        vivo = self.estado.enlace_vivo()
+
+        for nombre, fila in self._filas.items():
+            p = self.estado.parametros.get(nombre)
+
+            if p is None or p.valor is None:
+                continue
+
+            fila["slider"].set_enabled(vivo)
+            fila["num"].set_enabled(vivo)
+
+            # Un punto celeste marca lo que no esta en su valor de fabrica.
+            # Es lo unico que distingue "el robot viene asi" de "alguien lo
+            # ajusto y no lo anoto en ningun lado".
+            fila["punto"].content = (
+                '<span style="display:inline-block;width:7px;height:7px;'
+                f'border-radius:50%;background:'
+                f'{CELESTE if p.modificado else "transparent"}"></span>')
+
+            # El campo con el foco adentro no se toca nunca, y el resto de la
+            # fila queda quieto un rato despues de cada cambio: el firmware
+            # tarda en contestar y hasta que contesta sigue diciendo el valor
+            # viejo, que es exactamente el que no hay que volver a escribir.
+            if fila["editando"] or ahora < fila["hasta"]:
+                continue
+
+            # Poner .value dispara on_change igual que si lo hubiera movido
+            # una persona; sin el mudo, cada refresco reenviaria el valor.
+            fila["mudo"] = True
+
+            if abs((fila["slider"].value or 0.0) - p.valor) > fila["paso"] / 2:
+                fila["slider"].value = p.valor
+
+            if fila["num"].value is None or \
+                    abs(float(fila["num"].value) - p.valor) > 1e-6:
+                fila["num"].value = p.valor
+
+            fila["mudo"] = False
+
+        for nivel, etiqueta in self._pie_texto.items():
+            total = sum(1 for p in self.estado.parametros.values() if p.nivel == nivel)
+            cuantos = sum(1 for p in self.estado.parametros.values()
+                          if p.nivel == nivel and p.modificado)
+
+            etiqueta.text = (f"{total} ajustes · {cuantos} distintos de fabrica"
+                             if total else "esperando la tabla del robot")
+
+    # ==================================================================
+    #  Paneles laterales de las dos pestanas
+    # ==================================================================
+    def _panel_en_vivo(self) -> None:
+        """Lo que hay que estar mirando MIENTRAS se mueven estos numeros.
+
+        Los umbrales del guard no se eligen leyendo el manual: se eligen
+        mirando cuanto error hay de verdad en cada tramo. Tener el error y
+        el umbral efectivo al lado del slider evita el ida y vuelta entre
+        pestanas, que es donde se pierde la referencia de lo que uno movio.
+        """
+
+        with ui.column().classes("panel p-3 gap-2").style("flex:0 0 auto"):
+            ui.label("Supervision en vivo").classes("titulo")
+            self.html_guard_vivo = ui.html().classes("w-full")
+
+        with ui.column().classes("panel p-3 gap-2").style("flex:0 0 auto"):
+            ui.label("Cinta").classes("titulo")
+            self.html_cinta_vivo = ui.html().classes("w-full")
+
+        with ui.column().classes("panel p-3 gap-2").style("flex:1 1 0;min-height:0"):
+            ui.label("Produccion").classes("titulo")
+            self.html_produccion = ui.html().classes("w-full")
+
+    def _panel_servicio(self) -> None:
+        with ui.column().classes("panel p-3 gap-2").style("flex:0 0 auto"):
+            ui.label("Acciones").classes("titulo")
+
+            with ui.row().classes("w-full items-center justify-between no-wrap"):
+                ui.label("Frenar por colision").style(f"color:{TEXTO};font-size:13px")
+                self.sw_paradas = ui.switch(
+                    on_change=lambda e: self._alternar_paradas(bool(e.value))) \
+                    .props("dense color=cyan-4")
+
+            ui.label("Apagado, la supervision sigue midiendo y avisando pero no "
+                     "frena el robot. Es para calibrar umbrales sin que cada "
+                     "prueba termine en un rehoming.") \
+                .style(f"color:{APAGADO};font-size:11.5px;line-height:1.35")
+
+            with ui.row().classes("w-full items-center justify-between no-wrap"):
+                ui.label("Stream de telemetria").style(f"color:{TEXTO};font-size:13px")
+                self.sw_telemetria = ui.switch(
+                    value=True,
+                    on_change=lambda e: self.enviar(pr.cmd_telemetria(bool(e.value)))) \
+                    .props("dense color=cyan-4")
+
+            ui.label("Apagarlo deja la pantalla ciega: los diales y los puntitos "
+                     "se congelan. Solo sirve para leer el puerto a mano.") \
+                .style(f"color:{APAGADO};font-size:11.5px;line-height:1.35")
+
+            with ui.row().classes("w-full gap-2 no-wrap"):
+                for texto, comando in (("Estado guard", pr.cmd_estado_supervision),
+                                       ("Traza", pr.cmd_alternar_traza),
+                                       ("Fallos", pr.cmd_historial_fallos)):
+                    ui.button(texto, on_click=lambda _, c=comando: self.enviar(c())) \
+                        .props("flat dense no-caps").classes("flex-1") \
+                        .style(f"color:{CELESTE};font-size:12px")
+
+        with ui.column().classes("panel p-3 gap-1").style("flex:1 1 0;min-height:0"):
+            ui.label("Consola del robot").classes("titulo")
+            self.html_consola = ui.html().style(
+                "flex:1 1 0;min-height:0;overflow-y:auto;width:100%")
+
+    def _alternar_paradas(self, activar: bool) -> None:
+        # El switch refleja al robot; solo se manda el comando si lo que se
+        # pide es distinto de lo que el robot dice tener. Sin esto, el
+        # set_value() del refresco dispararia el comando de vuelta.
+        e = self.estado.e
+        actual = bool(e.paradas_activas) if e and e.paradas_activas is not None else True
+
+        if activar != actual:
+            self.enviar(pr.cmd_alternar_paradas())
+
+    # ------------------------------------------------------------------
+    def _refrescar_paneles(self) -> None:
+        est = self.estado
+        e, t = est.e, est.t
+
+        def linea(clave: str, valor) -> str:
+            return (f'<div style="display:flex;justify-content:space-between;'
+                    f'font-size:13px;margin:3px 0"><span style="color:{APAGADO}">'
+                    f'{clave}</span><span style="color:{TEXTO}">{valor}</span></div>')
+
+        if hasattr(self, "html_guard_vivo"):
+            filas = []
+
+            for i in range(3):
+                err = abs(t.error[i]) if t and t.error[i] is not None else None
+                umb = t.umbral[i] if t and t.umbral[i] else None
+
+                # margen() ya es error/umbral: la misma cuenta que decide la
+                # colision, para que la barra no pueda decir una cosa
+                # distinta de la que va a hacer el robot.
+                margen = t.margen(i) if t else None
+                frac = min(1.0, margen) if margen is not None else 0.0
+                color = COLOR_ESTADO[VERDE if frac < 0.7
+                                     else (AMBAR if frac < 1.0 else ROJO)]
+
+                filas.append(
+                    f'<div style="margin:7px 0">'
+                    f'<div style="display:flex;justify-content:space-between;'
+                    f'font-size:12px;color:{APAGADO}"><span>Eje {i + 1}</span>'
+                    f'<span>{"—" if err is None else f"{err:.1f}"} de '
+                    f'{"—" if umb is None else f"{umb:.1f}"}°</span></div>'
+                    f'<div style="height:6px;border-radius:3px;background:{INACTIVO};'
+                    f'margin-top:3px"><div style="height:6px;border-radius:3px;'
+                    f'width:{frac * 100:.0f}%;background:{color}"></div></div></div>')
+
+            self.html_guard_vivo.content = "".join(filas)
+
+        if hasattr(self, "html_cinta_vivo"):
+            conf = est.parametros.get("cinta_cms")
+            pwm = est.parametros.get("cinta_pwm")
+
+            self.html_cinta_vivo.content = (
+                linea("configurada", "—" if not conf or conf.valor is None
+                      else f"{conf.valor:.2f} cm/s")
+                + linea("medida por la vision", "—" if est.cinta_medida is None
+                        else f"{est.cinta_medida:.2f} cm/s")
+                + linea("PWM", "—" if not pwm or pwm.valor is None
+                        else f"{pwm.valor:.0f} %")
+                + linea("en marcha", "si" if e and e.cinta else "no")
+                + f'<div style="color:{APAGADO};font-size:11.5px;margin-top:6px;'
+                  'line-height:1.35">Las dos primeras tienen que coincidir. Si no, '
+                  'la planificacion apunta a donde la pieza no va a estar.</div>')
+
+        if hasattr(self, "html_produccion"):
+            tasa = e.tasa_exito if e else None
+
+            self.html_produccion.content = (
+                linea("detectadas", e.detectadas if e else "—")
+                + linea("depositadas", e.depositadas if e else "—")
+                + linea("descartadas", e.descartadas if e else "—")
+                + linea("fallos", e.fallos if e else "—")
+                + linea("efectividad", "—" if tasa is None else f"{tasa * 100:.0f} %"))
+
+        if hasattr(self, "sw_paradas"):
+            activas = (bool(e.paradas_activas)
+                       if e and e.paradas_activas is not None else True)
+
+            if self.sw_paradas.value != activas:
+                self.sw_paradas.set_value(activas)
+
+            self.sw_paradas.set_enabled(est.enlace_vivo())
+            self.sw_telemetria.set_enabled(est.enlace_vivo())
+
+        if hasattr(self, "html_consola"):
+            self.html_consola.content = "".join(
+                f'<div style="font-family:ui-monospace,monospace;font-size:11.5px;'
+                f'color:{APAGADO};line-height:1.5;white-space:pre-wrap;'
+                f'word-break:break-word">{l}</div>'
+                for l in est.consola[-40:]) or (
+                f'<div style="color:{APAGADO};font-size:12px">sin novedades</div>')
 
     # ------------------------------------------------------------------
     #  Acciones
@@ -578,6 +1160,8 @@ class Interfaz:
         self._modo_y_contadores()
         self._avisar_caja_completa()
         self._latencia()
+        self._refrescar_ajustes()
+        self._refrescar_paneles()
 
     def _guard_y_paro(self) -> None:
         est = self.estado
@@ -734,6 +1318,18 @@ class Interfaz:
         if not param or param.valor is None:
             self.etiqueta_latencia.text = "—"
             return
+
+        # Recien ahora se conoce el rango, asi que recien ahora existe el
+        # slider. Se crea una sola vez, cuando llega la tabla.
+        if self.slider_latencia is None:
+            minimo = param.minimo if param.minimo is not None else -0.2
+            maximo = param.maximo if param.maximo is not None else 0.3
+
+            with self.caja_latencia:
+                self.slider_latencia = ui.slider(
+                    min=minimo, max=maximo, step=0.005, value=param.valor,
+                    on_change=self._cambiar_latencia) \
+                    .props("dense").classes("w-full")
 
         # El slider no se pisa mientras el operador lo esta arrastrando: se
         # sincroniza solo cuando el valor del firmware difiere de verdad.

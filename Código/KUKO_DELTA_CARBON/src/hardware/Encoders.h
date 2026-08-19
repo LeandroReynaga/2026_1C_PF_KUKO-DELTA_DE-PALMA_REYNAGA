@@ -10,7 +10,12 @@ struct CanalEncoder
 {
     uint16_t rawActual          = 0xFFFF; // última lectura cruda (0 al raw máximo efectivo)
     float    anguloActual       = 0.0f;   // grados 0-360 sin filtrar (marco del sensor, no del robot)
-    float    anguloFiltrado     = 0.0f;   // grados filtrados (marco del sensor, sin offset de home)
+
+    // anguloFiltrado es el CONTINUO suavizado, no el envuelto: se filtra
+    // sobre anguloContinuo y por lo tanto puede pasarse de 360 o dar
+    // negativo, igual que él. Filtrarlo en 0-360 estaba mal -- ver el
+    // comentario largo en procesarLecturaValida().
+    float    anguloFiltrado     = 0.0f;   // grados filtrados (mismo marco que anguloContinuo)
     float    anguloContinuo     = 0.0f;   // grados acumulados sin salto en 0/360 (marco del sensor, sin offset de home)
     int32_t  vueltas            = 0;      // vueltas completas acumuladas
     bool     inicializado       = false;  // true luego de la primera lectura válida

@@ -138,7 +138,10 @@ se perdía toda la calibración hecha a mano). Se registran en
 `Robot.cpp` dejaron de ser `const` pero **los puntos de uso no cambiaron**.
 Los cinco parámetros del guard tienen copia local en `Robot`
 (`pGuardUmbral`…) porque el guard los guarda adentro con setters:
-`sincronizarGuard()` los baja cuando cambia la generación de la tabla. Por
+`sincronizarParametros()` los baja cuando cambia la generación de la tabla,
+y de paso rearma los límites de `Motors` y reaplica el PWM de la cinta —
+son los otros dos casos donde alguien guarda copia en vez de leer la
+variable en el punto de uso. Por
 eso los comandos históricos `U`/`T`/`K`/`L`/`Q` ahora escriben en la tabla en
 vez de tocar el guard directo — si no, la tabla diría una cosa y el guard
 otra, y el próximo cambio de cualquier parámetro pisaría el ajuste hecho a
@@ -163,8 +166,11 @@ después de una remedición o un cambio de microstepping del driver.
 `Motors::moveSynchronized`) escala la velocidad/aceleración de cada eje de
 forma proporcional a la fracción de la distancia de recorrido más grande
 entre los tres, para que los tres motores lleguen simultáneamente pese a
-tener distancias distintas. `Motors::MAX_SPEED`/`MAX_ACCELERATION` son el
-único techo de velocidad global para todo el sistema.
+tener distancias distintas. `Motors::VEL_MAX` / `ACC_RAPIDA` / `ACC_SUAVE` son el
+único techo de velocidad global para todo el sistema. Dejaron de ser
+`constexpr` para poder barrerlos desde la interfaz: `FAST_LIMITS`,
+`SOFT_LIMITS` y `DEFAULT_LIMITS` se leen igual que antes en los puntos de
+uso, pero los rearma `Motors::aplicarLimites()`.
 
 **Intercepción de la cinta transportadora** (`src/motion/ConveyorIntercept.h/.cpp`)
 es un namespace de puro cálculo (sin llamadas a motores/IO) que resuelve
@@ -202,5 +208,12 @@ actualmente pero están vacíos.
   robot físico — se espera que sigan cambiando a medida que se calibra el
   hardware.
 - La aplicación de PC vive en `pc/`: `pc/kuko/protocolo.py` es la mitad en
-  Python del contrato serie (con pruebas en `pc/tests/`), y todavía faltan
-  el núcleo (dueño de la cámara y del puerto) y la interfaz NiceGUI.
+  Python del contrato serie (con pruebas en `pc/tests/`), `enlace.py` es el
+  dueño del puerto, `vision.py` el de la cámara y `ui.py` la interfaz
+  NiceGUI (`pc/kuko_app.py` levanta las tres).
+- Las pestañas de proceso y servicio son una lista de ajustes estilo menú de
+  opciones, armada **recorriendo lo que contesta `P?`** — no hay ninguna
+  lista de parámetros del lado de Python. `pc/kuko/parametros.py` sólo
+  aporta el nombre en castellano, el grupo y la explicación de cada uno, y
+  un parámetro sin ficha ahí aparece igual, con su nombre corto. Agregar un
+  ajuste sigue siendo una línea en `Robot::registrarParametros()`.

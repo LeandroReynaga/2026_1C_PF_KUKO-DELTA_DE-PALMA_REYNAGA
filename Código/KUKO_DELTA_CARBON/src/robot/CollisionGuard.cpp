@@ -100,8 +100,13 @@ void CollisionGuard::begin()
         firmaRep[i]         = 0.0f;
         firmaLista[i]       = false;
         reposoDesde_ms[i]   = 0;
+        firmaPrevia[i]         = 0.0f;
+        hayFirmaPrevia[i]      = false;
+        recorridoDesdeFirma[i] = 0.0f;
     }
 
+    saltoParadaDeg       = GuardConfig::SALTO_PARADA_DEG;
+    saltoParadaFrac      = GuardConfig::SALTO_PARADA_FRAC;
     umbralReposoDeg      = GuardConfig::UMBRAL_REPOSO_DEG;
     confirmacionReposoMs = GuardConfig::CONFIRMACION_REPOSO_MS;
     enHome               = false;
@@ -259,6 +264,14 @@ void CollisionGuard::fijarReferencia()
         firmaRep[i]         = 0.0f;
         firmaLista[i]       = false;
         reposoDesde_ms[i]   = 0;
+
+        // El salto entre paradas tambien arranca de cero: la referencia es
+        // nueva, asi que la firma de antes del homing no es comparable con
+        // las de despues (justamente porque el homing acaba de corregir lo
+        // que se hubiera perdido).
+        firmaPrevia[i]         = 0.0f;
+        hayFirmaPrevia[i]      = false;
+        recorridoDesdeFirma[i] = 0.0f;
 
         // atrasoSeg NO se reinicia: es una propiedad de la cadena de
         // medicion (sensor + filtro + muestreo), no de esta corrida, y
@@ -439,6 +452,12 @@ bool CollisionGuard::actualizar(long pasos1, long pasos2, long pasos3)
         // a cero pero la comandada sigue alta, que es justo el caso que hay
         // que seguir vigilando.
         const float velInstantanea = (cmdDegAhora - cmdDegPrev[i]) / dt;
+
+        // Odometro de camino comandado desde la ultima firma de reposo. Es
+        // lo que hace comparable el salto entre dos paradas: la deriva de
+        // medicion crece con el recorrido, un escalon de pasos perdidos no.
+        recorridoDesdeFirma[i] += fabsf(cmdDegAhora - cmdDegPrev[i]);
+
         cmdDegPrev[i] = cmdDegAhora;
 
         velCmd[i] += 0.25f * (velInstantanea - velCmd[i]); // saca el escalon de la cuantizacion
@@ -629,14 +648,62 @@ bool CollisionGuard::actualizar(long pasos1, long pasos2, long pasos3)
             if (!firmaLista[i] &&
                 (uint32_t)(ahora - reposoDesde_ms[i]) >= GuardConfig::FIRMA_REPOSO_MS)
             {
+                // ANTES de anotarla: cuanto cambio respecto de la parada
+                // anterior. Anotarla sin mirar esto es exactamente lo que
+                // hacia que un escalon de pasos perdidos quedara descontado
+                // para siempre (ver SALTO_PARADA_DEG en CollisionGuard.h).
+                const float salto = hayFirmaPrevia[i]
+                                        ? fabsf(desvioRep[i] - firmaPrevia[i])
+                                        : 0.0f;
+
+                // La deriva legitima es proporcional al camino recorrido; un
+                // escalon no. De ahi la parte proporcional de la tolerancia.
+                const float tolerancia =
+                    saltoParadaDeg + saltoParadaFrac * recorridoDesdeFirma[i];
+
+                if (hayFirmaPrevia[i] && salto > tolerancia)
+                {
+                    Serial.print("[GUARD] eje ");
+                    Serial.print(i + 1);
+                    Serial.print(": la calibracion salto ");
+                    Serial.print(salto, 1);
+                    Serial.print(" grados entre dos paradas (tolerancia ");
+                    Serial.print(tolerancia, 1);
+                    Serial.print(" para ");
+                    Serial.print(recorridoDesdeFirma[i], 0);
+                    Serial.println(" grados de recorrido).");
+
+                    if (observar)
+                    {
+                        Serial.println("        (observando) no se frena.");
+                    }
+                    else
+                    {
+                        motivoFallo   = MOTIVO_DESCALIBRACION;
+                        ejeFallo      = i;
+                        errorFallo    = desvioRep[i] - firmaPrevia[i];
+                        cmdDeltaFallo = cmdDelta[i];
+                        encDeltaFallo = encDelta[i] + fugaAcumulada[i];
+
+                        desarmar();
+                        return true;
+                    }
+                }
+
                 firmaRep[i]   = desvioRep[i];
                 firmaLista[i] = true;
+
+                firmaPrevia[i]         = desvioRep[i];
+                hayFirmaPrevia[i]      = true;
+                recorridoDesdeFirma[i] = 0.0f;
 
                 Serial.print("[GUARD] eje ");
                 Serial.print(i + 1);
                 Serial.print(": firma de reposo en home = ");
                 Serial.print(firmaRep[i], 2);
-                Serial.println(" grados");
+                Serial.print(" grados (salto desde la parada anterior ");
+                Serial.print(salto, 2);
+                Serial.println(")");
             }
 
             // Sin firma no hay contra que comparar: no se evalua nada.
@@ -988,6 +1055,24 @@ void CollisionGuard::setUmbralReposo(float grados)
     if (grados < 2.0f)  grados = 2.0f;
     if (grados > 20.0f) grados = 20.0f;
     umbralReposoDeg = grados;
+}
+
+void CollisionGuard::setSaltoParada(float grados, float fraccion)
+{
+    // La parte fija no puede bajar del ruido del promedio de reposo (~0,8
+    // grados) o el chequeo dispararia solo. Arriba de 20 ya no detecta nada
+    // que valga la pena avisar.
+    if (grados < 1.0f)  grados = 1.0f;
+    if (grados > 20.0f) grados = 20.0f;
+
+    // La fraccion en 0 desactiva la parte proporcional: queda un umbral
+    // fijo, que sirve para probar pero dispara en falso despues de muchos
+    // ciclos sin parada.
+    if (fraccion < 0.0f)  fraccion = 0.0f;
+    if (fraccion > 0.20f) fraccion = 0.20f;
+
+    saltoParadaDeg  = grados;
+    saltoParadaFrac = fraccion;
 }
 
 void CollisionGuard::setConfirmacion(uint32_t ms)

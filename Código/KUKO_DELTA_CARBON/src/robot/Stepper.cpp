@@ -285,12 +285,68 @@ void IRAM_ATTR Stepper::computeNextInterval()
     if (n == 0)
     {
         cn = c0;
+        n  = 1;
+        return;
     }
-    else
+
+    // --- CRUCERO (meseta) ---
+    // Una vez que el intervalo llego a cmin, el eje va a velocidad maxima y
+    // no hay nada que recalcular. Lo importante es que n NO avanza aca: n
+    // vale el largo de la rampa de aceleracion, y es lo que hace que el
+    // frenado (n = -n) sea su espejo exacto.
+    //
+    // Antes n se incrementaba tambien durante la meseta. Con este robot eso
+    // nunca se noto porque la meseta era inalcanzable a proposito
+    // (Motors::VEL_MAX estaba muy por encima del pico real, ~16.400
+    // pasos/s), pero apenas se baja VEL_MAX para limitar los tramos largos
+    // el camino se activa y el bug aparece: al invertirlo, n valdria
+    // aproximadamente TODOS los pasos recorridos en vez del largo de la
+    // rampa, asi que la formula repartiria el frenado en muchos mas pasos
+    // de los que quedan. El eje llegaria al destino todavia a media
+    // velocidad y los pulsos se cortarian de golpe -- pasos perdidos y un
+    // golpe seco, que es justo lo contrario de lo que se busca al limitar
+    // la velocidad.
+    if (n > 0 && cn <= cmin)
     {
-        cn = cn - (2 * cn) / (4 * n + 1); // formula de Austin, en punto fijo entero
-        if (cn < cmin) cn = cmin;
+        cn = cmin;
+
+        // Y en la PRIMERA vuelta de la meseta se corrige el punto de
+        // frenado con el largo REAL de la rampa. decelStart se precalculo
+        // en moveTo() con la formula continua (v^2 / 2a), pero la rampa de
+        // Austin es discreta y sale ~2,5 % mas larga, asi que frenando en
+        // el punto teorico faltan pasos y el eje llega al destino a ~16 %
+        // de la velocidad de crucero. Con esta correccion llega a ~3 %, que
+        // es exactamente lo mismo que consigue hoy el perfil triangular.
+        //
+        // D no se guarda, pero sale de los dos que si: D = decelStart +
+        // accelSteps. Es aritmetica entera, se ejecuta una sola vez por
+        // movimiento y la condicion se apaga sola (despues accelSteps == n
+        // y n queda congelado).
+        //
+        // SOLO para movimientos con destino. En CONTINUOUS (el barrido del
+        // homing) no hay destino ni frenado automatico: decelStart vale
+        // 0x7FFFFFFF a proposito, o sea "nunca", y sumarle algo lo DESBORDA
+        // y lo deja negativo. Con eso, stepIndex >= decelStart da verdadero
+        // enseguida, el eje se pone a frenar, llega a n = 0, rearranca la
+        // rampa y vuelve a frenar: el barrido avanzaba oscilando entre 195 y
+        // 1000 pasos/s en vez de sostener el crucero, y tardaba 4 veces mas
+        // (5,3 s contra 1,3 s, simulado con la aritmetica de esta ISR).
+        //
+        // Y pasa con CUALQUIER VEL_MAX: el homing llama setSpeed(1000)
+        // inmediatamente despues de moveContinuous(), asi que el crucero
+        // siempre se alcanza. No es un caso raro que destape bajar la
+        // velocidad, es todo homing.
+        if (motionMode == POSITION && accelSteps != n)
+        {
+            decelStart = (decelStart + accelSteps) - n;
+            accelSteps = n;
+        }
+
+        return;
     }
+
+    cn = cn - (2 * cn) / (4 * n + 1); // formula de Austin, en punto fijo entero
+    if (cn < cmin) cn = cmin;
     n++;
 }
 

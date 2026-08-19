@@ -108,7 +108,7 @@ private:
 
     // Tope de parametros. Con el ESP32 no hay motivo para reservar memoria
     // dinamica por 40 punteros: entra en la RAM estatica y se acabo.
-    static const uint8_t CAPACIDAD = 40;
+    static const uint8_t CAPACIDAD = 56;
 
     // La NVS limita las claves a 15 caracteres. Se valida al registrar, asi
     // el problema aparece en el arranque del banco de pruebas y no la

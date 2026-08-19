@@ -75,8 +75,8 @@ void Encoders::procesarLecturaValida(uint8_t indiceMotor, uint16_t raw)
     {
         c.rawActual      = raw;
         c.anguloActual   = anguloNuevo;
-        c.anguloFiltrado = anguloNuevo;
         c.anguloContinuo = anguloNuevo;
+        c.anguloFiltrado = c.anguloContinuo; // mismo marco que el continuo
         c.vueltas        = 0;
         c.inicializado   = true;
         c.valido         = true;
@@ -113,7 +113,29 @@ void Encoders::procesarLecturaValida(uint8_t indiceMotor, uint16_t raw)
     c.anguloContinuo += diferencia;
 
     // --- Filtro exponencial simple para suavizar ruido residual ---
-    c.anguloFiltrado += ALFA_FILTRO * (anguloNuevo - c.anguloFiltrado);
+    //
+    // Se filtra el ángulo CONTINUO, no el envuelto (anguloNuevo). Filtrar el
+    // envuelto está mal y se veía: el eje 1 tiene el cruce por cero del
+    // sensor dentro del recorrido del brazo, así que con el brazo cerca de
+    // home el crudo alterna entre ~359,8 y ~0,2 grados por ruido. Un filtro
+    // exponencial no sabe nada de la envolvente: tira hacia 359,8 y después
+    // hacia 0,2, y termina asentándose en el promedio ponderado de los dos
+    // extremos -- un valor intermedio que no existe (se veía 355,2 grados en
+    // la pantalla) y que encima parece congelado, porque mover un poco el
+    // brazo solo cambia la proporción de muestras de cada lado, no el
+    // promedio. Alejándolo del cruce a mano volvía a converger, que es lo
+    // que hacía parecer que el sensor medía bien y era la interfaz la que
+    // fallaba: medía bien, el que estaba roto era este filtro.
+    //
+    // El continuo ya viene desenvuelto por la línea de arriba (con la
+    // corrección de +-180 grados del filtro de plausibilidad), así que acá la
+    // envolvente ya no existe y el filtro es una resta común.
+    //
+    // Nota: esto hace que anguloFiltrado quede en el MISMO marco que
+    // anguloContinuo (puede pasarse de 360 o dar negativo). Eso es lo que
+    // corresponde: leerGrados() le suma offsetHoming, que se calcula a partir
+    // del continuo, así que antes se estaban mezclando dos marcos distintos.
+    c.anguloFiltrado += ALFA_FILTRO * (c.anguloContinuo - c.anguloFiltrado);
 
     // --- Velocidad angular (diagnóstico / detección de motor trabado) ---
     uint32_t ahora = millis();
@@ -141,7 +163,7 @@ void Encoders::resincronizar(uint8_t indiceMotor, uint16_t raw,
     // siempre). El filtro exponencial se resiembra en el valor actual en vez
     // de arrastrarse desde uno viejo que ya no significa nada.
     c.anguloContinuo += diferencia;
-    c.anguloFiltrado  = anguloNuevo;
+    c.anguloFiltrado  = c.anguloContinuo; // mismo marco que el continuo
     c.anguloActual    = anguloNuevo;
     c.rawActual       = raw;
 

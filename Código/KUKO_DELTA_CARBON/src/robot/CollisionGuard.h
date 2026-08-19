@@ -263,6 +263,53 @@ constexpr uint32_t FIRMA_REPOSO_MS = 3000;
 constexpr float DERIVA_AVISO_DEG = 15.0f;
 
 // ============================================================
+//  SALTO ENTRE DOS PARADAS (perdida de pasos EN UN TRAMO)
+// ============================================================
+// Este chequeo existe por un agujero que dejaban los otros dos, encontrado
+// en el robot: un eje perdio ~10 grados frenando de un tramo largo y rapido,
+// el brazo volvio a home visiblemente corrido... y no paso nada.
+//
+// Por que no lo vio ninguno de los dos:
+//
+//   - EN MARCHA: 10 grados quedan MUY por debajo del umbral efectivo
+//     (12 fijos + el margen por velocidad, que durante el frenado todavia
+//     esta en pie). Eso es a proposito: el umbral tiene que tolerar el
+//     atraso de la medicion, que a 280 grados/s ya vale 17 grados el solo.
+//
+//   - EN REPOSO: el desvio se compara contra la FIRMA, y la firma se rehace
+//     en cada parada. O sea que en la primera parada despues del tramo malo,
+//     los 10 grados se anotaron COMO firma y quedaron descontados para
+//     siempre. Por eso el robot no reaccionaba, y por eso si reaccionaba
+//     cuando alguien movia el brazo con la mano despues: eso si cambia el
+//     desvio respecto de una firma ya tomada.
+//
+// La firma por parada NO se puede sacar (ver el comentario largo de
+// FIRMA_REPOSO_MS: sin ella el chequeo dispara solo despues de 6 u 8 piezas,
+// medido). Lo que faltaba era mirar CUANTO CAMBIA la firma de una parada a
+// la siguiente.
+//
+// Y ahi si se separan las dos cosas, porque no ocurren al mismo ritmo:
+//
+//   * la deriva de MEDICION (el encoder no cierra exacta cada excursion,
+//     ganancia 0,92-0,98) es proporcional al camino recorrido: medido, 6,4 /
+//     7,2 / 4,0 grados en 8 agarres seguidos, o sea ~0,5 % del recorrido;
+//   * la perdida de PASOS es un escalon: aparece entero en un tramo.
+//
+// Por eso la tolerancia tiene una parte fija (el ruido del promedio de
+// reposo, ~0,8 grados) y otra proporcional al recorrido comandado desde la
+// firma anterior. Con 1 % queda el doble de margen sobre la deriva medida, y
+// el escalon de 10 grados del incidente entra igual: un ciclo completo son
+// ~150 grados de recorrido por eje, o sea una tolerancia de ~4,5 grados.
+//
+// LIMITACION, para que no sorprenda: esto corre cuando se toma una firma, y
+// la firma necesita FIRMA_REPOSO_MS quieto en home. En produccion continua
+// el robot no se queda 3 s parado, asi que el chequeo se evalua en los ratos
+// muertos -- que es justamente donde se vio el problema. No reemplaza al
+// umbral en marcha, lo complementa.
+constexpr float SALTO_PARADA_DEG = 3.0f;   // parte fija
+constexpr float SALTO_PARADA_FRAC = 0.01f; // + 1 % del recorrido comandado
+
+// ============================================================
 //  ZONA CIEGA DEL ADC (limites de lectura confiable)
 // ============================================================
 // La salida analogica del AS5600 barre de 0 V a VCC (3,46 V medidos) para
@@ -485,7 +532,10 @@ public:
     void     setMargenVelocidad(uint32_t ms);
     void     setRetardo(uint32_t ms);
     void     setUmbralReposo(float grados);
+    void     setSaltoParada(float grados, float fraccion);
     float    umbral() const           { return umbralDeg; }
+    float    saltoParada() const      { return saltoParadaDeg; }
+    float    saltoParadaFraccion() const { return saltoParadaFrac; }
     uint32_t confirmacion() const     { return confirmacionMs; }
     uint32_t margenVelocidad() const  { return margenVelocidadMs; }
     uint32_t retardo() const          { return retardoMs; }
@@ -526,6 +576,17 @@ private:
     float    firmaRep[NUM_EJES]         = {0.0f, 0.0f, 0.0f};
     bool     firmaLista[NUM_EJES]       = {false, false, false};
     uint32_t reposoDesde_ms[NUM_EJES]   = {0, 0, 0};
+
+    // --- Salto entre dos paradas (ver SALTO_PARADA_DEG) ---
+    // La firma de la parada ANTERIOR, y cuanto camino comando el eje entre
+    // una y otra. Con esos dos se separa la deriva de medicion (proporcional
+    // al recorrido) de un escalon de pasos perdidos (no lo es).
+    float    firmaPrevia[NUM_EJES]         = {0.0f, 0.0f, 0.0f};
+    bool     hayFirmaPrevia[NUM_EJES]      = {false, false, false};
+    float    recorridoDesdeFirma[NUM_EJES] = {0.0f, 0.0f, 0.0f};
+
+    float    saltoParadaDeg  = GuardConfig::SALTO_PARADA_DEG;
+    float    saltoParadaFrac = GuardConfig::SALTO_PARADA_FRAC;
 
     // Se avisa una sola vez por homing, no en cada vuelta del loop.
     bool     avisoDeriva[NUM_EJES]      = {false, false, false};

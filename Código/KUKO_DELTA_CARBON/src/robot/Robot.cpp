@@ -22,6 +22,14 @@ Pneumatics pneumatics;
 //  sin relacion medida con las rpm reales).
 // ============================================================
 static float BELT_VELOCITY_CMS = 7.2f; //antes 7.54, despues 6.75
+
+// Cuanto se le manda al driver de la cinta, en porcentaje del PWM. OJO:
+// esto NO cambia solo a BELT_VELOCITY_CMS, que es la velocidad MEDIDA y es
+// la que usa la planificacion. Tocar uno sin el otro hace que el robot le
+// erre a todas las piezas, asi que despues de mover el PWM hay que volver a
+// medir la cinta y actualizar el otro numero (la interfaz muestra los dos
+// juntos y la vision mide el real, para poder compararlos).
+static float CONVEYOR_PWM = 60.0f;
 static float DETECTION_LINE_X  = -23.0f; // donde la camara detecta las piezas
 
 // Ancho util de la cinta (Y). Fuera de esto el dato de vision es erroneo.
@@ -116,6 +124,13 @@ static float BIN_Z    = -26.5f; //antes -29.3cm
 static const float BOX_X[6] = {-6.0f, 0.0f, 6.0f, -6.0f, 0.0f, 6.0f};
 static const float BOX_Y[6] = {-6.8f, -6.8f, -6.8f, -12.8f, -12.8f, -12.8f};
 
+// Corrimiento de TODA la caja. La grilla de arriba es la geometria de la
+// caja (6 cm entre celdas, y eso no cambia), pero la caja apoyada sobre la
+// mesa nunca queda dos veces en el mismo lugar. Estos dos numeros son para
+// centrarla mirando el robot, en vez de reflashear por medio centimetro.
+static float BOX_DX = 0.0f;
+static float BOX_DY = 0.0f;
+
 // EL parametro de ajuste fino del modo: si los alfajores quedan colgados o
 // la ventosa aplasta la caja, se corrige aca (y en ningun otro lado).
 static float BOX_Z = -32.6f;
@@ -179,7 +194,7 @@ static const uint8_t BOX_MAX_POR_COLOR = 3;
 static float BOX_RELEASE_DETACH_MS = 0;
 
 // Ventana para confirmar un cambio de modo que cruza el limite de la tapa.
-static const uint32_t CONFIRMACION_TAPA_MS = 10000;
+static float CONFIRMACION_TAPA_MS = 10000;
 
 // ============================================================
 //  ANGULOS DE HOMING
@@ -201,7 +216,7 @@ static float HOME_ANGLE_M3 = -44.5f;
 // ============================================================
 //  TIEMPOS (todos no bloqueantes, con millis())
 // ============================================================
-static const uint32_t HOMING_SETTLE_WAIT_MS = 2500; // ventana de promediado de encoders
+static float HOMING_SETTLE_WAIT_MS = 2500; // ventana de promediado de encoders
 static float BIN_SETTLE_MS         = 5;  // quieto sobre el tacho antes de soltar antes 200
 
 // Cuanto se espera con la bomba apagada para que la pieza se despegue del
@@ -211,10 +226,15 @@ static float BIN_SETTLE_MS         = 5;  // quieto sobre el tacho antes de solta
 // tiempo se puede bajar a ~100 ms.
 static float RELEASE_DETACH_MS = 80;
 
+// Cuanto antes del instante de bajada se prende la bomba de vacio. Ver el
+// comentario largo en updatePickApproach(): tiene que alcanzar para que el
+// vacio se forme, y de mas la deja soplando al aire esperando la pieza.
+static float PUMP_LEAD_MS = 300;
+
 // Margen de atraso tolerable al llegar al punto de aproximacion antes de
 // dar por perdido el instante de encuentro y replanificar.
-static const uint32_t PICK_LATE_TOLERANCE_MS = 30;
-static const uint8_t  MAX_REPLAN_ATTEMPTS    = 2;
+static float PICK_LATE_TOLERANCE_MS = 30;
+static float MAX_REPLAN_ATTEMPTS    = 2;
 
 // ============================================================
 //  RECUPERACION DE COLISIONES
@@ -229,7 +249,7 @@ static float COLLISION_PAUSE_MS = 3000;
 // las cuales se deja de reintentar. Si el brazo choca contra lo mismo tres
 // veces, rehomear una cuarta no lo va a arreglar: lo unico que se logra es
 // seguir golpeando el robot.
-static const uint8_t MAX_COLISIONES_SEGUIDAS = 3;
+static float MAX_COLISIONES_SEGUIDAS = 3;
 
 // Cuanto se suspende la supervision al conmutar la bomba de vacio.
 //
@@ -243,7 +263,7 @@ static const uint8_t MAX_COLISIONES_SEGUIDAS = 3;
 // Ademas, el tramo de bajada TOCA la pieza a proposito (y la comprime, ver
 // PRESS_DZ): ahi hay una perturbacion mecanica real y esperada, que no es
 // una colision. Esta ventana cubre las dos cosas.
-static const uint32_t BLANQUEO_NEUMATICA_MS = 300;
+static float BLANQUEO_NEUMATICA_MS = 300;
 
 // Cada cuanto se vuelca una linea con los numeros de la supervision. Existe
 // porque cuando la vision de Python tiene tomado el puerto serie no se le
@@ -252,14 +272,14 @@ static const uint32_t BLANQUEO_NEUMATICA_MS = 300;
 // una linea mas, no le molesta.
 //
 // 0 = apagado.
-static const uint32_t DIAGNOSTICO_PERIODICO_MS = 15000;
+static float DIAGNOSTICO_PERIODICO_MS = 15000;
 
 // Tiempo maximo que puede tardar el homing en encontrar los 3 finales de
 // carrera. Si se pasa, es que un eje no llega (trabado contra algo, o el
 // obstaculo que causo la colision sigue ahi): se corta todo, se para la
 // cinta y se espera intervencion manual. Sin esto, un brazo trabado deja
 // al robot empujando contra el obstaculo para siempre.
-static const uint32_t HOMING_TIMEOUT_MS = 20000;
+static float HOMING_TIMEOUT_MS = 20000;
 
 namespace {
 
@@ -326,7 +346,7 @@ void Robot::begin()
     params.begin();
     registrarParametros();
     params.cargarGuardados();
-    sincronizarGuard();
+    sincronizarParametros();
     generacionParams = params.generacion();
 
     // Una disposicion imposible de completar (mas de 3 alfajores de un mismo
@@ -389,7 +409,7 @@ void Robot::update()
 
     if (DIAGNOSTICO_PERIODICO_MS > 0 &&
         state != IDLE && state != ERROR &&
-        (uint32_t)(millis() - ultimoDiagnostico_ms) >= DIAGNOSTICO_PERIODICO_MS)
+        (uint32_t)(millis() - ultimoDiagnostico_ms) >= (uint32_t)DIAGNOSTICO_PERIODICO_MS)
     {
         ultimoDiagnostico_ms = millis();
         imprimirDiagnosticoCorto();
@@ -400,7 +420,7 @@ void Robot::update()
     if (params.generacion() != generacionParams)
     {
         generacionParams = params.generacion();
-        sincronizarGuard();
+        sincronizarParametros();
     }
 
     emitirTelemetria(millis());
@@ -1038,7 +1058,7 @@ void Robot::pedirModo(SortMode nuevo, char letra)
 
     const bool confirmando = esperandoConfirmacion &&
                              modoAConfirmar == nuevo &&
-                             (uint32_t)(millis() - confirmacionPedida_ms) < CONFIRMACION_TAPA_MS;
+                             (uint32_t)(millis() - confirmacionPedida_ms) < (uint32_t)CONFIRMACION_TAPA_MS;
 
     if (!confirmando)
     {
@@ -1058,7 +1078,7 @@ void Robot::pedirModo(SortMode nuevo, char letra)
         Serial.print("[TAPA] si ya esta asi, confirmar con '");
         Serial.print(letra);
         Serial.print("' otra vez dentro de ");
-        Serial.print(CONFIRMACION_TAPA_MS / 1000);
+        Serial.print((uint32_t)(CONFIRMACION_TAPA_MS / 1000));
         Serial.print(" s. Queda: ");
         Serial.println(nombreModo(nuevo));
         return;
@@ -1104,7 +1124,7 @@ void Robot::aplicarModo(SortMode nuevo)
 void Robot::vencerConfirmacion()
 {
     if (!esperandoConfirmacion ||
-        (uint32_t)(millis() - confirmacionPedida_ms) < CONFIRMACION_TAPA_MS)
+        (uint32_t)(millis() - confirmacionPedida_ms) < (uint32_t)CONFIRMACION_TAPA_MS)
     {
         return;
     }
@@ -1391,7 +1411,7 @@ void Robot::updateHoming()
     // (tipicamente: el obstaculo que provoco la colision sigue ahi). Seguir
     // empujando contra el no arregla nada y castiga la mecanica.
     if (!(axis1Homed && axis2Homed && axis3Homed) &&
-        (uint32_t)(millis() - homingStart_ms) > HOMING_TIMEOUT_MS)
+        (uint32_t)(millis() - homingStart_ms) > (uint32_t)HOMING_TIMEOUT_MS)
     {
         motor1.stop();
         motor2.stop();
@@ -1404,7 +1424,7 @@ void Robot::updateHoming()
         registrarFallo(FALLO_HOMING, 0);
 
         Serial.print("[HOMING] no encontro los finales de carrera en ");
-        Serial.print(HOMING_TIMEOUT_MS / 1000);
+        Serial.print((uint32_t)(HOMING_TIMEOUT_MS / 1000));
         Serial.println(" s: hay un eje trabado. Revisar y mandar 'R'.");
 
         state = ERROR;
@@ -1472,7 +1492,7 @@ void Robot::updateHoming()
             return;
         }
 
-        if (millis() - homingSettleStart_ms < HOMING_SETTLE_WAIT_MS)
+        if (millis() - homingSettleStart_ms < (uint32_t)HOMING_SETTLE_WAIT_MS)
         {
             return; // seguimos acumulando muestras, sin bloquear el resto del sistema
         }
@@ -1492,6 +1512,7 @@ void Robot::updateHoming()
         // La cinta arranca recien con el robot ya calibrado: antes de eso
         // no tendria sentido aceptar piezas.
         conveyor.begin();
+        conveyor.setSpeedPercent(CONVEYOR_PWM);
 
         Serial.println("[HOMING] OK. Robot listo.");
         Serial.print("[MODO] ");
@@ -1647,7 +1668,7 @@ bool Robot::planificarPieza(const Piece &p)
     ConveyorIntercept::InterceptResult r = ConveyorIntercept::solve(
         p.y, tSinceDetection, belt, geom,
         motor1.getPosition(), motor2.getPosition(), motor3.getPosition(),
-        Motors::MAX_SPEED, Motors::MAX_ACCELERATION, Motors::MIN_ACCELERATION);
+        Motors::VEL_MAX, Motors::ACC_RAPIDA, Motors::ACC_SUAVE);
 
     if (!r.reachable)
     {
@@ -1804,9 +1825,26 @@ void Robot::updatePickApproach()
         return;
     }
 
-    // Ya en el punto de aproximacion: se prende la bomba para que el vacio
-    // este bien formado antes de tocar la pieza.
-    if (!pumpOn)
+    // Se espera al instante calculado para lanzar la bajada. La resta con
+    // signo aguanta el desborde de millis().
+    const int32_t atraso_ms = (int32_t)(millis() - descendStart_ms);
+
+    // La bomba se prende PUMP_LEAD_MS antes de la bajada, no al llegar aca.
+    //
+    // Antes se prendia al llegar al punto de aproximacion. Con la pieza
+    // viniendo atras del brazo eso es casi lo mismo (se baja enseguida),
+    // pero con una sola pieza en la cola el brazo llega a la aproximacion y
+    // se queda esperandola: ahi la bomba quedaba soplando todo el viaje de
+    // la pieza por la cinta, que puede ser mas de un segundo por pieza.
+    //
+    // El adelanto existe porque el vacio SI necesita un rato para formarse:
+    // prenderla justo al arrancar la bajada la haria tocar la pieza con la
+    // ventosa a medio hacer. Con el adelanto en 300 ms -- la misma ventana
+    // en que se silencia el guard por el hundimiento del riel de los
+    // encoders, asi que la conmutacion sigue quedando tapada -- el
+    // comportamiento no cambia para las piezas que se agarran enseguida, y
+    // solo cambia para las que hay que esperar.
+    if (!pumpOn && atraso_ms >= -(int32_t)PUMP_LEAD_MS)
     {
         pneumatics.grab();
         pumpOn = true;
@@ -1814,12 +1852,8 @@ void Robot::updatePickApproach()
         // El arranque de la bomba le pega a la alimentacion de los encoders
         // (ver BLANQUEO_NEUMATICA_MS): se suspende la deteccion mientras
         // dura, y el guard informa cuanto se corrio cada eje.
-        guard.silenciar(BLANQUEO_NEUMATICA_MS);
+        guard.silenciar((uint32_t)BLANQUEO_NEUMATICA_MS);
     }
-
-    // Se espera al instante calculado para lanzar la bajada. La resta con
-    // signo aguanta el desborde de millis().
-    const int32_t atraso_ms = (int32_t)(millis() - descendStart_ms);
 
     if (atraso_ms < 0)
     {
@@ -1830,7 +1864,7 @@ void Robot::updatePickApproach()
     {
         // Se perdio la ventana (el tramo 1 tardo mas de lo estimado). Se
         // replanifica con la pieza donde este ahora, si todavia da.
-        if (replanCount < MAX_REPLAN_ATTEMPTS && planificarPieza(currentPiece))
+        if (replanCount < (uint8_t)MAX_REPLAN_ATTEMPTS && planificarPieza(currentPiece))
         {
             replanCount++;
             moveIssued = false;
@@ -1951,7 +1985,7 @@ void Robot::updateBinSettle()
 
     pneumatics.release();
     pumpOn = false;
-    guard.silenciar(BLANQUEO_NEUMATICA_MS); // apagarla tambien mueve el riel
+    guard.silenciar((uint32_t)BLANQUEO_NEUMATICA_MS); // apagarla tambien mueve el riel
 
     releaseStart_ms = millis();
     state = RELEASE_WAIT;
@@ -2028,7 +2062,7 @@ void Robot::updateBoxTransit()
 {
     if (!moveIssued)
     {
-        if (!goToPositionIK(BOX_X[currentCell], BOX_Y[currentCell],
+        if (!goToPositionIK(BOX_X[currentCell] + BOX_DX, BOX_Y[currentCell] + BOX_DY,
                             BOX_Z + BOX_TRANSIT_DZ, Motors::FAST_LIMITS))
         {
             Serial.println("[CAJA] altura de cruce invalida");
@@ -2049,7 +2083,7 @@ void Robot::updateBoxApproach()
 {
     if (!moveIssued)
     {
-        if (!goToPositionIK(BOX_X[currentCell], BOX_Y[currentCell],
+        if (!goToPositionIK(BOX_X[currentCell] + BOX_DX, BOX_Y[currentCell] + BOX_DY,
                             BOX_Z + BOX_APPROACH_DZ, Motors::FAST_LIMITS))
         {
             Serial.println("[CAJA] punto de aproximacion invalido");
@@ -2078,7 +2112,7 @@ void Robot::updateBoxDescend()
         // punta baja justo hasta donde la pieza queda apoyada), y en cambio
         // la caja es un obstaculo rigido. Si esta corrida de lugar o la tapa
         // no esta donde deberia, esto es exactamente lo que hay que detectar.
-        if (!goToPositionIK(BOX_X[currentCell], BOX_Y[currentCell],
+        if (!goToPositionIK(BOX_X[currentCell] + BOX_DX, BOX_Y[currentCell] + BOX_DY,
                             BOX_Z, Motors::SOFT_LIMITS))
         {
             Serial.println("[CAJA] punto de soltado invalido");
@@ -2100,7 +2134,7 @@ void Robot::updateBoxLift()
 {
     if (!moveIssued)
     {
-        if (!goToPositionIK(BOX_X[currentCell], BOX_Y[currentCell],
+        if (!goToPositionIK(BOX_X[currentCell] + BOX_DX, BOX_Y[currentCell] + BOX_DY,
                             BOX_Z + BOX_TRANSIT_DZ, Motors::FAST_LIMITS))
         {
             Serial.println("[CAJA] salida invalida");
@@ -2249,7 +2283,7 @@ void Robot::dispararColision(uint8_t eje, float errorDeg, float cmdDelta, float 
 
     colisionesSeguidas++;
 
-    if (colisionesSeguidas >= MAX_COLISIONES_SEGUIDAS)
+    if (colisionesSeguidas >= (uint8_t)MAX_COLISIONES_SEGUIDAS)
     {
         // Chocar, rehomear y volver a chocar contra lo mismo no lo va a
         // resolver: hay algo fisico que sacar antes de seguir.
@@ -2553,7 +2587,7 @@ void Robot::registrarParametros()
     // avanza la pieza entre que cruza la linea y que llega el mensaje.
     // Admite negativos a proposito (ver PROTOCOLO.md): si alguna vez la
     // correccion tuviera que ir para el otro lado, el rango ya lo permite.
-    params.registrar("vis_lat", &VISION_LATENCY_S, -0.10f, 0.30f, "s", NIVEL_OPERACION);
+    params.registrar("vis_lat", &VISION_LATENCY_S, -0.20f, 0.30f, "s", NIVEL_OPERACION);
 
     // --- Nivel 2: proceso (afinado del agarre y de la supervision) ---
     params.registrar("press_dz", &PRESS_DZ,    0.0f,   0.30f, "cm", NIVEL_PROCESO);
@@ -2568,8 +2602,28 @@ void Robot::registrarParametros()
     params.registrar("g_conf",    &pGuardConfirma, 10.0f, 1000.0f, "ms", NIVEL_PROCESO, 'i');
     params.registrar("g_margen",  &pGuardMargen,   0.0f,  500.0f,  "ms", NIVEL_PROCESO, 'i');
     params.registrar("g_retardo", &pGuardRetardo,  0.0f,  500.0f,  "ms", NIVEL_PROCESO, 'i');
+    params.registrar("g_salto",   &pGuardSalto,    1.0f,  20.0f,   "deg", NIVEL_PROCESO);
+    params.registrar("g_salto_k", &pGuardSaltoPct, 0.0f,  20.0f,   "%", NIVEL_PROCESO);
 
     params.registrar("col_pausa", &COLLISION_PAUSE_MS, 0.0f, 15000.0f, "ms", NIVEL_PROCESO, 'i');
+    params.registrar("col_max",   &MAX_COLISIONES_SEGUIDAS, 1.0f, 10.0f, "", NIVEL_PROCESO, 'i');
+    params.registrar("g_neum",    &BLANQUEO_NEUMATICA_MS,   0.0f, 2000.0f, "ms", NIVEL_PROCESO, 'i');
+
+    // Movimiento. La velocidad esta a proposito por encima de lo alcanzable
+    // (ver Motors.h): el numero que de verdad cambia el ciclo y la vibracion
+    // es la aceleracion, y por eso las dos van en proceso y la velocidad en
+    // servicio.
+    params.registrar("acc_rap",   &Motors::ACC_RAPIDA, 20000.0f, 150000.0f, "pas/s2", NIVEL_PROCESO, 'i');
+    params.registrar("acc_suave", &Motors::ACC_SUAVE,   5000.0f, 100000.0f, "pas/s2", NIVEL_PROCESO, 'i');
+
+    // Cinta: el PWM es lo que se manda, cinta_cms es lo que se mide. Se
+    // tocan de a dos (ver el comentario de CONVEYOR_PWM).
+    params.registrar("cinta_pwm", &CONVEYOR_PWM, 0.0f, 100.0f, "%", NIVEL_PROCESO);
+
+    params.registrar("pick_tol",  &PICK_LATE_TOLERANCE_MS, 0.0f, 500.0f, "ms", NIVEL_PROCESO, 'i');
+    params.registrar("pump_lead", &PUMP_LEAD_MS,           0.0f, 2000.0f, "ms", NIVEL_PROCESO, 'i');
+    params.registrar("replan",    &MAX_REPLAN_ATTEMPTS,    0.0f, 5.0f,   "",   NIVEL_PROCESO, 'i');
+    params.registrar("diag_ms",   &DIAGNOSTICO_PERIODICO_MS, 0.0f, 120000.0f, "ms", NIVEL_PROCESO, 'i');
 
     params.registrar("tele_ms", &telemetria.periodoRapida_ms,  20.0f, 2000.0f,  "ms", NIVEL_PROCESO, 'i');
     params.registrar("est_ms",  &telemetria.periodoProceso_ms, 100.0f, 10000.0f, "ms", NIVEL_PROCESO, 'i');
@@ -2600,16 +2654,46 @@ void Robot::registrarParametros()
     // que nada avise: el nucleo compara los dos al conectarse.
     params.registrar("cinta_cms", &BELT_VELOCITY_CMS, 1.0f, 30.0f, "cm/s", NIVEL_SERVICIO);
     params.registrar("linea_x",   &DETECTION_LINE_X, -40.0f, 0.0f, "cm", NIVEL_SERVICIO);
+
+    // La caja entera se corre con estos dos. La grilla de 6 cm entre celdas
+    // es la geometria de la caja y no se toca; lo que se mueve es donde
+    // quedo apoyada sobre la mesa.
+    params.registrar("box_dx", &BOX_DX, -4.0f, 4.0f, "cm", NIVEL_SERVICIO, 'f', true);
+    params.registrar("box_dy", &BOX_DY, -4.0f, 4.0f, "cm", NIVEL_SERVICIO, 'f', true);
+
+    // El piso baja a 5000 porque el rango util quedo ABAJO del que tenia:
+    // el pico real del movimiento mas largo son ~16.400 pasos/s, asi que
+    // cualquier tope por encima de eso no limita nada. Los valores que
+    // sirven para recortar los tramos largos van de 6.000 a 14.000.
+    params.registrar("vel_max", &Motors::VEL_MAX, 5000.0f, 120000.0f, "pas/s", NIVEL_SERVICIO, 'i');
+
+    params.registrar("home_set", &HOMING_SETTLE_WAIT_MS, 500.0f,  10000.0f, "ms", NIVEL_SERVICIO, 'i');
+    params.registrar("home_to",  &HOMING_TIMEOUT_MS,     5000.0f, 60000.0f, "ms", NIVEL_SERVICIO, 'i');
+    params.registrar("tapa_ms",  &CONFIRMACION_TAPA_MS,  2000.0f, 60000.0f, "ms", NIVEL_SERVICIO, 'i');
 }
 
 // ------------------------------------------------------------------
-void Robot::sincronizarGuard()
+// Baja los parametros a los objetos que guardan una COPIA adentro en vez de
+// leer la variable en cada uso. Son los unicos que no se enteran solos de un
+// cambio; todo lo demas lee su float directamente en el punto de uso.
+void Robot::sincronizarParametros()
 {
     guard.setUmbral(pGuardUmbral);
     guard.setUmbralReposo(pGuardReposo);
+    guard.setSaltoParada(pGuardSalto, pGuardSaltoPct / 100.0f);
     guard.setConfirmacion((uint32_t)pGuardConfirma);
     guard.setMargenVelocidad((uint32_t)pGuardMargen);
     guard.setRetardo((uint32_t)pGuardRetardo);
+
+    Motors::aplicarLimites();
+
+    // El PWM se reaplica solo si la cinta ESTA andando: mandarselo con la
+    // cinta parada la arrancaria sola al tocar cualquier parametro, con el
+    // robot posiblemente en ERROR y nadie mirando.
+    if (conveyor.getSpeed() > 0)
+    {
+        conveyor.setSpeedPercent(CONVEYOR_PWM);
+    }
 }
 
 // ============================================================
@@ -2681,7 +2765,7 @@ void Robot::emitirTelemetria(uint32_t ahora)
         {
             const uint32_t pasado = ahora - confirmacionPedida_ms;
 
-            d.tapaRestante_ms = (pasado < CONFIRMACION_TAPA_MS)
+            d.tapaRestante_ms = (pasado < (uint32_t)CONFIRMACION_TAPA_MS)
                                     ? (uint32_t)(CONFIRMACION_TAPA_MS - pasado)
                                     : 0;
         }
