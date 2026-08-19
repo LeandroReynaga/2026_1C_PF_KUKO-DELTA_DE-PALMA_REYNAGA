@@ -124,6 +124,7 @@ class Enlace:
         # orden: la interfaz arma sus controles con lo que devuelve 'P?'.
         self.enviar(pr.cmd_foto_estado())
         self.enviar(pr.cmd_listar_parametros())
+        self.enviar(pr.cmd_teach_estado())
         self.enviar(pr.cmd_telemetria(True))
 
         return True
@@ -172,6 +173,9 @@ class Enlace:
             est.boot = m
             est.e = None
             est.h = None
+            est.teach = None
+            est.teach_pos = None
+            est.teach_bomba = None
             est.parametros.clear()
             self._consola(f"el firmware arranco (proto={m.proto} fw={m.fw})")
 
@@ -180,7 +184,36 @@ class Enlace:
                               f"interfaz={pr.VERSION_PROTOCOLO}")
 
             self.enviar(pr.cmd_listar_parametros())
+            self.enviar(pr.cmd_teach_estado())
             self.enviar(pr.cmd_telemetria(True))
+
+        elif isinstance(m, pr.Teach):
+            if m.evento == "p":
+                # El volcado de posición: es lo único de teach que llega a
+                # 20 Hz, así que se atiende primero y no se anota en ningún
+                # lado más -- no es un evento, es una medición.
+                if None not in (m.x, m.y, m.z):
+                    est.teach_pos = (m.x, m.y, m.z)
+
+                est.teach_bomba = m.bomba
+            else:
+                if m.limite_x is not None:
+                    est.teach = m
+
+                    if None not in (m.x, m.y, m.z):
+                        est.teach_pos = (m.x, m.y, m.z)
+
+                est.teach_evento = m
+                est.teach_evento_n += 1
+
+                # A la consola sólo lo que salió mal. El resto (entrar,
+                # salir, cargar puntos, terminar) ya se ve en la pantalla de
+                # teach, y repetirlo abajo es la clase de ruido que hace que
+                # nadie lea la consola cuando de verdad importa.
+                if m.evento == "abort":
+                    self._consola(f"teach: reproduccion cortada ({m.motivo})")
+                elif m.evento == "err":
+                    self._consola(f"teach: {m.error}")
 
         elif isinstance(m, pr.Fallo):
             est.fallos.append(m)

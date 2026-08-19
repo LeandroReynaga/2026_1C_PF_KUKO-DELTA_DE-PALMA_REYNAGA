@@ -1,4 +1,4 @@
-# Protocolo serie KUKO Delta Carbon — versión 1
+# Protocolo serie KUKO Delta Carbon — versión 2
 
 Contrato entre el firmware del ESP32 y la aplicación de PC. **Es la única
 referencia válida**: si el firmware y Python no coinciden acá, el error está
@@ -12,6 +12,18 @@ en el que se apartó del documento, no en el otro.
 - **Ancho de banda:** 115200 baudios ≈ 11,5 kB/s. La telemetría periódica
   descrita acá consume ~1,8 kB/s (16 %). El resto queda libre para eventos
   y para los volcados largos (`D`, `P?`).
+
+**Cambios de la versión 2** (§6): modo teach. Comandos `J...`, línea
+`[TEACH]`, dos campos nuevos en `[E]` y el estado `TEACH` al final del enum.
+Todo lo anterior quedó igual, pero la versión sube igual: si la interfaz y el
+firmware no coinciden, la pestaña de Teach parecería andar y no haría nada,
+que es la clase de falla que hay que ver antes y no delante del jurado.
+
+**Cambios de la versión 2** (§6): modo teach. Comandos `J...`, línea
+`[TEACH]`, dos campos nuevos en `[E]` y el estado `TEACH` al final del enum.
+Todo lo anterior quedó igual, pero la versión sube igual: si la interfaz y el
+firmware no coinciden, la pestaña de Teach parecería andar y no haría nada,
+que es la clase de falla que hay que ver antes y no delante del jurado.
 
 ## Quién abre el puerto
 
@@ -58,6 +70,8 @@ una letra aunque compartan letra (`C` de color vs. `C` de círculo).
 | `S` | Vuelca el estado detallado de la supervisión |
 | `G` | Alterna frenar-por-colisión / sólo observar |
 | `M` | Alterna la traza de diagnóstico a 20 Hz |
+
+Los comandos del modo teach empiezan todos con `J` y van en §6.
 
 ### 1.3 Caja de alfajores
 
@@ -107,15 +121,15 @@ Toda línea de máquina empieza con una etiqueta entre corchetes y sigue con
 pares `clave=valor` separados por un espacio. Los valores nunca llevan
 espacios; sí pueden llevar comas.
 
-La interfaz **parsea** `[T]`, `[E]`, `[H]`, `[P]`, `[FALLO]`, `[PIEZA]` y
-`[BOOT]`. Todo lo demás (`[GUARD]`, `[MODO]`, `[CAJA]`, `[SERIAL]`,
-`[EMERGENCIA]`, `[TAPA]`, `[COLA]`, `[TRAZA]`…) se muestra tal cual en la
-consola de la interfaz. Una etiqueta desconocida **nunca** es un error: se
-trata como texto.
+La interfaz **parsea** `[T]`, `[E]`, `[H]`, `[P]`, `[FALLO]`, `[PIEZA]`,
+`[TEACH]` y `[BOOT]`. Todo lo demás (`[GUARD]`, `[MODO]`, `[CAJA]`,
+`[SERIAL]`, `[EMERGENCIA]`, `[TAPA]`, `[COLA]`, `[TRAZA]`…) se muestra tal
+cual en la consola de la interfaz. Una etiqueta desconocida **nunca** es un
+error: se trata como texto.
 
 ### 2.1 `[BOOT]` — al arrancar el firmware
 
-    [BOOT] proto=1 fw=2026-08-16 estados=16 params=24
+    [BOOT] proto=2 fw=2026-08-19 estados=17 params=55
 
 `proto` es la versión de este documento. Si no coincide con la que espera
 Python, la interfaz avisa en grande y no habilita los controles: un
@@ -156,7 +170,7 @@ la visualización más útil del tablero de diagnóstico.
 
     [E] t=125400 st=4 sn=PICK_APPROACH md=C mp=- cf=0 cr=0 q=3 qa=2100
         hm=1 gd=2 ob=0 sup=1 cv=1 cvp=60 bx=BRGRBG bf=000100 bc=4
-        pc=B pf=C py=4.20 pb=3 nd=41 nk=38 nx=3 nf=2
+        pc=B pf=C py=4.20 pb=3 tw=0 ti=0 nd=41 nk=38 nx=3 nf=2
         kr=12 kg=14 kb=12 ks=15 kh=11 kc=12
 
 | Clave | Significado |
@@ -175,9 +189,14 @@ la visualización más útil del tablero de diagnóstico.
 | `bf` | Celdas llenas, 6 dígitos 0/1 |
 | `bc` | Celda reservada por la pieza en la mano (0 = ninguna) |
 | `pc` `pf` `py` `pb` | Pieza en curso: color, forma, Y en cm, tacho destino (0 = ninguno) |
+| `tw` / `ti` | Teach: puntos cargados en la ruta, y cuál se está ejecutando (0 = ninguno) |
 | `nd` `nk` `nx` `nf` | Detectadas, depositadas OK, descartadas por inalcanzables, fallos |
 | `kr` `kg` `kb` | Depositadas por color: rojas, verdes, azules |
 | `ks` `kh` `kc` | Depositadas por forma: cuadrados, hexágonos, círculos |
+
+`tw`/`ti` viajan en la línea periódica **además** de en los eventos
+`[TEACH]`: un evento suelto se puede perder en un reinicio y dejaría a la
+pantalla creyendo que el robot todavía está reproduciendo algo.
 
 `nd`/`nk`/`nx` son los contadores del indicador de rendimiento: la tasa de
 éxito del sistema completo es `nk / nd`.
@@ -250,6 +269,14 @@ Ya venían en `clave=valor` y se parsean tal cual están hoy.
 
 ---
 
+### 2.7 `[TEACH]` — modo aprendizaje
+
+Todas sus formas están en §6, junto con los comandos que las provocan: el
+modo entero se documenta en un solo lugar en vez de repartirlo entre las dos
+direcciones.
+
+---
+
 ## 3. Tablas de códigos
 
 ### 3.1 Estados del robot (`st`)
@@ -269,6 +296,12 @@ detectar la discrepancia).
 | 5 | `PICK_DESCEND` | 13 | `BOX_LIFT` |
 | 6 | `PICK_LIFT` | 14 | `COLLISION_STOP` |
 | 7 | `GO_BIN` | 15 | `ERROR` |
+|   |          | 16 | `TEACH` |
+
+`TEACH` está **después** de `ERROR` justamente por la regla de arriba:
+apéndice al final, aunque quede feo, antes que correr la numeración.
+`test_los_estados_coinciden_con_el_firmware` compara las dos tablas leyendo
+`Robot.h`, así que una desincronización falla en las pruebas y no en marcha.
 
 ### 3.2 Colores y formas
 
@@ -332,7 +365,202 @@ más barata que tiene el proyecto pendiente.
 
 ---
 
-## 6. Parámetros duplicados entre firmware y visión
+## 6. Modo teach (aprendizaje)
+
+Un modo aparte del ciclo de clasificación: el brazo lo maneja el operador
+desde la pestaña *Teach* de la interfaz, o reproduce una secuencia que se le
+enseñó antes. Mientras dura, la cinta queda parada y las piezas que informe
+la visión **se ignoran en silencio** — no son un fallo del robot ni una pieza
+perdida, así que tampoco se cuentan.
+
+### 6.1 Quién hace qué
+
+| | |
+|---|---|
+| **ESP32** | recorta al volumen de trabajo, resuelve la cinemática, mueve, y encadena los puntos de una ruta ya cargada |
+| **Interfaz** | dibuja, graba, guarda las secuencias con nombre y lleva la cuenta de a qué porcentaje se verificó cada una |
+
+El corte está ahí porque lo único que no se puede delegar es lo que protege
+al robot: el recorte del volumen y el chequeo de alcance **están de los dos
+lados**, y el que manda es el del firmware. La interfaz los repite nada más
+que para no ofrecerle al operador un punto que va a ser rechazado.
+
+Encadenar los puntos también es del firmware. Si cada punto esperara la
+confirmación de llegada por serie, entre punto y punto se metería el ida y
+vuelta del enlace y la secuencia se reproduciría a los tirones.
+
+### 6.2 Entrar y salir
+
+    J1     pedir entrada al modo teach
+    J0     salir
+    J?     volcar el estado y el volumen de trabajo
+
+`J1` **no entra en el acto**: deja el pedido y el robot entra recién cuando
+llega a `WAIT_PIECE`, o sea quieto, en home y con las manos vacías. Con una
+pieza en vuelo, primero la termina. Esas tres condiciones juntas son lo que
+hace que la posición de partida del jog sea conocida sin que el firmware
+tenga que resolver cinemática **directa** — que no la tiene, y no la
+necesita para nada más.
+
+Se sabe que entró porque `st` pasa a `TEACH` (16), no porque conteste.
+Al salir vuelve por `GO_HOME_IDLE`, que es el estado que lo lleva a home
+antes de aceptar piezas de nuevo.
+
+Una colisión o un paro manual sacan del modo: después de cualquiera de los
+dos hay que rehomear, y hasta que eso pase la posición dejó de ser conocida.
+Por lo mismo, `J1` desde `ERROR` o `IDLE` se rechaza con `err=rehomear`: desde
+ahí el robot no llega a `WAIT_PIECE` por su cuenta y el pedido quedaría
+esperando para siempre.
+
+| Rechazo | Cuándo |
+|---|---|
+| `err=sinhoming` | Nunca se calibró |
+| `err=rehomear` | Está en `ERROR` o `IDLE` |
+| `err=nomodo` | El comando mueve el brazo y no está en teach |
+| `err=ocupado` | Hay una reproducción en curso |
+| `err=ik` | El punto no tiene solución |
+| `err=lleno` / `err=vacio` | El buffer se llenó / no hay ruta cargada |
+| `err=formato` | Los números no se entienden |
+
+### 6.3 Jog manual
+
+    JD<vx>,<vy>,<vz>     dirección, cada componente en [−1, 1]
+    JM<x>,<y>,<z>        destino absoluto de la punta, en cm
+    JP1 / JP0            bomba de vacío
+
+**Se manda una dirección y no una posición**, y la dirección **vence sola**
+a los 350 ms. Es el hombre-muerto: si la interfaz deja de refrescarla —
+navegador cerrado, enlace caído, la pestaña que pasa a segundo plano — el
+brazo termina el tramo que está haciendo y se para. Un destino, en cambio,
+se seguiría cumpliendo con nadie mirando. La interfaz la refresca a 10 Hz
+mientras haya una tecla o el joystick apretados, y manda el vector nulo en
+cuanto se sueltan.
+
+El firmware integra esa dirección en tramos cortos (uno cada 80 ms, del
+largo que dé `t_jog`) y **lanza el siguiente sólo cuando el anterior
+terminó**. No es un detalle de implementación: `Stepper::moveTo()` reinicia
+la rampa en cada destino, así que reemitir uno con el eje todavía andando
+dejaría al brazo persiguiendo un objetivo que se le escapa, y al soltar la
+tecla tendría por delante todo el atraso acumulado. Con esta forma, el brazo
+va siempre a un punto que ya se sabe alcanzable, y si no llega a seguir el
+ritmo el jog se frena solo en vez de acumular deuda.
+
+Velocidad y aceleración van al `t_jogpct` % del tope (15 % de fábrica).
+
+### 6.4 Volumen de trabajo
+
+Un cajón, más chico que el alcance real del brazo:
+
+| Eje | De | A | Parámetro |
+|---|---|---|---|
+| X | −12 cm | +12 cm | `t_xmin` / `t_xmax` |
+| Y | centro de los tachos | un centímetro antes del borde lejano de la cinta | `t_ymin` / `t_ymax` |
+| Z | `grab_z` | `grab_z` + `t_zup` | `t_zup` |
+
+El piso en Z **no es un parámetro propio**: cuelga de `grab_z`, la altura a
+la que se agarra una pieza apoyada. Así, recalibrar el agarre mueve también
+el límite del jog, en vez de dejar los dos diciendo cosas distintas — que es
+como se termina clavando la ventosa contra la cinta.
+
+El cajón tiene esquinas a las que un delta no llega. El firmware simplemente
+no toma esos destinos (el brazo deja de avanzar para ese lado) y la interfaz
+las pinta, resolviendo la inversa con `kuko/cinematica.py`, para que el
+operador vea por qué.
+
+`J?` contesta con todo junto, ya resuelto:
+
+    [TEACH] est=on n=12 i=0 pct=15 x=1.50 y=-2.00 z=-30.10
+            xmin=-12.00 xmax=12.00 ymin=-9.55 ymax=12.05
+            zmin=-32.60 zmax=-26.60 cap=150
+
+| Clave | Significado |
+|-------|-------------|
+| `est` | `on`, `pedido` u `off` |
+| `n` / `i` | Puntos cargados, y cuál se está ejecutando (0 = ninguno) |
+| `pct` | Porcentaje de la última reproducción |
+| `x` `y` `z` | Posición **comandada** de la punta |
+| `xmin`…`zmax` | El cajón, con el piso en Z ya resuelto |
+| `cap` | Cuántos puntos entran en el buffer del firmware |
+
+### 6.5 Volcado de la posición comandada
+
+    JG1 / JG0     enciende / apaga el volcado a 20 Hz
+
+    [TEACH] p x=-3.20 y=4.50 z=-30.10 b=1
+
+Es **lo que se graba**. Podría grabarse en cambio la posición medida, que ya
+viaja en `[T]`, pero el AS5600 analógico tiene ~1° de ruido y en cartesiano
+eso son milímetros que después se reproducen como temblor: lo que el
+operador enseñó es a dónde llevó el brazo, no cómo vibró el sensor. Y podría
+calcularla la interfaz integrando el jog, pero el firmware saltea tramos
+cuando el brazo no llega, así que las dos cuentas divergirían sin que nadie
+se entere.
+
+Son 760 B/s, así que se enciende sólo con la pestaña de teach a la vista.
+
+### 6.6 Reproducción
+
+    JC                          vaciar la ruta
+    JA<x>,<y>,<z>,<b>,<w>       agregar un punto (b = bomba 0/1, w = espera ms)
+    JR<pct>                     reproducir al <pct> % de velocidad y aceleración
+    JX                          cortar
+
+La reproducción **no frena en cada punto**. A `t_mezcla` cm de un punto
+intermedio, el firmware redirige al siguiente conservando la velocidad
+(`Stepper::redirigir`), así que el brazo pasa *cerca* del punto en vez de
+clavarse en él. Sin eso, una trayectoria de veinte puntos son veinte frenadas
+y veinte arranques, y a la aceleración del ciclo normal eso se siente como un
+traqueteo — que es exactamente lo que se vio en el robot.
+
+No se redondea todo: un punto con espera o con cambio de bomba se cumple
+exacto (ahí se agarra o se suelta una pieza), y una esquina más cerrada que
+`t_esquina` tampoco, porque ahí el tirón lo produce la esquina misma y un eje
+que invierte el sentido tiene que pasar por velocidad cero de todos modos.
+Cuando el redondeo no se puede, se frena y se arranca: nunca queda a medias.
+
+La aceleración de todo el modo teach sale de `t_acel`, **no** de la del ciclo
+normal. Es el primer número a bajar si el brazo vibra al reproducir.
+
+La grabación se muestrea a 20 Hz y se **simplifica** antes de subirla
+(Ramer–Douglas–Peucker, `kuko/teach.py`). El motivo no es la memoria: cada
+punto es un `moveTo`, o sea un arranque y una frenada, y reproducir 400
+puntos sería un movimiento a los tirones y lentísimo. Se conservan siempre
+los extremos, **los cambios de bomba** y las pausas — un `E` apretado y medio
+segundo quieto esperando que el vacío agarre es exactamente lo que hay que
+guardar, y lo primero que borraría un simplificador que sólo mire geometría.
+
+La espera de cada punto **no se escala** con el porcentaje. El porcentaje es
+velocidad y aceleración; una espera es el tiempo que tarda el vacío en
+formarse, y eso no cambia porque el brazo vaya más rápido entre punto y
+punto.
+
+Al terminar sale `[TEACH] fin`; si se corta, `[TEACH] abort motivo=<...>`.
+
+### 6.7 Verificación por etapas
+
+Un movimiento recién grabado **no se estrena a fondo**. Lleva una marca de
+hasta dónde se verificó, con cuatro valores:
+
+| Marca | Qué significa |
+|---|---|
+| `0` | Sin verificar. Se reproduce al **15 %**, que es la velocidad a la que se lo enseñó |
+| `15` | Salió bien despacio. Se reproduce al **50 %** |
+| `50` | Salió bien a media máquina. Se reproduce al **100 %** |
+| `100` | Verificado. De acá en más va siempre al 100 % |
+
+Entre etapa y etapa la interfaz pregunta *«¿salió bien?»*, y **sólo esa
+confirmación sube el escalón**. Decir que no lo deja donde estaba, así que la
+próxima vez vuelve a arrancar por el escalón que faltaba.
+
+Existe porque una trayectoria hecha a mano puede pasar cerca de algo que a
+paso de hombre no roza y a toda velocidad sí, y porque a 97.000 pasos/s² un
+error de enseñanza no se corrige con reflejos. La marca se guarda junto con
+la secuencia (`pc/config/movimientos.json`) y **vuelve a cero si se regraba**:
+es otro movimiento, aunque conserve el nombre.
+
+---
+
+## 7. Parámetros duplicados entre firmware y visión
 
 Estos valores existen **en los dos lados** y tienen que valer lo mismo. Si se
 editan de un solo lado, el robot le empieza a errar a las piezas sin que nada
@@ -344,6 +572,15 @@ avise, y es de las fallas más caras de encontrar.
 | `IMAGE_BOTTOM_Y_CM` | `BELT_MIN_Y` | −2,8 cm |
 | `IMAGE_BOTTOM_Y_CM + IMAGE_HEIGHT_CM` | `BELT_MAX_Y` | 11,2 cm |
 | `SERIAL_BAUDRATE` | `Serial.begin()` | 115200 |
+
+La geometría del brazo es el otro caso, y es más peligroso porque no da
+ningún síntoma: `pc/kuko/cinematica.py` repite las constantes de
+`src/kinematics/DeltaKinematics.h` (largos de brazos, radios, offset de
+herramienta, límites articulares y las dos ganancias de calibración). Si se
+vuelve a medir el robot y se toca un solo lado, la pantalla dibuja la punta
+unos milímetros corrida de donde está y nadie se entera nunca.
+`test_cinematica.py` lee las dos y las compara, que es la única defensa real
+contra esto.
 
 **El núcleo compara los dos lados al conectarse** (con lo que devuelve `P?`)
 y avisa si difieren. Ese chequeo solo justifica la mitad del trabajo de tener

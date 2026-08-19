@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from kuko import parametros as par
 from kuko import protocolo as pr
@@ -136,22 +137,18 @@ def test_cada_nivel_tiene_contenido():
 def test_la_pagina_entera_se_renderiza():
     """Arma la página completa y la pide por HTTP, sin navegador.
 
-    Cubre las tres pestañas de una: cualquier excepción al construirlas o al
-    refrescarlas sale como error del pedido, no como un panel en blanco.
+    Cubre las cuatro pestañas de una: cualquier excepción al construirlas o
+    al refrescarlas sale como error del pedido, no como un panel en blanco.
     """
 
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-    from nicegui import ui
+    import pagina
 
     from kuko import ui as interfaz_ui
 
     estado = _estado_completo()
     interfaz = interfaz_ui.Interfaz(estado, lambda linea: True, None)
-    servidor = FastAPI()
 
-    @ui.page("/prueba")
-    def pagina():
+    def cuerpo():
         interfaz.construir()
 
         # Lo que normalmente harían los temporizadores de 0,1 s y 0,5 s. El
@@ -161,16 +158,14 @@ def test_la_pagina_entera_se_renderiza():
         interfaz._refrescar_lento()
         interfaz._refrescar_lento()
 
-    ui.run_with(servidor)
-
-    with TestClient(servidor) as cliente:
-        respuesta = cliente.get("/prueba")
+    respuesta = pagina.pedir(cuerpo)
 
     assert respuesta.status_code == 200
 
     for texto in ("Presion sobre la pieza", "Supervision de colisiones",
                   "Corrimiento de la caja", "Consola del robot",
-                  "medida por la vision", "Guardar en la placa"):
+                  "medida por la vision", "Guardar en la placa",
+                  "Modo Teach", "Jog manual", "Volumen de trabajo"):
         assert texto in respuesta.text, f"no se renderizo {texto!r}"
 
     # Una fila de control por parámetro de proceso y de servicio (los de

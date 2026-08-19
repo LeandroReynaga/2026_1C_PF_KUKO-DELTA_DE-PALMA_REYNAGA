@@ -9,12 +9,15 @@ Se corre con:  python -m pytest pc/tests    (o  python pc/tests/test_protocolo.p
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from kuko import protocolo as pr
+
+RAIZ = Path(__file__).resolve().parents[2]
 
 
 def test_telemetria():
@@ -60,7 +63,7 @@ def test_proceso():
     linea = (
         "[E] t=125400 st=4 sn=PICK_APPROACH md=C mp=- cf=0 cr=0 q=3 qa=2100 "
         "hm=1 gd=2 ob=0 sup=1 cv=1 cvp=60 bx=BRGRBG bf=000100 bc=4 "
-        "pc=B pf=C py=4.20 pb=3 nd=41 nk=38 nx=3 nf=2 "
+        "pc=B pf=C py=4.20 pb=3 tw=0 ti=0 nd=41 nk=38 nx=3 nf=2 "
         "kr=12 kg=14 kb=12 ks=15 kh=11 kc=12"
     )
 
@@ -77,6 +80,7 @@ def test_proceso():
     assert m.llenas == [False, False, False, True, False, False]
     assert m.pieza_color == "B"
     assert m.cinta_pwm == 60
+    assert m.teach_puntos == 0 and m.teach_indice == 0
     assert abs(m.tasa_exito - 38 / 41) < 1e-9
 
     # Los contadores de los paneles de modo. Suman las depositadas, que es
@@ -147,11 +151,96 @@ def test_parametros():
 
 
 def test_boot():
-    m = pr.parsear("[BOOT] proto=1 fw=2026-08-16 estados=16 params=24")
+    """La version que anuncia el firmware es la que espera este modulo.
+
+    Se arma la linea con `pr.VERSION_PROTOCOLO` en vez de con un numero
+    escrito: asi subir la version del contrato no obliga a acordarse de tocar
+    esta prueba, que es exactamente el descuido que dejaria pasar una
+    incompatibilidad sin que nada avise.
+    """
+
+    m = pr.parsear(f"[BOOT] proto={pr.VERSION_PROTOCOLO} "
+                   "fw=2026-08-19 estados=17 params=55")
 
     assert isinstance(m, pr.Boot)
     assert m.compatible is True
+    assert m.estados == 17
     assert pr.parsear("[BOOT] proto=99").compatible is False
+
+
+def test_teach():
+    """Las formas que toma `[TEACH]`, y los comandos que las provocan."""
+
+    # El volcado de `J?`: es de donde salen los límites del volumen.
+    m = pr.parsear(
+        "[TEACH] est=on n=12 i=0 pct=15 x=1.50 y=-2.00 z=-30.10 "
+        "xmin=-12.00 xmax=12.00 ymin=-9.55 ymax=12.05 "
+        "zmin=-32.60 zmax=-26.60 cap=150")
+
+    assert isinstance(m, pr.Teach)
+    assert m.evento == "estado" and m.modo == "on"
+    assert m.puntos == 12 and m.indice == 0 and m.capacidad == 150
+    assert m.limite_x == (-12.0, 12.0)
+    assert m.limite_z == (-32.6, -26.6)
+
+    # El volcado de posición a 20 Hz: es lo que se graba.
+    p = pr.parsear("[TEACH] p x=-3.20 y=4.50 z=-30.10 b=1")
+
+    assert p.evento == "p" and p.bomba is True
+    assert (p.x, p.y, p.z) == (-3.2, 4.5, -30.1)
+
+    # Los eventos sueltos.
+    assert pr.parsear("[TEACH] fin").evento == "fin"
+    assert pr.parsear("[TEACH] buf n=42").puntos == 42
+    assert pr.parsear("[TEACH] run pct=50 n=42").pct == 50.0
+    assert pr.parsear("[TEACH] abort motivo=ik").motivo == "ik"
+    assert pr.parsear("[TEACH] err=nomodo").error == "nomodo"
+
+    # Ninguno de estos lleva coma... salvo los que sí, y por eso el firmware
+    # los consume antes que el parser de piezas.
+    assert pr.cmd_teach(True) == "J1\n"
+    assert pr.cmd_teach(False) == "J0\n"
+    assert pr.cmd_teach_estado() == "J?\n"
+    assert pr.cmd_teach_mover(-3.2, 4.5, -30.1) == "JM-3.20,4.50,-30.10\n"
+    assert pr.cmd_teach_bomba(True) == "JP1\n"
+    assert pr.cmd_teach_limpiar() == "JC\n"
+    assert pr.cmd_teach_punto(1.0, 2.0, -30.0, True, 250) == "JA1.00,2.00,-30.00,1,250\n"
+    assert pr.cmd_teach_reproducir(50) == "JR50\n"
+    assert pr.cmd_teach_abortar() == "JX\n"
+    assert pr.cmd_teach_volcado(True) == "JG1\n"
+
+    # La dirección se satura acá también: el firmware la recorta igual, pero
+    # mandar un 3,7 sería mandar algo que no significa nada.
+    assert pr.cmd_teach_jog(-4.0, 0.5, 0.0) == "JD-1.00,0.50,0.00\n"
+
+    # Una espera absurda no se manda: el campo del firmware es de 16 bits.
+    assert pr.cmd_teach_punto(0, 0, -30, False, 10**9).endswith(",0,60000\n")
+
+
+def test_los_estados_coinciden_con_el_firmware():
+    """El enum de `Robot.h` y el de este módulo, uno al lado del otro.
+
+    El índice de estado viaja crudo en `st`, así que agregar uno en el medio
+    corre la numeración de todos los siguientes y la interfaz pasa a mostrar
+    el estado equivocado sin ningún síntoma. El campo `sn` está para detectar
+    eso en marcha; esta prueba lo detecta antes de compilar.
+    """
+
+    fuente = (RAIZ / "src" / "robot" / "Robot.h").read_text(encoding="utf-8")
+
+    cuerpo = re.search(r"enum RobotState\s*\{(.*?)\};", fuente, re.S)
+
+    assert cuerpo, "no se encontró el enum RobotState en Robot.h"
+
+    limpio = re.sub(r"//[^\n]*", "", cuerpo.group(1))
+    nombres = [n.strip() for n in limpio.split(",") if n.strip()]
+
+    assert nombres, "el enum se leyó vacío"
+
+    esperados = [e.name for e in pr.EstadoRobot]
+
+    assert nombres == esperados, (
+        f"el firmware dice {nombres}\ny protocolo.py dice {esperados}")
 
 
 def test_pieza_y_fallo():

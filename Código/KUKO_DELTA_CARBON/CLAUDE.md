@@ -48,7 +48,10 @@ orquestador. Antes del `switch`, cada `update()` corre `supervisarColision()`
 cualquier estado. `Robot::update()` es un `switch` sobre `RobotState` (HOMING →
 GO_POSITION → GRAB → GO_UP → CONVEYOR_RUN → GO_DOWN → RELEASE → GO_ZERO2 →
 CONVEYOR_STOP → READY), cada uno con un handler privado `updateX()` llamado
-en cada tick del loop. Todas las esperas dentro de estos handlers son
+en cada tick del loop. `TEACH` es el único estado fuera de ese ciclo (ver
+abajo) y es el **último** del enum, después de `ERROR`: el índice viaja crudo
+en la telemetría, así que un estado nuevo va siempre al final aunque quede
+feo, nunca en el medio. Todas las esperas dentro de estos handlers son
 no bloqueantes, basadas en timestamps (`millis()`) — nunca agregues un
 `delay()` acá, congela la generación de pasos, las lecturas de encoders y
 toda la máquina de estados simultáneamente (ver los comentarios en
@@ -91,9 +94,17 @@ deja ciega la detección con el robot quieto). El atraso se puede además
 cancelar con `RETARDO_ENCODER_MS`, que pasa la posición comandada por el mismo
 pasabajos que sufre el sensor. `S` informa el atraso medido y la ganancia
 encoder/pasos, que son los dos números para calibrar todo esto; `M` vuelca una
-traza en vivo a 20 Hz. Como el puerto serie suele estar tomado por la visión,
-todos los parámetros viven en `GuardConfig` y cada 15 s sale sola una línea
-`[GUARD]` con los mismos números.
+traza en vivo a 20 Hz.
+
+El guard **casi no imprime nada por sí solo**, y es a propósito: los números
+que hacen falta para calibrarlo ya viajan en `[T]` (error contra umbral, 10 Hz)
+y en `[H]` (ganancia, atraso, picos y fuga por eje), así que las líneas
+`[GUARD]` que salían solas —el volcado cada 15 s, el salto de la bomba en cada
+conmutación, la firma de reposo en cada parada en home— eran varias por
+segundo con el robot produciendo y no las lee nadie en vivo. Quedan sólo los
+avisos de algo que pasó: encoder caído, salto de calibración entre paradas,
+deriva acumulada y encoder invertido. El volcado periódico sigue disponible
+con el parámetro `diag_ms`, que viene en 0.
 
 Contra falsos positivos hay tres defensas además del umbral, y conviene
 entender qué ataca cada una antes de tocarlas: el margen por velocidad decae
@@ -150,6 +161,42 @@ mano.
 El contrato completo de todo esto está en `pc/PROTOCOLO.md`, y es la
 referencia válida: si el firmware y ese documento no coinciden, el que se
 apartó es el firmware.
+
+**Modo Teach** (`Robot::updateTeach()` y compañía, más `pc/kuko/teach.py` y
+`pc/kuko/cinematica.py`) es un modo aparte del ciclo de clasificación: el
+operador maneja el brazo a mano desde la pestaña *Teach* de la interfaz, graba
+secuencias y las reproduce. El reparto está explicado entero en
+`pc/PROTOCOLO.md` §6, y las tres decisiones que conviene entender antes de
+tocarlo son:
+
+- **Se manda una dirección, no un destino**, y esa dirección vence sola a los
+  350 ms en el firmware. Es el hombre-muerto: si la interfaz deja de
+  refrescarla, el brazo termina el tramo que tiene y se para.
+- **La reproducción no frena en cada punto.** `Stepper::redirigir()` cambia
+  el destino conservando la rampa, así que el brazo redondea las esquinas en
+  vez de detenerse en cada una. Cuánto puede frenar desde la velocidad que
+  trae **no se calcula con `v²/(2a)`**: esa fórmula es la del movimiento
+  continuo y la rampa de Austin en punto fijo se aparta de ella hasta un
+  190 %. El dato exacto es `|n|`, el propio índice de rampa.
+  `pc/tests/test_rampa.py` simula la aritmética entera de la ISR y verifica
+  que ningún encadenado deje el eje llegando rápido a un destino — que sería
+  perder pasos sin choque y sin aviso. Esa prueba es un **espejo** del
+  código: si se toca la rampa, hay que tocarla también ahí.
+- **El jog avanza por tramos cortos, y el siguiente sale sólo cuando el
+  anterior terminó.** `Stepper::moveTo()` reinicia la rampa en cada destino,
+  así que reemitir uno con el eje andando dejaría al brazo persiguiendo un
+  objetivo que se le escapa. Con esta forma se frena solo en vez de acumular
+  atraso.
+- **Se entra desde `WAIT_PIECE` y no en el acto** (`J1` deja el pedido). Ahí el
+  brazo está quieto, en home y con las manos vacías, que es lo que hace
+  conocida la posición de partida sin que el firmware necesite cinemática
+  DIRECTA — no la tiene. La directa está en Python (`cinematica.py`), que es
+  quien la necesita para dibujar.
+
+Las secuencias grabadas viven en `pc/config/movimientos.json` con una marca de
+hasta qué porcentaje se verificaron (0 → 15 → 50 → 100). Un movimiento recién
+grabado no se estrena a fondo: se reproduce al 15 %, la interfaz pregunta si
+salió bien, y sólo esa confirmación lo sube de escalón.
 
 **Cinemática** (`src/kinematics/DeltaKinematics.h/.cpp`) es un namespace
 puramente matemático (sin I/O, sin llamadas a motores): `solveIK(x, y, z)`
@@ -210,7 +257,19 @@ actualmente pero están vacíos.
 - La aplicación de PC vive en `pc/`: `pc/kuko/protocolo.py` es la mitad en
   Python del contrato serie (con pruebas en `pc/tests/`), `enlace.py` es el
   dueño del puerto, `vision.py` el de la cámara y `ui.py` la interfaz
-  NiceGUI (`pc/kuko_app.py` levanta las tres).
+  NiceGUI (`pc/kuko_app.py` levanta las tres). `cinematica.py` es la
+  cinemática directa e inversa del lado de Python, y `teach.py` la
+  biblioteca de secuencias grabadas.
+- Las pruebas se corren con `pc\.venv\Scripts\python -m pytest pc/tests`, o
+  archivo por archivo (`python pc/tests/test_teach.py`). **Todas las que
+  arman una página comparten un solo servidor** (`pc/tests/pagina.py`):
+  `ui.run_with()` instala middleware y eso sólo se puede hacer antes de que
+  la aplicación arranque, así que un servidor por archivo revienta apenas se
+  corren dos en el mismo proceso.
+- Varias pruebas comparan las dos mitades leyendo el C++: la tabla de
+  parámetros contra sus fichas, el enum de estados contra `protocolo.py`, y
+  las constantes de `DeltaKinematics.h` contra `cinematica.py`. Es la única
+  defensa contra tocar un solo lado de algo que está escrito dos veces.
 - Las pestañas de proceso y servicio son una lista de ajustes estilo menú de
   opciones, armada **recorriendo lo que contesta `P?`** — no hay ninguna
   lista de parámetros del lado de Python. `pc/kuko/parametros.py` sólo

@@ -29,7 +29,7 @@ from typing import Optional
 # Versión del contrato. El firmware la anuncia en su línea [BOOT] y el
 # núcleo compara: si no coinciden, la interfaz no habilita los controles.
 # Un protocolo desparejo hay que verlo ANTES de mover el brazo.
-VERSION_PROTOCOLO = 1
+VERSION_PROTOCOLO = 2
 
 
 # ==================================================================
@@ -62,6 +62,11 @@ class EstadoRobot(IntEnum):
     BOX_LIFT = 13
     COLLISION_STOP = 14
     ERROR = 15
+
+    # Modo aprendizaje. Va al final -- después de ERROR -- porque el índice
+    # viaja tal cual en `st` y meter uno en el medio corre la numeración de
+    # todos los siguientes sin ningún síntoma visible.
+    TEACH = 16
 
 
 class EstadoGuard(IntEnum):
@@ -219,6 +224,13 @@ class Proceso(Mensaje):
     descartadas: Optional[int] = None
     fallos: Optional[int] = None
 
+    # Modo teach: puntos de la ruta cargada en el firmware y cuál se está
+    # ejecutando (0 = ninguno). Llegan en la línea periódica y no sólo en el
+    # evento `[TEACH]` a propósito: un evento suelto se puede perder en un
+    # reinicio y dejaría a la pantalla creyendo que todavía reproduce.
+    teach_puntos: Optional[int] = None
+    teach_indice: Optional[int] = None
+
     # Depositadas discriminadas, para los contadores que van al lado de cada
     # color y de cada forma en el panel de modo. Se indexan con el código de
     # un carácter ('R'/'G'/'B', 'S'/'H'/'C') para poder recorrerlos junto con
@@ -375,6 +387,51 @@ class PiezaEncolada(Mensaje):
     color: str = ""
     forma: str = ""
     cola: Optional[int] = None
+
+
+@dataclass
+class Teach(Mensaje):
+    """[TEACH]: eventos del modo aprendizaje.
+
+    Una sola clase para todas las formas que toma la etiqueta (`on`, `off`,
+    `pedido`, `buf`, `run`, `fin`, `abort`, `err=...` y el volcado de `J?`)
+    porque todas dicen lo mismo desde ángulos distintos y la interfaz las
+    consume en el mismo lugar. `evento` es la primera palabra suelta de la
+    línea, o "estado" cuando es el volcado completo.
+
+    Los límites del volumen vienen acá **y** en la tabla de parámetros. No es
+    redundancia inútil: la tabla los da como valores ajustables y esta línea
+    los da ya resueltos, incluido el piso en Z, que el firmware calcula a
+    partir de `grab_z` y no existe como parámetro propio.
+    """
+
+    #: Primera palabra suelta de la línea. Los que importan:
+    #:   "p"       una posición del volcado a 20 Hz (x, y, z, bomba)
+    #:   "on"/"off"/"pedido"   entradas y salidas del modo
+    #:   "buf"     cambió la cantidad de puntos cargados
+    #:   "run"     arrancó una reproducción
+    #:   "fin"     terminó bien
+    #:   "abort"   se cortó (ver `motivo`)
+    #:   "err"     un pedido rechazado (ver `error`)
+    #:   "estado"  el volcado completo de `J?`
+    evento: str = ""
+    modo: str = ""             # "on", "pedido" u "off", sólo en el volcado
+    puntos: Optional[int] = None
+    indice: Optional[int] = None
+    pct: Optional[float] = None
+    capacidad: Optional[int] = None
+    error: str = ""
+    motivo: str = ""
+
+    x: Optional[float] = None
+    y: Optional[float] = None
+    z: Optional[float] = None
+    bomba: Optional[bool] = None
+
+    # (min, max) de cada eje. None si la línea no los traía.
+    limite_x: Optional[tuple[float, float]] = None
+    limite_y: Optional[tuple[float, float]] = None
+    limite_z: Optional[tuple[float, float]] = None
 
 
 @dataclass
@@ -562,6 +619,8 @@ def parsear(linea: str) -> Mensaje:
             pieza_forma="" if p.get("pf", "-") == "-" else p.get("pf", ""),
             pieza_y=_f(p, "py"),
             pieza_tacho=_i(p, "pb"),
+            teach_puntos=_i(p, "tw"),
+            teach_indice=_i(p, "ti"),
             detectadas=_i(p, "nd"),
             depositadas=_i(p, "nk"),
             descartadas=_i(p, "nx"),
@@ -619,6 +678,33 @@ def parsear(linea: str) -> Mensaje:
             color=p.get("color", ""),
             forma=p.get("forma", ""),
             cola=int(cola.group(1)) if cola else None,
+        )
+
+    if etiqueta == "TEACH":
+        palabras = cuerpo.split()
+        suelta = palabras[0] if palabras and "=" not in palabras[0] else ""
+
+        def rango(a: str, b: str):
+            lo, hi = _f(p, a), _f(p, b)
+            return None if lo is None or hi is None else (lo, hi)
+
+        return Teach(
+            crudo=linea,
+            evento=suelta or ("err" if p.get("err") else "estado"),
+            modo=p.get("est", ""),
+            puntos=_i(p, "n"),
+            indice=_i(p, "i"),
+            pct=_f(p, "pct"),
+            capacidad=_i(p, "cap"),
+            error=p.get("err", ""),
+            motivo=p.get("motivo", ""),
+            x=_f(p, "x"),
+            y=_f(p, "y"),
+            z=_f(p, "z"),
+            bomba=_b(p, "b"),
+            limite_x=rango("xmin", "xmax"),
+            limite_y=rango("ymin", "ymax"),
+            limite_z=rango("zmin", "zmax"),
         )
 
     if etiqueta == "FALLO":
@@ -807,6 +893,100 @@ def cmd_guardar_parametros() -> str:
 
 def cmd_parametros_de_fabrica() -> str:
     return "P0\n"
+
+
+# ------------------------------------------------------------------
+#  Modo teach
+# ------------------------------------------------------------------
+#
+#  Todos empiezan con 'J'. El firmware los consume ANTES del parser de
+#  piezas justamente porque varios llevan comas y ese parser toma cualquier
+#  línea con dos comas por un mensaje de la visión.
+#
+#  El reparto de trabajo: el firmware recorta al volumen, resuelve la
+#  cinemática y encadena los puntos; acá viven el dibujo, la grabación, los
+#  nombres y los porcentajes ya verificados de cada secuencia.
+
+def cmd_teach(activo: bool) -> str:
+    """Entra o sale del modo teach.
+
+    Entrar no es inmediato: el firmware termina la pieza que tenga en vuelo,
+    vuelve a home y recién ahí entra. Se sabe que entró cuando `st` pasa a
+    `EstadoRobot.TEACH`, no cuando contesta.
+    """
+
+    return "J1\n" if activo else "J0\n"
+
+
+def cmd_teach_estado() -> str:
+    """Pide el volcado con el estado y los límites del volumen de trabajo."""
+
+    return "J?\n"
+
+
+def cmd_teach_mover(x: float, y: float, z: float) -> str:
+    """Destino absoluto de la punta, en cm. El firmware recorta al volumen."""
+
+    return f"JM{x:.2f},{y:.2f},{z:.2f}\n"
+
+
+def cmd_teach_jog(vx: float, vy: float, vz: float) -> str:
+    """Dirección del jog, cada componente en [-1, 1]. El vector nulo frena.
+
+    Es una DIRECCIÓN y no una posición porque la dirección vence sola en el
+    firmware: si la interfaz deja de refrescarla (se cerró el navegador, se
+    cortó el enlace) el brazo se para en el tramo que esté haciendo. Un
+    destino, en cambio, se seguiría cumpliendo con nadie mirando.
+    """
+
+    def recortar(v: float) -> float:
+        return max(-1.0, min(1.0, float(v)))
+
+    return f"JD{recortar(vx):.2f},{recortar(vy):.2f},{recortar(vz):.2f}\n"
+
+
+def cmd_teach_bomba(encendida: bool) -> str:
+    return "JP1\n" if encendida else "JP0\n"
+
+
+def cmd_teach_limpiar() -> str:
+    return "JC\n"
+
+
+def cmd_teach_punto(x: float, y: float, z: float,
+                    bomba: bool, espera_ms: int = 0) -> str:
+    """Agrega un punto a la ruta que el firmware va a reproducir."""
+
+    espera = max(0, min(60000, int(espera_ms)))
+
+    return f"JA{x:.2f},{y:.2f},{z:.2f},{1 if bomba else 0},{espera}\n"
+
+
+def cmd_teach_reproducir(pct: float) -> str:
+    """Corre la ruta cargada al `pct` % de la velocidad y aceleración tope.
+
+    Los tres valores que usa la verificación por etapas son 15, 50 y 100: se
+    graba jogueando al 15 %, así que la primera pasada reproduce a la misma
+    velocidad a la que se enseñó el movimiento.
+    """
+
+    return f"JR{max(1.0, min(100.0, float(pct))):.0f}\n"
+
+
+def cmd_teach_volcado(activo: bool) -> str:
+    """Enciende el volcado de la posición comandada a 20 Hz.
+
+    Es el dato que se graba: la posición MEDIDA ya viaja en `[T]`, pero
+    arrastra el ruido del encoder, y ese ruido reproducido después es
+    temblor. Sólo se enciende con la pestaña de teach a la vista —
+    760 B/s del enlace no se gastan con la pantalla en otra cosa.
+    """
+
+    return "JG1\n" if activo else "JG0\n"
+
+
+def cmd_teach_abortar() -> str:
+    return "JX\n"
 
 
 def cmd_telemetria(encendida: bool) -> str:

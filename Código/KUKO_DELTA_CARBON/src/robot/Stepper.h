@@ -33,6 +33,36 @@ public:
     void moveTo(long position);
     void stop();
 
+    // ------------------------------------------------------------------
+    //  Encadenado de tramos (redirigir SIN soltar la rampa)
+    // ------------------------------------------------------------------
+    // moveTo() reinicia la rampa (n = 0, cn = 0): el eje arranca desde el
+    // intervalo de partida, o sea desde parado. Encadenando tramos con eso,
+    // cada punto intermedio es una frenada entera mas un arranque, y una
+    // trayectoria de veinte puntos son veinte frenadas -- que con la
+    // aceleracion alta es exactamente el traqueteo que se siente en el brazo.
+    //
+    // redirigir() cambia el destino CONSERVANDO cn, o sea la velocidad
+    // instantanea: el tren de pulsos no se interrumpe ni pega un salto. Lo
+    // unico que recalcula es en que paso hay que empezar a frenar para el
+    // destino nuevo.
+    //
+    // Solo se puede si el eje va en el mismo sentido que el destino nuevo y
+    // si lo que queda alcanza para frenar desde la velocidad actual. Cuando
+    // no se puede devuelve false SIN TOCAR NADA, y quien llama vuelve al
+    // camino de siempre (esperar a que llegue y hacer moveTo). Nunca deja el
+    // eje a medio configurar.
+    //
+    // Ojo con la aceleracion: el largo de la rampa depende de ella, asi que
+    // al cambiarla hay que volver a derivar n de la velocidad real (la que
+    // dice cn). Eso se hace aca, con float y FUERA de la interrupcion.
+    bool puedeRedirigir(long position, float acceleration) const;
+    bool redirigir(long position, float maxSpeed, float acceleration);
+
+    // Pasos que faltan para el destino actual. Es con lo que se decide
+    // cuando arrancar la mezcla de una esquina.
+    long pasosRestantes() const;
+
     bool isMoving() const;
     bool targetReached() const;
 
@@ -96,6 +126,28 @@ private:
 
     hw_timer_t *timer;
     portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+
+    // Cuantos pasos cuesta frenar desde donde esta el eje ahora, si se
+    // pasara a usar `acelNueva`.
+    //
+    // NO se calcula con v^2/(2a): esa formula es la del movimiento continuo
+    // y la rampa de Austin en punto fijo se aparta bastante de ella --
+    // medido con la aritmetica de esta misma ISR, hasta un 190 % de mas en
+    // rampas largas, porque la division entera de la recurrencia trunca cada
+    // vez mas a medida que n crece. Usarla dejaba al eje llegando al destino
+    // a 7.600 pasos/s en el peor caso, o sea con los pulsos cortados de
+    // golpe y pasos perdidos.
+    //
+    // El dato exacto ya lo lleva la rampa: `n` baja de a uno por paso
+    // mientras frena, asi que frenar cuesta exactamente |n| pasos. Lo unico
+    // que hay que corregir es el cambio de aceleracion, y eso si escala
+    // limpio (la distancia de frenado va con 1/a).
+    long pasosDeFrenado(float acelNueva) const;
+
+    // Margen sobre ese calculo. Pasarse es inofensivo -- el eje frena un
+    // poco antes y llega mas despacio --; quedarse corto es perder pasos.
+    static constexpr float MARGEN_FRENADO = 1.10f;
+    static const long      FRENADO_EXTRA  = 4;
 
     // Decide el intervalo (cn) para el PROXIMO paso. Solo aritmetica
     // entera -> segura para llamar desde la ISR. También se usa para

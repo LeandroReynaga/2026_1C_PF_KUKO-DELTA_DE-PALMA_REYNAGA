@@ -216,6 +216,145 @@ void Stepper::moveTo(long position)
     portEXIT_CRITICAL(&mux);
 }
 
+// ------------------------------------------------------------------
+//  Encadenado de tramos
+// ------------------------------------------------------------------
+//  Todo el plan sale de una sola cantidad: cuantos pasos cuesta frenar
+//  desde donde esta el eje. Eso lo sabe la propia rampa (|n|, ver
+//  pasosDeFrenado) y NO la formula v^2/(2a), que se aparta bastante de la
+//  aritmetica entera de esta ISR.
+//
+//  Con ese numero, el punto de frenado sale de la simetria del perfil
+//  triangular: el pico esta en n = (dist + n0) / 2, o sea que hay que
+//  acelerar (dist - n0) / 2 pasos y despues frenar los que queden.
+//
+//  Los volatile de 32 bits se leen sin seccion critica a proposito: en el
+//  ESP32 una lectura alineada de 32 bits es atomica, no hay medio valor
+//  posible. La seccion critica se usa para APLICAR, que ahi si son varias
+//  variables que tienen que cambiar juntas.
+long Stepper::pasosDeFrenado(float acelNueva) const
+{
+    long nRampa = labs(n);
+
+    if (nRampa < 1)
+    {
+        nRampa = 1;
+    }
+
+    if (acelNueva <= 0.0f || acceleration <= 0.0f)
+    {
+        return nRampa;
+    }
+
+    const float escalado = (float)nRampa * (acceleration / acelNueva);
+
+    return (long)(escalado * MARGEN_FRENADO) + FRENADO_EXTRA;
+}
+
+bool Stepper::puedeRedirigir(long position, float acel) const
+{
+    if (acel <= 0.0f || !rampEnabled || motionMode != POSITION)
+    {
+        return false;
+    }
+
+    if (cn <= 0)
+    {
+        return false;
+    }
+
+    const long delta = position - currentPosition;
+
+    if (delta == 0)
+    {
+        return false;
+    }
+
+    // Invertir el sentido con el rotor girando no lo puede seguir ningun
+    // paso a paso: eso hay que frenarlo antes, no encadenarlo.
+    if ((delta > 0) != direction)
+    {
+        return false;
+    }
+
+    // Si lo que queda no alcanza para frenar desde la velocidad actual, el
+    // eje llegaria al destino todavia andando y los pulsos se cortarian de
+    // golpe: pasos perdidos y un golpe seco.
+    return labs(delta) >= pasosDeFrenado(acel);
+}
+
+bool Stepper::redirigir(long position, float velMax, float acel)
+{
+    if (velMax <= 0.0f || !puedeRedirigir(position, acel))
+    {
+        return false;
+    }
+
+    const long dist = labs(position - currentPosition);
+    const long n0   = pasosDeFrenado(acel);
+
+    // Los dos numeros que dependen de la aceleracion nueva, calculados aca
+    // afuera: adentro de la seccion critica no va ni un sqrt.
+    const long nuevoCmin = (long)((1000000.0f / velMax) * (float)RAMP_SCALE);
+    const long nuevoC0   = (long)(0.676f * sqrtf(2.0f / acel) * 1000000.0f * RAMP_SCALE);
+
+    // Punto de frenado por la formula del perfil TRIANGULAR, siempre. El
+    // pico queda en n = (dist + n0) / 2, o sea que hay que acelerar
+    // (dist - n0) / 2 pasos y despues frenar.
+    //
+    // No se distingue el caso "llega a crucero" a proposito: distinguirlo
+    // obliga a saber en que paso de rampa cae el techo de velocidad, y ese
+    // numero es justamente el que la formula continua calcula mal. Si el eje
+    // igual llega al crucero, lo arregla sola la correccion de la meseta de
+    // computeNextInterval(), que da por sentado decelStart + accelSteps ==
+    // dist -- por eso accelSteps se fija como el complemento y no como el
+    // largo de la rampa.
+    long nuevoDecelStart = (dist - n0) / 2;
+
+    if (nuevoDecelStart < 0) nuevoDecelStart = 0;
+
+    const long nuevoAccelSteps = dist - nuevoDecelStart;
+
+    portENTER_CRITICAL(&mux);
+
+    // Entre el plan y esto la ISR pudo haber llegado al destino viejo. Ahi
+    // el eje esta parado y lo que corresponde es un moveTo, no revivir una
+    // rampa que ya no existe.
+    if (motionMode != POSITION)
+    {
+        portEXIT_CRITICAL(&mux);
+        return false;
+    }
+
+    maxSpeed     = velMax;
+    acceleration = acel;
+    cmin         = nuevoCmin;
+    c0           = nuevoC0;
+
+    targetPosition = position;
+
+    // cn NO se toca: es la velocidad instantanea, y conservarla es todo el
+    // punto de esta funcion.
+    n          = n0;
+    stepIndex  = 0;
+    accelSteps = nuevoAccelSteps;
+    decelStart = nuevoDecelStart;
+
+    portEXIT_CRITICAL(&mux);
+
+    return true;
+}
+
+long Stepper::pasosRestantes() const
+{
+    if (motionMode != POSITION)
+    {
+        return 0;
+    }
+
+    return labs(targetPosition - currentPosition);
+}
+
 void Stepper::stop()
 {
     portENTER_CRITICAL(&mux);

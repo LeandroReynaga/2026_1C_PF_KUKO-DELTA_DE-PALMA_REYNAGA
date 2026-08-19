@@ -93,4 +93,23 @@ void moveSynchronized(Stepper &m1, Stepper &m2, Stepper &m3,
                        long target1, long target2, long target3,
                        const MotionLimits &limits = DEFAULT_LIMITS);
 
+/**
+ * Igual que moveSynchronized, pero SIN frenar: cambia el destino de los tres
+ * ejes conservando la velocidad que traen (ver Stepper::redirigir).
+ *
+ * Es lo que permite pasar de un tramo al siguiente sin detenerse en el punto
+ * intermedio -- el brazo redondea la esquina en vez de clavarse y arrancar.
+ *
+ * Los tres o ninguno: primero se pregunta si los tres pueden, y recien
+ * despues se aplica. Redirigir dos y dejar el tercero yendo al punto viejo
+ * partiria el movimiento en dos direcciones distintas.
+ *
+ * Devuelve false si alguno no puede (cambio de sentido, o lo que le queda no
+ * alcanza para frenar desde la velocidad que trae). Ahi quien llama tiene
+ * que hacer lo de siempre: esperar a que lleguen y despues moveSynchronized.
+ */
+bool redirigirSincronizado(Stepper &m1, Stepper &m2, Stepper &m3,
+                            long target1, long target2, long target3,
+                            const MotionLimits &limits = DEFAULT_LIMITS);
+
 }

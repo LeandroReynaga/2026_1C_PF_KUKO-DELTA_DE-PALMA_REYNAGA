@@ -20,8 +20,10 @@ from fastapi import Response
 from fastapi.responses import StreamingResponse
 from nicegui import app, ui
 
+from . import cinematica as cin
 from . import parametros as par
 from . import protocolo as pr
+from . import teach as tch
 from .estado import AMBAR, GRIS, ROJO, VERDE, EstadoSistema
 
 FONDO = "#14171C"
@@ -47,6 +49,24 @@ PASO_RECORTE = 4
 ZOOM = 1.1
 
 DIAL_MIN, DIAL_MAX = -70.0, 30.0
+
+# Cada cuanto corre el lazo del modo teach: manda la direccion del jog y, si
+# se esta grabando, toma una muestra. 20 Hz es lo mismo a lo que el firmware
+# vuelca la posicion comandada, asi que no se pierde ni se repite ninguna.
+PERIODO_TEACH_S = 0.05
+
+# Cada cuanto se refresca la direccion del jog aunque no haya cambiado. Tiene
+# que ser bastante mas rapido que la vigencia que le da el firmware (350 ms),
+# porque esa vigencia es lo que frena el brazo si la interfaz se muere.
+REFRESCO_JOG_S = 0.10
+
+# Resolucion con la que se pinta la zona alcanzable del plano XY. La cuenta
+# es una cinematica inversa por celda, asi que se guarda en cache por altura
+# redondeada: con el jog subiendo y bajando, recalcularla en cada refresco
+# seria el unico gasto serio de CPU de toda la interfaz.
+COLUMNAS_ALCANCE = 33
+FILAS_ALCANCE = 48
+PASO_CACHE_Z = 0.25
 
 
 def _svg_dial(indice: int, comandado: Optional[float], medido: Optional[float]) -> str:
@@ -202,6 +222,41 @@ class Interfaz:
         self._dialogo_caja = None
         self._repeticion = None
 
+        # ---------------- Modo teach ----------------
+        # Las secuencias viven en disco (pc/config/movimientos.json): son el
+        # producto de una sesion de ensenanza y tienen que sobrevivir a que
+        # se cierre el programa.
+        self.biblioteca = tch.Biblioteca()
+
+        # Que pestana se esta mirando. El teclado del jog es global -- no hay
+        # forma de escuchar teclas "solo dentro de un panel" -- asi que la
+        # pestana activa es lo que decide si una W mueve el brazo o no.
+        self.tab_activa = "Operacion"
+
+        self.teach_teclas: set[str] = set()
+        self.joy_x = 0.0
+        self.joy_y = 0.0
+        self.joy_tomado = False
+
+        self.jog_ultimo = (0.0, 0.0, 0.0)
+        self.jog_enviado_s = 0.0
+        self._volcado_on = False
+
+        self.teach_grabando = False
+        self.teach_muestras: list[tch.Muestra] = []
+        self.teach_t0 = 0.0
+
+        self.teach_sel: Optional[int] = None
+        self.teach_mov_en_curso: Optional[tch.Movimiento] = None
+        self.teach_pct_en_curso = 0
+
+        self._teach_evento_visto = 0
+        self._cola_subida: list = []
+        self._timer_subida = None
+        self._filas_teach: list[dict] = []
+        self._cache_alcance: tuple = (None, [])
+        self._dialogo_teach = None
+
         # Ajustes: los controles se arman con lo que contesta 'P?', asi que
         # no existen hasta que llega. `_firma` guarda que parametros habia la
         # ultima vez para rearmar la lista SOLO cuando cambia el conjunto --
@@ -285,6 +340,7 @@ class Interfaz:
 
             with ui.tabs().props("dense indicator-color=cyan-4") as tabs:
                 self.tab_operacion = ui.tab("Operacion")
+                self.tab_teach = ui.tab("Teach")
                 self.tab_proceso = ui.tab("Proceso")
                 self.tab_servicio = ui.tab("Servicio")
 
@@ -296,14 +352,26 @@ class Interfaz:
             with ui.tab_panel(self.tab_operacion).classes("p-0").style("height:100%"):
                 self._operacion()
 
+            with ui.tab_panel(self.tab_teach).classes("p-0").style("height:100%"):
+                self._teach()
+
             with ui.tab_panel(self.tab_proceso).classes("p-0").style("height:100%"):
                 self._ajustes(pr.NIVEL_PROCESO, self._panel_en_vivo)
 
             with ui.tab_panel(self.tab_servicio).classes("p-0").style("height:100%"):
                 self._ajustes(pr.NIVEL_SERVICIO, self._panel_servicio)
 
+        tabs.on_value_change(self._cambio_pestana)
+
+        # El teclado se escucha a nivel pagina: no existe "escuchar solo
+        # dentro de este panel". Los campos de texto quedan afuera (ignore),
+        # asi que renombrar un movimiento no mueve el brazo.
+        ui.keyboard(on_key=self._teach_tecla,
+                    ignore=["input", "select", "button", "textarea"])
+
         ui.timer(0.1, self._refrescar_rapido)
         ui.timer(0.5, self._refrescar_lento)
+        ui.timer(PERIODO_TEACH_S, self._teach_tick)
 
     # ------------------------------------------------------------------
     def _operacion(self) -> None:
@@ -1137,6 +1205,12 @@ class Interfaz:
         self.html_finales.content = _svg_finales(est.t.finales if est.t and vivo else [])
         self.html_ventosa.content = _svg_ventosa(bool(est.t and vivo and est.t.bomba))
 
+        # El plano de teach se redibuja aca y no en el refresco lento: la
+        # gracia de un grafico en vivo es que la mano y el punto de la
+        # pantalla se muevan juntos, y a 2 Hz el punto va siempre medio
+        # segundo atrasado.
+        self._refrescar_teach()
+
     def _refrescar_lento(self) -> None:
         est = self.estado
         vivo = est.enlace_vivo()
@@ -1344,6 +1418,1120 @@ class Interfaz:
 
         self.etiqueta_latencia.text = (
             f"{param.valor * 1000:.0f} ms · {param.valor * velocidad:+.2f} cm")
+
+    # ==================================================================
+    #  MODO TEACH
+    # ==================================================================
+    #
+    #  Reparto de trabajo con el firmware (ver pc/PROTOCOLO.md §6):
+    #
+    #    ESP32    recorta al volumen de trabajo, resuelve la cinemática,
+    #             mueve y encadena los puntos de una ruta ya cargada.
+    #    acá      dibuja, graba, guarda las secuencias con nombre y lleva la
+    #             cuenta de a qué porcentaje se verificó cada una.
+    #
+    #  Lo que se manda para joguear es una DIRECCIÓN, no un destino, y esa
+    #  dirección vence sola en el firmware. Es la diferencia entre que el
+    #  brazo se pare cuando se cierra el navegador y que siga viaje.
+
+    def _teach(self) -> None:
+        with ui.row().classes("w-full gap-2 p-2 no-wrap").style("height:100%"):
+            # ================= Volumen de trabajo =================
+            # 'items-stretch' no es decorativo: la columna de NiceGUI alinea
+            # sus hijos al principio, asi que sin esto el panel se encoge al
+            # ancho de su contenido y deja media pantalla vacia al lado.
+            with ui.column().classes("gap-2 no-wrap items-stretch") \
+                    .style("flex:1 1 0;height:100%;min-height:0"):
+                with ui.column().classes("panel p-2 gap-1 no-wrap") \
+                        .style("flex:1 1 0;min-height:0"):
+                    ui.label("Volumen de trabajo").classes("titulo")
+                    self.html_plano = ui.html().style(
+                        "flex:1 1 0;min-height:0;width:100%")
+
+                with ui.row().classes("panel px-3 py-2 gap-2").style("flex:0 0 auto"):
+                    self.html_teach_pos = ui.html().classes("w-full")
+
+            # ================= Controles =================
+            with ui.column().classes("gap-2 no-wrap") \
+                    .style("flex:0 0 360px;height:100%;min-height:0;align-items:stretch"):
+                # --- modo ---
+                with ui.column().classes("panel p-3 gap-2").style("flex:0 0 auto"):
+                    with ui.row().classes("w-full items-center no-wrap gap-2"):
+                        ui.label("Modo Teach").classes("titulo").style("flex:1 1 0")
+                        self.chip_teach = ui.html()
+
+                    self.boton_teach = ui.button("Entrar a Teach",
+                                                 on_click=self._teach_alternar) \
+                        .props("unelevated dense no-caps").classes("w-full")
+
+                    ui.label("Se entra desde home y con las manos vacías: si hay "
+                             "una pieza en vuelo, el robot la termina primero. "
+                             "Mientras dure, la cinta queda parada y las piezas "
+                             "que informe la visión se ignoran.") \
+                        .style(f"color:{APAGADO};font-size:11.5px;line-height:1.35")
+
+                # --- jog ---
+                with ui.column().classes("panel p-3 gap-2").style("flex:0 0 auto"):
+                    ui.label("Jog manual").classes("titulo")
+
+                    with ui.row().classes("w-full gap-3 no-wrap items-center"):
+                        self.zona_joystick = ui.element("div").style(
+                            "flex:0 0 150px;height:150px;position:relative;"
+                            "cursor:crosshair;touch-action:none;user-select:none")
+
+                        with self.zona_joystick:
+                            self.html_joystick = ui.html().style(
+                                "width:100%;height:100%;pointer-events:none")
+
+                        self.zona_joystick.on("mousedown", self._joy_apretar,
+                                              ["offsetX", "offsetY"])
+                        self.zona_joystick.on("mousemove", self._joy_mover,
+                                              ["offsetX", "offsetY", "buttons"],
+                                              throttle=PERIODO_TEACH_S)
+                        self.zona_joystick.on("mouseup", self._joy_soltar)
+                        self.zona_joystick.on("mouseleave", self._joy_soltar)
+
+                        with ui.column().classes("gap-2 no-wrap").style("flex:1 1 0"):
+                            self.boton_z_sube = self._boton_pulsado(
+                                "keyboard_arrow_up", "Subir  ↑", "arriba")
+                            self.boton_z_baja = self._boton_pulsado(
+                                "keyboard_arrow_down", "Bajar  ↓", "abajo")
+                            self.boton_bomba = ui.button(
+                                "Vacío  ·  E", on_click=self._teach_bomba) \
+                                .props("unelevated dense no-caps").classes("w-full")
+
+                    ui.label("Arrastrá el joystick con el mouse o usá W A S D "
+                             "en el plano, ↑ ↓ para la altura y E para el vacío. "
+                             "La velocidad y la aceleración van al 15 %.") \
+                        .style(f"color:{APAGADO};font-size:11.5px;line-height:1.35")
+
+                # --- grabacion ---
+                with ui.column().classes("panel p-3 gap-2") \
+                        .style("flex:1 1 0;min-height:0"):
+                    with ui.row().classes("w-full items-center no-wrap gap-2"):
+                        ui.label("Movimientos").classes("titulo").style("flex:1 1 0")
+                        self.etiqueta_grabacion = ui.label("").style(
+                            f"color:{APAGADO};font-size:12px")
+
+                    with ui.row().classes("w-full gap-2 no-wrap"):
+                        self.boton_grabar = ui.button(
+                            "Grabar  ·  R", on_click=self._teach_grabar) \
+                            .props("unelevated dense no-caps").style("flex:1 1 0")
+                        self.boton_reproducir = ui.button(
+                            "Reproducir  ·  P", on_click=self._teach_reproducir) \
+                            .props("unelevated dense no-caps").style("flex:1 1 0")
+
+                    self.lista_teach = ui.column().classes("w-full gap-0") \
+                        .style("flex:1 1 0;min-height:0;overflow-y:auto")
+
+        self._teach_rearmar_lista()
+
+    def _boton_pulsado(self, icono: str, texto: str, tecla: str):
+        """Botón que jogea MIENTRAS se lo mantiene apretado.
+
+        No es un click: soltar tiene que frenar el brazo, igual que soltar la
+        flecha del teclado. `mouseleave` está a propósito -- si el mouse se
+        va del botón con el dedo apretado, el navegador nunca manda el
+        `mouseup` y el eje se quedaría subiendo solo.
+        """
+
+        boton = ui.button(texto, icon=icono) \
+            .props("unelevated dense no-caps").classes("w-full")
+
+        boton.on("mousedown", lambda _, k=tecla: self.teach_teclas.add(k))
+        boton.on("mouseup", lambda _, k=tecla: self.teach_teclas.discard(k))
+        boton.on("mouseleave", lambda _, k=tecla: self.teach_teclas.discard(k))
+
+        return boton
+
+    # ------------------------------------------------------------------
+    #  Volumen de trabajo
+    # ------------------------------------------------------------------
+    def _teach_limites(self) -> tuple:
+        """(xmin,xmax), (ymin,ymax), (zmin,zmax) del volumen del jog.
+
+        Primero lo que contestó `J?`, que ya trae el piso en Z resuelto; si
+        todavía no llegó, se arma con la tabla de parámetros. Los números
+        escritos acá son el último recurso y NO son la fuente de verdad:
+        están para que la pantalla dibuje algo coherente antes de que
+        conteste el robot, no para decidir hasta dónde se mueve.
+        """
+
+        t = self.estado.teach
+
+        if t and t.limite_x and t.limite_y and t.limite_z:
+            return t.limite_x, t.limite_y, t.limite_z
+
+        p = self.estado.parametros
+
+        def val(nombre: str, defecto: float) -> float:
+            q = p.get(nombre)
+            return q.valor if q and q.valor is not None else defecto
+
+        zmin = val("grab_z", -32.6)
+
+        return ((val("t_xmin", -12.0), val("t_xmax", 12.0)),
+                (val("t_ymin", -9.55), val("t_ymax", 11.05)),
+                (zmin, zmin + val("t_zup", 6.0)))
+
+    def _en_teach(self) -> bool:
+        e = self.estado.e
+        return bool(e and e.estado is pr.EstadoRobot.TEACH and self.estado.enlace_vivo())
+
+    def _reproduciendo(self) -> bool:
+        e = self.estado.e
+        return bool(e and e.teach_indice)
+
+    # ------------------------------------------------------------------
+    #  Entradas del operador
+    # ------------------------------------------------------------------
+    def _cambio_pestana(self, evento) -> None:
+        self.tab_activa = str(evento.value)
+
+        # Cambiar de pestaña con una tecla apretada dejaría el brazo yendo:
+        # el timer manda el vector nulo en cuanto la pestaña deja de ser la
+        # de teach, pero el estado local se limpia acá igual.
+        self.teach_teclas.clear()
+        self.joy_x = self.joy_y = 0.0
+        self.joy_tomado = False
+
+        if self.tab_activa == "Teach":
+            self.enviar(pr.cmd_teach_estado())
+
+    def _teach_tecla(self, evento) -> None:
+        if self.tab_activa != "Teach":
+            return
+
+        codigo = evento.key.code
+
+        movimiento = {"KeyW": "arriba_y", "KeyS": "abajo_y",
+                      "KeyA": "izq", "KeyD": "der",
+                      "ArrowUp": "arriba", "ArrowDown": "abajo"}
+
+        if codigo in movimiento:
+            if evento.action.keydown:
+                self.teach_teclas.add(movimiento[codigo])
+            elif evento.action.keyup:
+                self.teach_teclas.discard(movimiento[codigo])
+            return
+
+        # Las que alternan algo se atienden una sola vez: `repeat` es el
+        # autorepeat del sistema operativo y prendería y apagaría la bomba
+        # treinta veces por segundo con la tecla apretada.
+        if not evento.action.keydown or evento.action.repeat:
+            return
+
+        if codigo == "KeyE":
+            self._teach_bomba()
+        elif codigo == "KeyR":
+            self._teach_grabar()
+        elif codigo == "KeyP":
+            self._teach_reproducir()
+
+    def _joy_apretar(self, evento) -> None:
+        self.joy_tomado = True
+        self._joy_desde_pixeles(evento)
+
+    def _joy_mover(self, evento) -> None:
+        # `buttons` es el bitmap de botones apretados AHORA. Sin mirarlo, el
+        # joystick seguiría a un mouse que ya se soltó.
+        if not self.joy_tomado or not evento.args.get("buttons"):
+            self._joy_soltar()
+            return
+
+        self._joy_desde_pixeles(evento)
+
+    def _joy_soltar(self, evento=None) -> None:
+        self.joy_tomado = False
+        self.joy_x = 0.0
+        self.joy_y = 0.0
+
+    def _joy_desde_pixeles(self, evento) -> None:
+        lado = 150.0
+        radio = lado / 2.0
+
+        dx = (float(evento.args.get("offsetX", radio)) - radio) / radio
+        dy = (radio - float(evento.args.get("offsetY", radio))) / radio
+
+        largo = math.hypot(dx, dy)
+
+        # Fuera del círculo se satura en el borde en vez de crecer: el
+        # cuadrado del div tiene esquinas, y el brazo no tiene por qué ir más
+        # rápido en diagonal que de frente.
+        if largo > 1.0:
+            dx, dy = dx / largo, dy / largo
+
+        # Zona muerta: sin esto, el temblor de la mano manda un jog de 0,02
+        # que igual dispara tramos y hace vibrar el brazo.
+        if math.hypot(dx, dy) < 0.12:
+            dx = dy = 0.0
+
+        self.joy_x, self.joy_y = dx, dy
+
+    # ------------------------------------------------------------------
+    #  Lazo del jog
+    # ------------------------------------------------------------------
+    def _teach_tick(self) -> None:
+        est = self.estado
+        activo = (self.tab_activa == "Teach") and self._en_teach()
+
+        # El volcado de la posición comandada se enciende sólo mientras hace
+        # falta: son 760 B/s del enlace, y con la pantalla en otra pestaña no
+        # los mira nadie.
+        if activo != self._volcado_on:
+            self._volcado_on = activo
+            self.enviar(pr.cmd_teach_volcado(activo))
+
+        self._teach_eventos()
+
+        if not activo or self._reproduciendo():
+            self.teach_teclas.clear()
+            self.joy_x = self.joy_y = 0.0
+            self._jog_enviar(0.0, 0.0, 0.0)
+            return
+
+        teclas = self.teach_teclas
+
+        vx = self.joy_x + ("der" in teclas) - ("izq" in teclas)
+        vy = self.joy_y + ("arriba_y" in teclas) - ("abajo_y" in teclas)
+        vz = ("arriba" in teclas) - ("abajo" in teclas)
+
+        largo = math.hypot(vx, vy)
+
+        if largo > 1.0:
+            vx, vy = vx / largo, vy / largo
+
+        self._jog_enviar(vx, vy, float(vz))
+
+        if self.teach_grabando and est.teach_pos is not None:
+            x, y, z = est.teach_pos
+
+            # Tope de seguridad: 20 Hz por 20 minutos son 24.000 muestras, y
+            # a esa altura ya no es un movimiento enseñado sino un olvido.
+            if len(self.teach_muestras) < 24000:
+                self.teach_muestras.append(
+                    tch.Muestra(time.monotonic() - self.teach_t0,
+                                x, y, z, bool(est.teach_bomba)))
+
+    def _jog_enviar(self, vx: float, vy: float, vz: float) -> None:
+        """Manda la dirección, con el mínimo de líneas posible.
+
+        Un vector que no cambió igual se reenvía cada REFRESCO_JOG_S: en el
+        firmware la dirección vence, y dejar de refrescarla es justamente
+        cómo se frena el brazo si esta interfaz se muere.
+        """
+
+        v = (round(vx, 2), round(vy, 2), round(vz, 2))
+        quieto = (v == (0.0, 0.0, 0.0))
+        ahora = time.monotonic()
+
+        if v == self.jog_ultimo:
+            if quieto or (ahora - self.jog_enviado_s) < REFRESCO_JOG_S:
+                return
+
+        self.jog_ultimo = v
+        self.jog_enviado_s = ahora
+        self.enviar(pr.cmd_teach_jog(*v))
+
+    def _sin_foco(self) -> None:
+        """Le saca el foco al botón que se acaba de apretar.
+
+        Si no, la barra espaciadora vuelve a activarlo en vez de subir el
+        brazo: el navegador activa con Espacio el elemento enfocado, y eso
+        pasa por encima de cualquier atajo de teclado.
+        """
+
+        ui.run_javascript("document.activeElement && document.activeElement.blur()")
+
+    def _teach_alternar(self) -> None:
+        self._sin_foco()
+
+        if self._en_teach():
+            self.enviar(pr.cmd_teach(False))
+            return
+
+        e = self.estado.e
+
+        if e and e.homed is False:
+            ui.notify("El robot no está calibrado: hay que hacer el homing antes",
+                      color="negative")
+            return
+
+        if e and e.estado is pr.EstadoRobot.ERROR:
+            ui.notify("Desde ERROR hay que rehomear antes de mover el brazo a mano",
+                      color="negative")
+            return
+
+        self.enviar(pr.cmd_teach(True))
+        ui.notify("Entrando a Teach: el robot termina lo que tenga y vuelve a home",
+                  color="info")
+
+    def _teach_bomba(self) -> None:
+        self._sin_foco()
+
+        if not self._en_teach():
+            return
+
+        t = self.estado.t
+        self.enviar(pr.cmd_teach_bomba(not bool(t and t.bomba)))
+
+    # ------------------------------------------------------------------
+    #  Grabación
+    # ------------------------------------------------------------------
+    def _teach_grabar(self) -> None:
+        self._sin_foco()
+
+        if not self.teach_grabando:
+            if not self._en_teach():
+                ui.notify("Primero hay que entrar al modo Teach", color="warning")
+                return
+
+            self.teach_muestras = []
+            self.teach_t0 = time.monotonic()
+            self.teach_grabando = True
+
+            ui.notify("Grabando. Mové el brazo; R de nuevo para terminar.",
+                      color="info")
+            return
+
+        self.teach_grabando = False
+
+        puntos = tch.simplificar(self.teach_muestras)
+        duracion = self.teach_muestras[-1].t if self.teach_muestras else 0.0
+
+        if len(puntos) < 2:
+            ui.notify("No se movió nada: no hay movimiento que guardar",
+                      color="warning")
+            return
+
+        movimiento = self.biblioteca.agregar(tch.Movimiento(
+            nombre=self.biblioteca.nombre_libre(),
+            puntos=puntos,
+            verificado=tch.SIN_VERIFICAR,
+            creado=tch.ahora_texto(),
+            duracion_s=duracion))
+
+        self.teach_sel = len(self.biblioteca.movimientos) - 1
+        self._teach_rearmar_lista()
+
+        ui.notify(f"Guardado «{movimiento.nombre}»: {len(puntos)} puntos, "
+                  f"{duracion:.1f} s de grabación", color="positive")
+
+    # ------------------------------------------------------------------
+    #  Reproducción por etapas
+    # ------------------------------------------------------------------
+    def _teach_reproducir(self) -> None:
+        self._sin_foco()
+
+        movimiento = self.biblioteca.obtener(self.teach_sel) \
+            if self.teach_sel is not None else None
+
+        if movimiento is None:
+            ui.notify("Elegí un movimiento de la lista", color="warning")
+            return
+
+        if not self._en_teach():
+            ui.notify("Primero hay que entrar al modo Teach", color="warning")
+            return
+
+        if self.teach_grabando or self._reproduciendo():
+            return
+
+        self._teach_lanzar(movimiento, movimiento.siguiente_escalon)
+
+    def _teach_lanzar(self, movimiento, pct: int) -> None:
+        """Sube la ruta al firmware y la arranca al `pct` % de vel y acel.
+
+        La subida va de a poco y no de un saque: son hasta 150 líneas, y
+        escribirlas todas juntas dejaría la interfaz congelada casi un
+        segundo mientras el puerto las traga.
+        """
+
+        if not self.enviar(pr.cmd_teach_limpiar()):
+            ui.notify("sin enlace con el robot", color="negative")
+            return
+
+        self.teach_mov_en_curso = movimiento
+        self.teach_pct_en_curso = int(pct)
+        self._cola_subida = list(movimiento.puntos)
+
+        if self._timer_subida is not None:
+            self._timer_subida.cancel()
+
+        self._timer_subida = ui.timer(0.04, self._teach_subir_trozo)
+
+    def _teach_subir_trozo(self) -> None:
+        for _ in range(10):
+            if not self._cola_subida:
+                if self._timer_subida is not None:
+                    self._timer_subida.cancel()
+                    self._timer_subida = None
+
+                self.enviar(pr.cmd_teach_reproducir(self.teach_pct_en_curso))
+                return
+
+            p = self._cola_subida.pop(0)
+
+            if not self.enviar(pr.cmd_teach_punto(p.x, p.y, p.z, p.bomba, p.espera_ms)):
+                self._cola_subida.clear()
+                self.teach_mov_en_curso = None
+
+                if self._timer_subida is not None:
+                    self._timer_subida.cancel()
+                    self._timer_subida = None
+
+                ui.notify("se cortó el enlace durante la carga", color="negative")
+                return
+
+    def _teach_eventos(self) -> None:
+        """Consume los eventos `[TEACH]` que todavía no se atendieron."""
+
+        est = self.estado
+
+        if est.teach_evento_n == self._teach_evento_visto:
+            return
+
+        self._teach_evento_visto = est.teach_evento_n
+        evento = est.teach_evento
+
+        if evento is None:
+            return
+
+        if evento.evento == "fin":
+            self._teach_preguntar()
+
+        elif evento.evento == "abort":
+            self.teach_mov_en_curso = None
+            ui.notify(f"Reproducción cortada ({evento.motivo or 'sin motivo'})",
+                      color="negative")
+
+        elif evento.evento == "err":
+            self.teach_mov_en_curso = None
+            ui.notify(f"Teach: {evento.error}", color="negative")
+
+    def _teach_preguntar(self) -> None:
+        """El cartel de "¿salió bien?" que separa una etapa de la siguiente.
+
+        Es lo único que sube el movimiento de escalón. La primera pasada va a
+        la misma velocidad a la que se lo enseñó (15 %) y recién con una
+        confirmación pasa al 50 %, y con otra al 100 %. Un movimiento recién
+        grabado nunca se estrena a fondo: la trayectoria puede pasar cerca de
+        algo que a paso de hombre no roza y a toda velocidad sí.
+        """
+
+        movimiento = self.teach_mov_en_curso
+        pct = self.teach_pct_en_curso
+
+        self.teach_mov_en_curso = None
+
+        if movimiento is None:
+            return
+
+        if self._dialogo_teach is not None:
+            self._dialogo_teach.delete()
+            self._dialogo_teach = None
+
+        ultimo = pct >= 100
+        siguiente = tch._SIGUIENTE.get(pct, 100)
+
+        with ui.dialog() as dialogo, ui.card().style(f"background:{PANEL};color:{TEXTO}"):
+            ui.label(f"¿Salió bien al {pct} %?").classes("text-lg")
+            ui.label(f"«{movimiento.nombre}» terminó de reproducirse al {pct} % "
+                     "de la velocidad y la aceleración máximas."
+                     + ("" if ultimo else
+                        f" Si estuvo limpio, la próxima pasada va al {siguiente} %.")) \
+                .style(f"color:{APAGADO};max-width:420px")
+
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("No", on_click=lambda: self._teach_rechazar(dialogo)) \
+                    .props("flat dense no-caps")
+
+                ui.button("Sí, quedó verificado" if ultimo
+                          else f"Sí — probar al {siguiente} %",
+                          on_click=lambda m=movimiento, p=pct:
+                              self._teach_aprobar(dialogo, m, p)) \
+                    .props("dense unelevated no-caps") \
+                    .style(f"background:{CELESTE}!important;color:#0B1220!important")
+
+        self._dialogo_teach = dialogo
+        dialogo.open()
+
+    def _teach_aprobar(self, dialogo, movimiento, pct: int) -> None:
+        movimiento.aprobar(pct)
+        self.biblioteca.guardar()
+        self._teach_rearmar_lista()
+
+        dialogo.close()
+
+        if pct >= 100:
+            ui.notify(f"«{movimiento.nombre}» verificado al 100 %", color="positive")
+            return
+
+        # Se encadena sola: el operador ya dijo que la pasada anterior estuvo
+        # bien, y hacerle buscar otra vez el botón entre etapa y etapa es la
+        # forma más fácil de que termine salteándose la verificación.
+        self._teach_lanzar(movimiento, movimiento.siguiente_escalon)
+
+    def _teach_rechazar(self, dialogo) -> None:
+        dialogo.close()
+        ui.notify("Se deja como estaba: la próxima vuelve a arrancar por el "
+                  "escalón que faltaba", color="warning")
+
+    # ------------------------------------------------------------------
+    #  Lista de movimientos
+    # ------------------------------------------------------------------
+    def _teach_rearmar_lista(self) -> None:
+        """Rehace la lista entera. Se llama sólo cuando cambia el conjunto.
+
+        Rearmarla en cada refresco le sacaría el foco al campo del nombre a
+        mitad de escribirlo, que es el mismo motivo por el que la lista de
+        parámetros tampoco se rearma sola.
+        """
+
+        if not hasattr(self, "lista_teach"):
+            return
+
+        self.lista_teach.clear()
+        self._filas_teach = []
+
+        if not self.biblioteca.movimientos:
+            with self.lista_teach:
+                ui.label("Todavía no hay movimientos grabados. Entrá a Teach, "
+                         "apretá R, mové el brazo y volvé a apretar R.") \
+                    .style(f"color:{APAGADO};font-size:12px;padding:10px 4px;"
+                           "white-space:normal")
+            return
+
+        for i, movimiento in enumerate(self.biblioteca.movimientos):
+            with self.lista_teach:
+                fila = ui.row().classes("w-full items-center no-wrap gap-2") \
+                    .style(f"padding:6px 4px;border-bottom:1px solid {BORDE};"
+                           "cursor:pointer")
+
+                with fila:
+                    fila.on("click", lambda _, k=i: self._teach_elegir(k))
+
+                    marca = ui.html().style("flex:0 0 10px")
+
+                    with ui.column().classes("gap-0").style("flex:1 1 0;min-width:0"):
+                        campo = ui.input(value=movimiento.nombre) \
+                            .props("dense borderless").classes("w-full") \
+                            .style(f"color:{TEXTO};font-size:13px")
+                        campo.on("blur", lambda _, k=i: self._teach_renombrar(k))
+                        campo.on("keydown.enter", lambda _, k=i: self._teach_renombrar(k))
+
+                        info = ui.label("").style(
+                            f"color:{APAGADO};font-size:11px")
+
+                    insignia = ui.html().style("flex:0 0 auto")
+
+                    ui.button(icon="play_arrow",
+                              on_click=lambda _, k=i: self._teach_elegir(k, True)) \
+                        .props("flat dense round size=sm").style(f"color:{CELESTE}")
+
+                    ui.button(icon="delete_outline",
+                              on_click=lambda _, k=i: self._teach_borrar(k)) \
+                        .props("flat dense round size=sm").style(f"color:{APAGADO}")
+
+            self._filas_teach.append({"fila": fila, "marca": marca,
+                                      "campo": campo, "info": info,
+                                      "insignia": insignia})
+
+        self._teach_pintar_lista()
+
+    def _teach_pintar_lista(self) -> None:
+        colores = {0: ROJO, 15: AMBAR, 50: AMBAR, 100: VERDE}
+
+        for i, fila in enumerate(self._filas_teach):
+            movimiento = self.biblioteca.obtener(i)
+
+            if movimiento is None:
+                continue
+
+            elegido = (i == self.teach_sel)
+
+            fila["fila"].style(
+                f"padding:6px 4px;border-bottom:1px solid {BORDE};cursor:pointer;"
+                f"background:{INACTIVO if elegido else 'transparent'}")
+
+            fila["marca"].content = (
+                '<span style="display:inline-block;width:4px;height:26px;'
+                f'border-radius:2px;background:{CELESTE if elegido else "transparent"}">'
+                '</span>')
+
+            fila["info"].text = (f"{len(movimiento.puntos)} puntos · "
+                                 f"{movimiento.duracion_s:.1f} s · {movimiento.creado}")
+
+            color = COLOR_ESTADO[colores.get(movimiento.verificado, ROJO)]
+            texto = ("sin verificar" if movimiento.verificado == 0
+                     else f"{movimiento.verificado} %")
+
+            fila["insignia"].content = (
+                f'<span style="border:1px solid {color};color:{color};'
+                'font-size:10.5px;border-radius:9px;padding:1px 7px;'
+                f'white-space:nowrap">{texto}</span>')
+
+    def _teach_elegir(self, indice: int, reproducir: bool = False) -> None:
+        self.teach_sel = indice
+        self._teach_pintar_lista()
+
+        if reproducir:
+            self._teach_reproducir()
+
+    def _teach_renombrar(self, indice: int) -> None:
+        fila = self._filas_teach[indice] if indice < len(self._filas_teach) else None
+
+        if fila is None:
+            return
+
+        self.biblioteca.renombrar(indice, str(fila["campo"].value or ""))
+
+        movimiento = self.biblioteca.obtener(indice)
+
+        if movimiento is not None:
+            fila["campo"].value = movimiento.nombre
+
+    def _teach_borrar(self, indice: int) -> None:
+        movimiento = self.biblioteca.obtener(indice)
+
+        if movimiento is None:
+            return
+
+        with ui.dialog() as dialogo, ui.card().style(f"background:{PANEL};color:{TEXTO}"):
+            ui.label(f"Borrar «{movimiento.nombre}»").classes("text-lg")
+            ui.label("No se puede deshacer: la secuencia se borra del archivo.") \
+                .style(f"color:{APAGADO};max-width:360px")
+
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Cancelar", on_click=dialogo.close).props("flat dense no-caps")
+                ui.button("Borrar",
+                          on_click=lambda: self._teach_borrar_ya(dialogo, indice)) \
+                    .props("dense unelevated no-caps") \
+                    .style(f"background:{ROJO_STOP}!important;color:#fff!important")
+
+        dialogo.open()
+
+    def _teach_borrar_ya(self, dialogo, indice: int) -> None:
+        self.biblioteca.borrar(indice)
+
+        if self.teach_sel is not None:
+            if self.teach_sel == indice:
+                self.teach_sel = None
+            elif self.teach_sel > indice:
+                self.teach_sel -= 1
+
+        dialogo.close()
+        self._teach_rearmar_lista()
+
+    # ------------------------------------------------------------------
+    #  Dibujo
+    # ------------------------------------------------------------------
+    def _zona_alcanzable(self, z: float, limites) -> list:
+        """Franjas verticales de la zona a la que el brazo llega a esa altura.
+
+        El volumen del jog es un cajón y el alcance real de un delta no lo es:
+        las esquinas quedan afuera. Pintarlo evita el desconcierto de ver el
+        brazo dejar de avanzar sin que nada avise.
+
+        Se resuelve una cinemática inversa por celda, así que el resultado se
+        guarda en caché por altura redondeada -- si no, subir y bajar con el
+        jog recalcularía la grilla entera diez veces por segundo.
+        """
+
+        clave = (round(z / PASO_CACHE_Z), limites)
+
+        if self._cache_alcance[0] == clave:
+            return self._cache_alcance[1]
+
+        (xmin, xmax), (ymin, ymax) = limites[0], limites[1]
+
+        partes = []
+        ancho = (xmax - xmin) / COLUMNAS_ALCANCE
+
+        for i in range(COLUMNAS_ALCANCE):
+            x = xmin + ancho * (i + 0.5)
+            alcanza = [ymin + (ymax - ymin) * j / (FILAS_ALCANCE - 1)
+                       for j in range(FILAS_ALCANCE)
+                       if cin.alcanzable(x, ymin + (ymax - ymin) * j / (FILAS_ALCANCE - 1), z)]
+
+            if alcanza:
+                partes.append((x - ancho / 2.0, x + ancho / 2.0,
+                               min(alcanza), max(alcanza)))
+
+        self._cache_alcance = (clave, partes)
+
+        return partes
+
+    def _svg_plano(self) -> str:
+        """El volumen de trabajo en isométrica, con el gripper adentro.
+
+        Un cubo dibujado con tres ejes a 30°: X baja hacia la derecha, Y se
+        aleja hacia arriba-derecha (la cinta queda al fondo) y Z es vertical.
+        Es la misma vista de un plano en perspectiva de taller, y se lee de
+        un vistazo — que era lo que no pasaba con un plano XY y una barra de
+        altura por separado.
+
+        La profundidad de una isométrica es ambigua a propósito (un punto
+        alto y cerca se dibuja igual que uno bajo y lejos), así que la altura
+        NO se deja librada al dibujo: el gripper lleva una vertical hasta el
+        piso y una sombra ahí abajo, y el número sigue estando escrito.
+        """
+
+        est = self.estado
+        limites = self._teach_limites()
+        (xmin, xmax), (ymin, ymax), (zmin, zmax) = limites
+
+        ancho, alto = 640.0, 470.0
+
+        cos30 = 0.8660254
+        sin30 = 0.5
+
+        # --- proyección ---
+        # u = X (a la derecha), v = cuánto se ACERCA al operador, w = altura.
+        # Con v así, la cinta (Y grande) queda al fondo de la escena, que es
+        # como la ve el operador parado delante del robot.
+        def iso(x: float, y: float, z: float) -> tuple[float, float]:
+            u = x - xmin
+            v = ymax - y
+            w = z - zmin
+
+            return ((u - v) * cos30, (u + v) * sin30 - w)
+
+        esquinas = [iso(x, y, z)
+                    for x in (xmin, xmax) for y in (ymin, ymax) for z in (zmin, zmax)]
+
+        sx0 = min(p[0] for p in esquinas)
+        sx1 = max(p[0] for p in esquinas)
+        sy0 = min(p[1] for p in esquinas)
+        sy1 = max(p[1] for p in esquinas)
+
+        margen = 34.0
+        escala = min((ancho - 2 * margen) / max(sx1 - sx0, 1e-3),
+                     (alto - 2 * margen) / max(sy1 - sy0, 1e-3))
+
+        cx = (ancho - (sx1 - sx0) * escala) / 2.0 - sx0 * escala
+        cy = (alto - (sy1 - sy0) * escala) / 2.0 - sy0 * escala
+
+        def pt(x: float, y: float, z: float) -> tuple[float, float]:
+            sx, sy = iso(x, y, z)
+            return (cx + sx * escala, cy + sy * escala)
+
+        def linea(a, b, color, gruesa=1.0, guion=None, opacidad=1.0) -> str:
+            (x1, y1), (x2, y2) = pt(*a), pt(*b)
+            d = f' stroke-dasharray="{guion}"' if guion else ""
+            return (f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
+                    f'stroke="{color}" stroke-width="{gruesa}" '
+                    f'stroke-opacity="{opacidad}"{d}/>')
+
+        p = [f'<svg viewBox="0 0 {ancho:.0f} {alto:.0f}" '
+             'style="width:100%;height:100%;display:block">',
+             f'<rect x="0" y="0" width="{ancho}" height="{alto}" fill="{FONDO}"/>']
+
+        medido = cin.directa_desde(est.angulo_suave) if est.enlace_vivo() else None
+        destino = est.teach_pos
+        z_actual = destino[2] if destino else (medido[2] if medido else zmin)
+
+        # --- piso: el rectángulo de abajo, relleno ---
+        piso = [pt(xmin, ymin, zmin), pt(xmax, ymin, zmin),
+                pt(xmax, ymax, zmin), pt(xmin, ymax, zmin)]
+        p.append('<polygon points="'
+                 + " ".join(f"{q[0]:.1f},{q[1]:.1f}" for q in piso)
+                 + f'" fill="{PANEL}" fill-opacity="0.55" stroke="none"/>')
+
+        # --- zona alcanzable a la altura actual, apoyada en el piso ---
+        for x0, x1, y0, y1 in self._zona_alcanzable(z_actual, limites):
+            franja = [pt(x0, y0, zmin), pt(x1, y0, zmin),
+                      pt(x1, y1, zmin), pt(x0, y1, zmin)]
+            p.append('<polygon points="'
+                     + " ".join(f"{q[0]:.1f},{q[1]:.1f}" for q in franja)
+                     + f'" fill="{CELESTE}" fill-opacity="0.10" stroke="none"/>')
+
+        # --- grilla del piso, cada 4 cm ---
+        for x in range(int(math.ceil(xmin / 4)) * 4, int(xmax) + 1, 4):
+            p.append(linea((x, ymin, zmin), (x, ymax, zmin), BORDE, 0.6, "2 5"))
+
+        for y in range(int(math.ceil(ymin / 4)) * 4, int(ymax) + 1, 4):
+            p.append(linea((xmin, y, zmin), (xmax, y, zmin), BORDE, 0.6, "2 5"))
+
+        # --- aristas ocultas (las tres que salen del vértice del fondo) ---
+        oculto = (xmin, ymax, zmin)
+        for otro in ((xmax, ymax, zmin), (xmin, ymin, zmin), (xmin, ymax, zmax)):
+            p.append(linea(oculto, otro, BORDE, 1.0, "3 4", 0.55))
+
+        # --- la caja: piso, techo y las cuatro verticales ---
+        for z in (zmin, zmax):
+            for a, b in (((xmin, ymin, z), (xmax, ymin, z)),
+                         ((xmax, ymin, z), (xmax, ymax, z)),
+                         ((xmax, ymax, z), (xmin, ymax, z)),
+                         ((xmin, ymax, z), (xmin, ymin, z))):
+                if (xmin, ymax, zmin) in (a, b) and z == zmin:
+                    continue  # ya se dibujó punteada
+                p.append(linea(a, b, BORDE, 1.2))
+
+        for x in (xmin, xmax):
+            for y in (ymin, ymax):
+                if (x, y) == (xmin, ymax):
+                    continue
+                p.append(linea((x, y, zmin), (x, y, zmax), BORDE, 1.2))
+
+        # --- referencias de la mesa ---
+        cinta_y = min(ymax, 12.05)
+
+        if ymin < cinta_y <= ymax:
+            p.append(linea((xmin, cinta_y, zmin), (xmax, cinta_y, zmin),
+                           APAGADO, 1.2, "6 4", 0.8))
+            qx, qy = pt(xmax, cinta_y, zmin)
+            p.append(f'<text x="{qx + 6:.1f}" y="{qy + 4:.1f}" fill="{APAGADO}" '
+                     'font-size="10" font-family="system-ui">cinta</text>')
+
+        par_ = est.parametros
+
+        def valor(nombre, defecto):
+            q = par_.get(nombre)
+            return q.valor if q and q.valor is not None else defecto
+
+        bin_y = valor("bin_y", -9.55)
+
+        for nombre in ("bin_x1", "bin_x2", "bin_x3"):
+            bx = valor(nombre, None)
+
+            if bx is None or not (xmin <= bx <= xmax) or not (ymin <= bin_y <= ymax):
+                continue
+
+            qx, qy = pt(bx, bin_y, zmin)
+            p.append(f'<ellipse cx="{qx:.1f}" cy="{qy:.1f}" rx="11" ry="6.4" '
+                     f'fill="none" stroke="{APAGADO}" stroke-width="1" '
+                     'stroke-dasharray="3 3"/>')
+
+        # --- trayectoria ---
+        camino = []
+
+        if self.teach_grabando:
+            camino = [(m.x, m.y, m.z, m.bomba) for m in self.teach_muestras[-1200:]]
+        else:
+            movimiento = self.biblioteca.obtener(self.teach_sel) \
+                if self.teach_sel is not None else None
+
+            if movimiento is not None:
+                camino = [(q.x, q.y, q.z, q.bomba) for q in movimiento.puntos]
+
+        # La sombra del camino en el piso: sin ella, en isométrica no se
+        # distingue un tramo que sube de uno que se aleja.
+        for a, b in zip(camino, camino[1:]):
+            p.append(linea((a[0], a[1], zmin), (b[0], b[1], zmin),
+                           APAGADO, 1.0, None, 0.25))
+
+        for a, b in zip(camino, camino[1:]):
+            p.append(linea(a[:3], b[:3], CELESTE if a[3] else APAGADO,
+                           2.2, None, 0.95 if a[3] else 0.55))
+
+        if not self.teach_grabando:
+            for qx_, qy_, qz_, qb in camino:
+                px_, py_ = pt(qx_, qy_, qz_)
+                p.append(f'<circle cx="{px_:.1f}" cy="{py_:.1f}" r="2.6" '
+                         f'fill="{CELESTE if qb else APAGADO}"/>')
+
+        # --- destino comandado ---
+        if destino is not None:
+            dx_, dy_ = pt(*destino)
+            p.append(f'<path d="M {dx_ - 8:.1f} {dy_:.1f} H {dx_ + 8:.1f} '
+                     f'M {dx_:.1f} {dy_ - 8:.1f} V {dy_ + 8:.1f}" '
+                     f'stroke="{TEXTO}" stroke-width="1" stroke-opacity="0.4"/>')
+
+        # --- el gripper ---
+        if medido is not None:
+            mx, my = pt(*medido)
+            sx_, sy_ = pt(medido[0], medido[1], zmin)
+            bomba = bool(est.t and est.t.bomba)
+
+            # Vertical hasta el piso y sombra: es lo que hace legible la
+            # altura en una vista donde la profundidad es ambigua.
+            p.append(f'<line x1="{mx:.1f}" y1="{my:.1f}" x2="{sx_:.1f}" '
+                     f'y2="{sy_:.1f}" stroke="{TEXTO}" stroke-width="1" '
+                     'stroke-opacity="0.30" stroke-dasharray="3 3"/>')
+            p.append(f'<ellipse cx="{sx_:.1f}" cy="{sy_:.1f}" rx="7" ry="4" '
+                     f'fill="{TEXTO}" fill-opacity="0.16"/>')
+
+            if bomba:
+                p.append(f'<circle cx="{mx:.1f}" cy="{my:.1f}" r="15" fill="none" '
+                         f'stroke="{CELESTE}" stroke-width="1.5" stroke-opacity="0.55"/>')
+
+            p.append(f'<circle cx="{mx:.1f}" cy="{my:.1f}" r="8" '
+                     f'fill="{CELESTE if bomba else "#F5D442"}" '
+                     f'stroke="{FONDO}" stroke-width="2"/>')
+        else:
+            p.append(f'<text x="{ancho / 2:.0f}" y="{alto / 2:.0f}" fill="{APAGADO}" '
+                     'font-size="13" text-anchor="middle" '
+                     'font-family="system-ui">sin lectura de los encoders</text>')
+
+        # --- ejes rotulados sobre las aristas del frente ---
+        def rotulo(a, b, texto: str, desvio: tuple[float, float]) -> str:
+            (x1, y1), (x2, y2) = pt(*a), pt(*b)
+            return (f'<text x="{(x1 + x2) / 2 + desvio[0]:.1f}" '
+                    f'y="{(y1 + y2) / 2 + desvio[1]:.1f}" fill="{APAGADO}" '
+                    f'font-size="11" text-anchor="middle" '
+                    f'font-family="system-ui">{texto}</text>')
+
+        p.append(rotulo((xmin, ymin, zmin), (xmax, ymin, zmin),
+                        f"X  {xmin:.0f} a {xmax:.0f} cm", (8, 18)))
+        p.append(rotulo((xmax, ymin, zmin), (xmax, ymax, zmin),
+                        f"Y  {ymin:.0f} a {ymax:.0f} cm", (34, 6)))
+        p.append(rotulo((xmin, ymin, zmin), (xmin, ymin, zmax),
+                        f"Z  {zmax - zmin:.0f} cm", (-26, 0)))
+
+        # Escala de altura sobre la vertical de adelante: sin esto la Z se
+        # lee sólo en el número de abajo, y la idea es verla en el dibujo.
+        for i in range(int(zmax - zmin) + 1):
+            z = zmin + i
+            qx, qy = pt(xmin, ymin, z)
+            largo = 7 if i % 2 == 0 else 4
+            p.append(f'<line x1="{qx - largo:.1f}" y1="{qy:.1f}" x2="{qx:.1f}" '
+                     f'y2="{qy:.1f}" stroke="{BORDE}" stroke-width="1"/>')
+
+        if medido is not None:
+            qx, qy = pt(xmin, ymin, max(zmin, min(zmax, medido[2])))
+            p.append(f'<line x1="{qx - 11:.1f}" y1="{qy:.1f}" x2="{qx + 4:.1f}" '
+                     f'y2="{qy:.1f}" stroke="{CELESTE}" stroke-width="2"/>')
+
+        p.append("</svg>")
+
+        return "".join(p)
+
+    def _svg_joystick(self) -> str:
+        lado = 150.0
+        centro = lado / 2.0
+        radio = centro - 6.0
+
+        activo = self.tab_activa == "Teach" and self._en_teach()
+        trazo = CELESTE if activo else BORDE
+
+        kx = centro + self.joy_x * radio
+        ky = centro - self.joy_y * radio
+
+        return (f'<svg viewBox="0 0 {lado:.0f} {lado:.0f}" '
+                'style="width:100%;height:100%">'
+                f'<circle cx="{centro}" cy="{centro}" r="{radio}" fill="{INACTIVO}" '
+                f'stroke="{trazo}" stroke-width="1.5"/>'
+                f'<line x1="{centro - radio}" y1="{centro}" x2="{centro + radio}" '
+                f'y2="{centro}" stroke="{BORDE}" stroke-width="1" '
+                'stroke-dasharray="3 4"/>'
+                f'<line x1="{centro}" y1="{centro - radio}" x2="{centro}" '
+                f'y2="{centro + radio}" stroke="{BORDE}" stroke-width="1" '
+                'stroke-dasharray="3 4"/>'
+                f'<text x="{centro}" y="14" fill="{APAGADO}" font-size="10" '
+                'text-anchor="middle" font-family="system-ui">W  (+Y)</text>'
+                f'<text x="{centro}" y="{lado - 5}" fill="{APAGADO}" font-size="10" '
+                'text-anchor="middle" font-family="system-ui">S  (-Y)</text>'
+                f'<circle cx="{kx:.1f}" cy="{ky:.1f}" r="15" '
+                f'fill="{CELESTE if activo else BORDE}" fill-opacity="0.85"/>'
+                '</svg>')
+
+    # ------------------------------------------------------------------
+    def _refrescar_teach(self) -> None:
+        # Con la pestana en otra cosa no se dibuja nada: armar el SVG del
+        # plano diez veces por segundo para que no lo mire nadie es el unico
+        # gasto de CPU que esta interfaz podria llegar a notar.
+        if not hasattr(self, "html_plano") or self.tab_activa != "Teach":
+            return
+
+        est = self.estado
+        en_teach = self._en_teach()
+
+        self.html_plano.content = self._svg_plano()
+        self.html_joystick.content = self._svg_joystick()
+
+        # --- chip de estado ---
+        e = est.e
+
+        if not est.enlace_vivo():
+            color, texto = ROJO, "sin enlace"
+        elif en_teach and self._reproduciendo():
+            color = AMBAR
+            texto = f"reproduciendo {e.teach_indice}/{e.teach_puntos or '?'}"
+        elif en_teach:
+            color, texto = VERDE, "activo"
+        elif e and e.estado is pr.EstadoRobot.ERROR:
+            color, texto = ROJO, "en ERROR: hay que rehomear"
+        elif e and e.homed is False:
+            color, texto = ROJO, "falta homing"
+        else:
+            color, texto = GRIS, "apagado"
+
+        self.chip_teach.content = (
+            f'{_punto(color)}<span style="color:{APAGADO};font-size:12.5px">'
+            f'{texto}</span>')
+
+        self.boton_teach.text = "Salir de Teach" if en_teach else "Entrar a Teach"
+        self.boton_teach.style(
+            f'background:{ROJO_STOP if en_teach else CELESTE}!important;'
+            f'color:{"#fff" if en_teach else "#0B1220"}!important;font-weight:600')
+        # Desde ERROR no se entra: el robot no vuelve solo a home, y después
+        # de un paro la posición real dejó de corresponderse con los pasos.
+        self.boton_teach.set_enabled(
+            est.enlace_vivo()
+            and (en_teach or not (e and e.estado is pr.EstadoRobot.ERROR)))
+
+        # --- lectura de posición ---
+        medido = cin.directa_desde(est.angulo_suave) if est.enlace_vivo() else None
+        destino = est.teach_pos
+
+        def celda(clave: str, valor) -> str:
+            return (f'<div style="display:flex;justify-content:space-between;'
+                    f'font-size:13px;margin:3px 0"><span style="color:{APAGADO}">'
+                    f'{clave}</span><span style="color:{TEXTO};'
+                    'font-family:ui-monospace,monospace">'
+                    f'{valor}</span></div>')
+
+        def terna(p) -> str:
+            if p is None:
+                return "—"
+            return f"X {p[0]:+6.2f}   Y {p[1]:+6.2f}   Z {p[2]:+6.2f}"
+
+        self.html_teach_pos.content = (
+            celda("posición real (encoders)", terna(medido))
+            + celda("destino comandado", terna(destino))
+            + celda("vacío", "activo" if (est.t and est.t.bomba) else "apagado"))
+
+        # --- botones que dependen del estado ---
+        bomba = bool(est.t and est.t.bomba)
+
+        self.boton_bomba.style(
+            f'background:{CELESTE if bomba else INACTIVO}!important;'
+            f'color:{"#0B1220" if bomba else APAGADO}!important')
+        self.boton_bomba.set_enabled(en_teach and not self._reproduciendo())
+
+        for boton in (self.boton_z_sube, self.boton_z_baja):
+            boton.set_enabled(en_teach and not self._reproduciendo())
+            boton.style(f'background:{INACTIVO}!important;color:{TEXTO}!important')
+
+        self.boton_grabar.text = "Terminar  ·  R" if self.teach_grabando else "Grabar  ·  R"
+        self.boton_grabar.style(
+            f'background:{ROJO_STOP if self.teach_grabando else INACTIVO}!important;'
+            f'color:{"#fff" if self.teach_grabando else TEXTO}!important')
+        self.boton_grabar.set_enabled(en_teach and not self._reproduciendo())
+
+        elegido = self.biblioteca.obtener(self.teach_sel) \
+            if self.teach_sel is not None else None
+
+        self.boton_reproducir.set_enabled(
+            en_teach and elegido is not None
+            and not self.teach_grabando and not self._reproduciendo())
+        self.boton_reproducir.text = (
+            f"Reproducir al {elegido.siguiente_escalon} %  ·  P" if elegido
+            else "Reproducir  ·  P")
+        self.boton_reproducir.style(
+            f'background:{CELESTE if elegido else INACTIVO}!important;'
+            f'color:{"#0B1220" if elegido else APAGADO}!important')
+
+        if self.teach_grabando:
+            self.etiqueta_grabacion.text = (
+                f"grabando {time.monotonic() - self.teach_t0:5.1f} s · "
+                f"{len(self.teach_muestras)} muestras")
+        elif self._reproduciendo():
+            self.etiqueta_grabacion.text = f"reproduciendo al {self.teach_pct_en_curso} %"
+        else:
+            self.etiqueta_grabacion.text = f"{len(self.biblioteca.movimientos)} guardados"
+
 
 
 def montar(estado: EstadoSistema, enviar, vision=None) -> Interfaz:

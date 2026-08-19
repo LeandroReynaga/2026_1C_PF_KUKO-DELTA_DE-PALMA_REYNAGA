@@ -49,6 +49,27 @@ class EstadoSistema:
     consola: list[str] = field(default_factory=list)
     fallos: list[pr.Fallo] = field(default_factory=list)
 
+    # ------------------------------------------------------------------
+    #  Modo teach
+    # ------------------------------------------------------------------
+    # `teach` es el último volcado de `J?`, que es de donde salen los límites
+    # del volumen de trabajo ya resueltos (el piso en Z lo deriva el firmware
+    # de `grab_z` y no existe como parámetro suelto).
+    teach: Optional[pr.Teach] = None
+
+    # Posición COMANDADA de la punta y estado del vacío, del volcado a 20 Hz
+    # que se enciende mientras la pestaña de teach está a la vista. Es lo que
+    # se graba: la medida por encoders trae ruido que reproducido es temblor.
+    teach_pos: Optional[tuple[float, float, float]] = None
+    teach_bomba: Optional[bool] = None
+
+    # Último evento del modo (`fin`, `abort`, `err`...) y un contador que sube
+    # con cada uno. La interfaz compara el contador contra el último que
+    # atendió: así un evento se consume una sola vez aunque el refresco pase
+    # veinte veces por segundo, y ninguno se pierde entre dos refrescos.
+    teach_evento: Optional[pr.Teach] = None
+    teach_evento_n: int = 0
+
     # Lo mide la vision siguiendo las piezas sobre la cinta (cm/s), o None
     # si no hay ninguna a la vista para medir.
     cinta_medida: Optional[float] = None

@@ -40,6 +40,7 @@ ORDEN_GRUPOS = [
     "Movimiento",
     "Cinta",
     "Supervision de colisiones",
+    "Modo teach",
     "Telemetria",
     # --- servicio ---
     "Cinta y agarre",
@@ -47,6 +48,7 @@ ORDEN_GRUPOS = [
     "Caja de alfajores",
     "Homing",
     "Limites de movimiento",
+    "Volumen del modo teach",
     "Otros",
 ]
 
@@ -178,6 +180,40 @@ FICHAS: dict[str, Ficha] = {
         "dejar de reintentar. Si choca tres veces contra lo mismo, rehomear "
         "una cuarta solo sigue golpeando el robot."),
 
+    "t_jog": Ficha(
+        "Modo teach", "Velocidad del jog",
+        "A que velocidad avanza la punta mientras se la mueve a mano. Es un "
+        "pedido, no una garantia: si el brazo no llega a hacer el tramo, el "
+        "jog se frena solo en vez de acumular atraso contra un destino que "
+        "se le escapa."),
+    "t_jogpct": Ficha(
+        "Modo teach", "Vel. y acel. del jog",
+        "Porcentaje del tope de velocidad y aceleracion con el que se mueve "
+        "el brazo durante el jog. Bajo a proposito: con el brazo manejado a "
+        "mano y a centimetros de la cinta, lo que importa es poder soltar la "
+        "tecla a tiempo, no llegar rapido."),
+
+    "t_acel": Ficha(
+        "Modo teach", "Aceleracion",
+        "La aceleracion del jog y de la reproduccion. NO se usa la del ciclo "
+        "normal (97.000): una trayectoria ensenada a mano son decenas de "
+        "tramos cortos, y con esa aceleracion cada cambio de velocidad es un "
+        "tiron. Es el primer numero a bajar si el brazo vibra al reproducir."),
+    "t_mezcla": Ficha(
+        "Modo teach", "Redondeo de esquinas",
+        "A esta distancia de un punto intermedio, el brazo redirige al punto "
+        "siguiente SIN frenar: pasa cerca en vez de clavarse en cada uno. Es "
+        "lo que convierte una sucesion de tramos en un movimiento solo. Mas "
+        "grande es mas fluido y se aparta mas de lo ensenado; 0 lo apaga y "
+        "vuelve a frenar en cada punto."),
+    "t_esquina": Ficha(
+        "Modo teach", "Esquina maxima a redondear",
+        "Hasta que angulo se redondea. Una esquina cerrada obliga a los ejes "
+        "a cambiar de velocidad de golpe -- que es el tiron que se quiere "
+        "evitar -- y si alguno tiene que invertir el sentido no hay forma de "
+        "hacerlo sin pasar por cero. A partir de aca se frena y se arranca "
+        "de nuevo."),
+
     "tele_ms": Ficha(
         "Telemetria", "Periodo de [T]",
         "Angulos, error del guard, finales y bomba. Es lo que mueve los "
@@ -191,8 +227,9 @@ FICHAS: dict[str, Ficha] = {
     "diag_ms": Ficha(
         "Telemetria", "Volcado [GUARD]",
         "Cada cuanto sale sola la linea con los numeros de la supervision. "
-        "Existe porque con el puerto tomado por la vision no se le pueden "
-        "mandar comandos al robot. 0 = apagado."),
+        "Viene APAGADO (0): los mismos numeros ya llegan en [T] y en [H], y "
+        "una linea mas cada tantos segundos solo tapa la consola. Se enciende "
+        "cuando se esta calibrando el guard a mano y se lo quiere en el log."),
 
     # ==================================================================
     #  Nivel 3 -- servicio
@@ -259,6 +296,25 @@ FICHAS: dict[str, Ficha] = {
     "tapa_ms": Ficha("Homing", "Ventana para confirmar la tapa",
                      "Cuanto vale la primera pulsacion al entrar o salir del "
                      "modo caja antes de que haya que empezar de nuevo."),
+
+    "t_xmin": Ficha("Volumen del modo teach", "Limite X minimo",
+                    "Pared izquierda del cajon dentro del que se puede mover "
+                    "el brazo a mano. Es lo unico que separa al operador de "
+                    "meterlo contra algo, asi que se toca cuando se mueve "
+                    "algo de la mesa, no para llegar mas lejos."),
+    "t_xmax": Ficha("Volumen del modo teach", "Limite X maximo",
+                    "Idem, del otro lado."),
+    "t_ymin": Ficha("Volumen del modo teach", "Limite Y minimo",
+                    "Lo mas cerca del operador a donde puede ir: por defecto, "
+                    "el centro de los tachos."),
+    "t_ymax": Ficha("Volumen del modo teach", "Limite Y maximo",
+                    "Lo mas lejos: por defecto, el borde de la cinta que da "
+                    "al fondo."),
+    "t_zup": Ficha("Volumen del modo teach", "Techo sobre el agarre",
+                   "Cuanto puede despegarse por encima de la altura de agarre. "
+                   "El PISO no es un ajuste aparte: cuelga de 'grab_z', asi "
+                   "que recalibrar el agarre mueve tambien el limite del jog "
+                   "y no quedan los dos diciendo cosas distintas."),
 
     "vel_max": Ficha("Limites de movimiento", "Velocidad maxima",
                      "Techo global. Esta A PROPOSITO por encima de lo "

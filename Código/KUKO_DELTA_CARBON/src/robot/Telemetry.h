@@ -90,6 +90,12 @@ struct TeleProceso
     float    piezaY;
     uint8_t  tacho;
 
+    // Modo teach: puntos cargados en la ruta y cual se esta ejecutando
+    // (0 = ninguno). Van en [E] y no en [T] porque cambian de a un punto,
+    // no en cada vuelta.
+    uint8_t  teachPuntos;
+    uint8_t  teachIndice;
+
     uint32_t detectadas;
     uint32_t depositadas;
     uint32_t descartadas;

@@ -265,14 +265,81 @@ static float MAX_COLISIONES_SEGUIDAS = 3;
 // una colision. Esta ventana cubre las dos cosas.
 static float BLANQUEO_NEUMATICA_MS = 300;
 
-// Cada cuanto se vuelca una linea con los numeros de la supervision. Existe
-// porque cuando la vision de Python tiene tomado el puerto serie no se le
-// pueden mandar comandos al robot ('S', 'M'), asi que los datos para
-// calibrar tienen que salir solos. La interfaz de Python los acumula como
-// una linea mas, no le molesta.
+// Cada cuanto se vuelca la linea [GUARD] con los numeros de la supervision.
 //
-// 0 = apagado.
-static float DIAGNOSTICO_PERIODICO_MS = 15000;
+// APAGADO DE FABRICA (0). Existia de cuando la unica salida del robot era el
+// monitor serie y no habia forma de pedirle nada con la vision teniendo
+// tomado el puerto. Hoy la interfaz recibe los mismos numeros en [T] (error
+// contra umbral, 10 Hz) y en [H] (ganancia, atraso, picos, fuga, por eje), y
+// una linea sola cada 15 s no aportaba nada salvo tapar la consola.
+//
+// Se deja el parametro ('diag_ms') para poder encenderlo cuando se esta
+// calibrando el guard a mano y se quiere el volcado en el log.
+static float DIAGNOSTICO_PERIODICO_MS = 0;
+
+// ============================================================
+//  MODO TEACH (aprendizaje)
+// ============================================================
+// VOLUMEN DE TRABAJO DEL JOG. Es un cajon mas chico que el alcance real del
+// robot, elegido para que el operador no pueda llevar el brazo contra nada
+// mientras lo maneja a mano:
+//
+//   X   el ancho util validado sobre el robot, que es donde se sabe que
+//       llega con las rotulas en buen angulo.
+//   Y   desde el centro de los tachos (lo mas cerca del operador a donde
+//       tiene sentido ir) hasta el borde lejano de la cinta.
+//   Z   desde GRAB_Z -- la cara superior de una pieza apoyada, o sea el
+//       punto mas bajo al que se baja para agarrar -- hasta TEACH_ZUP por
+//       encima. El piso NO es un numero aparte: cuelga de GRAB_Z para que
+//       recalibrar la altura de agarre mueva tambien el limite del jog, en
+//       vez de dejar los dos diciendo cosas distintas.
+//
+// Los cinco son parametros ('t_xmin'..'t_zup', nivel servicio): la cinta y
+// los tachos se mueven, y con ellos el volumen seguro.
+static float TEACH_XMIN = -12.0f;
+static float TEACH_XMAX =  12.0f;
+static float TEACH_YMIN = -9.55f;   // centro de los tachos (= BIN_Y)
+static float TEACH_YMAX =  11.05f;  // un centimetro antes del borde lejano de la cinta
+static float TEACH_ZUP  =  6.0f;    // cuanto se puede despegar por encima de GRAB_Z
+
+// Velocidad del jog manual, en cm/s de la punta. Es un PEDIDO, no una
+// garantia: cada tramo se lanza solo cuando el anterior termino, asi que si
+// el brazo no llega a hacerlo en el tick, el jog se frena solo en vez de
+// acumular atraso contra un destino que se le escapa.
+static float TEACH_JOG_CMS = 5.0f;
+
+// Porcentaje de VEL_MAX / TEACH_ACEL con el que se mueve el jog. Bajo a
+// proposito: con el brazo manejado a mano y a centimetros de la cinta, lo
+// que importa es poder soltar la tecla a tiempo, no llegar rapido.
+static float TEACH_JOG_PCT = 15.0f;
+
+// Aceleracion del modo teach, en pasos/s2. NO se usa ACC_RAPIDA (97.000):
+// una trayectoria ensenada a mano son decenas de tramos cortos, y con esa
+// aceleracion cada cambio de velocidad es un tiron. Este es el numero a
+// bajar si el brazo vibra al reproducir, y el primero a probar antes de
+// tocar cualquier otra cosa.
+static float TEACH_ACEL = 40000.0f;
+
+// Radio de mezcla de las esquinas, en cm. 0 = apagado (se frena en cada
+// punto, que es como andaba antes).
+//
+// Al llegar a esta distancia de un punto intermedio, el brazo redirige al
+// punto siguiente SIN frenar (ver Stepper::redirigir). O sea que pasa CERCA
+// del punto y no exactamente por el, y a cambio no se detiene: es la unica
+// forma de que una sucesion de tramos se sienta como un movimiento y no como
+// veinte movimientos pegados.
+//
+// Cuanto mas grande, mas fluido y mas se aparta de lo ensenado. Es lo que
+// hace que valga la pena la verificacion por etapas: a 15 % se ve el camino
+// real, y recien despues se sube.
+static float TEACH_MEZCLA_CM = 0.5f;
+
+// Hasta que angulo de esquina se mezcla. Una esquina cerrada obliga a los
+// ejes a cambiar de velocidad de golpe -- que es exactamente el tiron que se
+// quiere evitar -- asi que a partir de aca se frena y se arranca de nuevo,
+// que ademas es lo unico que puede hacer un eje que tiene que invertir el
+// sentido.
+static float TEACH_ESQUINA_DEG = 30.0f;
 
 // Tiempo maximo que puede tardar el homing en encontrar los 3 finales de
 // carrera. Si se pasa, es que un eje no llega (trabado contra algo, o el
@@ -296,6 +363,40 @@ char *recortar(char *s)
     *fin = '\0';
 
     return s;
+}
+
+// Parte "a,b,c" en floats. Devuelve cuantos leyo, o 0 si algo no cierra.
+//
+// Se exige que cada numero se consuma ENTERO, igual que en el resto del
+// parser y por el mismo motivo: con atof() un "hola" pasa como 0.0, y un 0
+// es una coordenada perfectamente valida dentro del volumen de trabajo.
+uint8_t leerFloats(const char *s, float *destino, uint8_t maximo)
+{
+    uint8_t n = 0;
+
+    while (*s != '\0' && n < maximo)
+    {
+        char       *fin = NULL;
+        const float v   = strtof(s, &fin);
+
+        if (fin == s)
+        {
+            return 0;
+        }
+
+        destino[n++] = v;
+        s = fin;
+
+        if (*s == ',')
+        {
+            s++;
+            continue;
+        }
+
+        break;
+    }
+
+    return (*s == '\0') ? n : 0;
 }
 
 } // namespace
@@ -374,12 +475,13 @@ void Robot::begin()
     Serial.println("  K<ms>           margen por velocidad. Ej: K80");
     Serial.println("  L<ms>           atraso del encoder a compensar. Ej: L70");
     Serial.println("  Q<grados>       umbral con el robot quieto en home. Ej: Q5");
+    Serial.println("  J1 / J0 / J?    modo TEACH: entrar / salir / estado");
     Serial.println("  V1 / V0 / V?    telemetria: encender / apagar / una foto");
     Serial.println("  P?              listar parametros ajustables");
     Serial.println("  P<nombre>=<val> fijar un parametro. Ej: Pvis_lat=0.18");
     Serial.println("  P* / P0         guardar en la NVS / volver a fabrica");
 
-    telemetria.anunciar((uint8_t)(ERROR + 1), params.cantidad());
+    telemetria.anunciar((uint8_t)(TEACH + 1), params.cantidad());
 
     if (!boxLayoutValido)
     {
@@ -441,6 +543,7 @@ void Robot::update()
         case BOX_DESCEND:    updateBoxDescend();    break;
         case BOX_LIFT:       updateBoxLift();       break;
         case COLLISION_STOP: updateCollisionStop(); break;
+        case TEACH:          updateTeach();         break;
 
         default:                                    break;
     }
@@ -606,6 +709,16 @@ void Robot::procesarComando(char *cmd, uint8_t len)
     // unicos que puede mandar la interfaz sin intervencion de una persona:
     // conviene que ni siquiera pasen por el resto del parser.
     if (procesarComandoTelemetria(cmd) || procesarComandoParametro(cmd))
+    {
+        return;
+    }
+
+    // --- Modo teach ('J...') ---
+    // Tiene que ir ANTES del parser de piezas: 'JM-3.20,4.50,-30.10' lleva
+    // dos comas y ese parser toma cualquier cosa con dos comas por un
+    // mensaje de la vision. Ninguna pieza empieza con letra, asi que
+    // consumir todo lo que arranca con 'J' no le saca nada a nadie.
+    if (procesarComandoTeach(cmd))
     {
         return;
     }
@@ -792,6 +905,15 @@ void Robot::procesarComando(char *cmd, uint8_t len)
         Serial.print(" a ");
         Serial.print(BELT_MAX_Y);
         Serial.println(" cm)");
+        return;
+    }
+
+    // En modo teach el brazo lo maneja el operador: encolar piezas que
+    // nadie va a ir a buscar solo llenaria la cola de posiciones vencidas.
+    // Se ignoran en silencio -- no son un fallo del robot ni una pieza
+    // perdida por no llegar a tiempo, asi que tampoco se cuentan.
+    if (state == TEACH || teachPedido)
+    {
         return;
     }
 
@@ -1400,6 +1522,16 @@ void Robot::startHoming(bool conservarContexto)
     // Un cambio de modo a medio confirmar pertenecia al ciclo que se corto.
     esperandoConfirmacion = false;
 
+    // Teach tampoco sobrevive: se rehomea por una colision o por un paro, y
+    // en los dos casos la posicion de partida del jog dejo de ser conocida.
+    // Hay que volver a pedirlo desde la interfaz.
+    teachPedido        = false;
+    teachReproduciendo = false;
+    teachLanzado       = false;
+    teachEsperando     = false;
+    teachStream        = false;
+    jogVx = jogVy = jogVz = 0.0f;
+
     moveIssued = false;
     replanCount = 0;
     homingSettleStart_ms = 0;
@@ -1523,14 +1655,6 @@ void Robot::updateHoming()
             imprimirCaja();
         }
 
-        Serial.print("[GUARD] ");
-        Serial.print(guard.nombreEstado());
-        Serial.print("  umbral=");
-        Serial.print(guard.umbral(), 1);
-        Serial.print(" grados  confirmacion=");
-        Serial.print(guard.confirmacion());
-        Serial.println(" ms");
-
         moveIssued = false;
         state = GO_HOME_IDLE;
     }
@@ -1602,7 +1726,11 @@ void Robot::updateGoHomeIdle()
     // Ojo: en la primera vuelta de este estado el brazo todavia esta parado
     // sobre el tacho (el movimiento a home ni se lanzo), asi que ahi la
     // pieza se toma en el acto y no se pierde nada de productividad.
-    if (queueCount > 0 && enPosicion() && iniciarSiguientePieza())
+    // Con teach pedido no se sale a buscar mas piezas: hay que llegar a
+    // WAIT_PIECE, que es el unico punto en el que el brazo esta quieto, en
+    // home y sin nada en la mano -- las tres condiciones que hacen que la
+    // posicion de partida del jog sea conocida.
+    if (!teachPedido && queueCount > 0 && enPosicion() && iniciarSiguientePieza())
     {
         return;
     }
@@ -1623,6 +1751,14 @@ void Robot::updateGoHomeIdle()
 
 void Robot::updateWaitPiece()
 {
+    // Aca el brazo esta quieto en home y con las manos vacias: es el momento
+    // en que se puede entrar a teach sin sorprender a nadie.
+    if (teachPedido)
+    {
+        entrarTeach();
+        return;
+    }
+
     if (queueCount > 0)
     {
         iniciarSiguientePieza();
@@ -2419,6 +2555,7 @@ const char *Robot::nombreEstado(RobotState s) const
         case BOX_LIFT:       return "BOX_LIFT";
         case COLLISION_STOP: return "COLLISION_STOP";
         case ERROR:          return "ERROR";
+        case TEACH:          return "TEACH";
         default:             return "?";
     }
 }
@@ -2620,6 +2757,17 @@ void Robot::registrarParametros()
     // tocan de a dos (ver el comentario de CONVEYOR_PWM).
     params.registrar("cinta_pwm", &CONVEYOR_PWM, 0.0f, 100.0f, "%", NIVEL_PROCESO);
 
+    // Como se siente el jog en la mano. Van en proceso porque son gusto del
+    // operador, no seguridad: el volumen es lo que protege al robot.
+    params.registrar("t_jog",    &TEACH_JOG_CMS, 0.5f, 15.0f,  "cm/s", NIVEL_PROCESO);
+    params.registrar("t_jogpct", &TEACH_JOG_PCT, 5.0f, 60.0f,  "%",    NIVEL_PROCESO, 'i');
+
+    // Los tres que deciden si la reproduccion se siente fluida o a los
+    // tirones. Van en proceso porque se ajustan mirando el robot moverse.
+    params.registrar("t_acel",    &TEACH_ACEL,        5000.0f, 100000.0f, "pas/s2", NIVEL_PROCESO, 'i');
+    params.registrar("t_mezcla",  &TEACH_MEZCLA_CM,   0.0f,    3.0f,      "cm",     NIVEL_PROCESO);
+    params.registrar("t_esquina", &TEACH_ESQUINA_DEG, 0.0f,    90.0f,     "deg",    NIVEL_PROCESO, 'i');
+
     params.registrar("pick_tol",  &PICK_LATE_TOLERANCE_MS, 0.0f, 500.0f, "ms", NIVEL_PROCESO, 'i');
     params.registrar("pump_lead", &PUMP_LEAD_MS,           0.0f, 2000.0f, "ms", NIVEL_PROCESO, 'i');
     params.registrar("replan",    &MAX_REPLAN_ATTEMPTS,    0.0f, 5.0f,   "",   NIVEL_PROCESO, 'i');
@@ -2666,6 +2814,16 @@ void Robot::registrarParametros()
     // cualquier tope por encima de eso no limita nada. Los valores que
     // sirven para recortar los tramos largos van de 6.000 a 14.000.
     params.registrar("vel_max", &Motors::VEL_MAX, 5000.0f, 120000.0f, "pas/s", NIVEL_SERVICIO, 'i');
+
+    // Volumen de trabajo del jog manual. Es lo unico que separa al operador
+    // de meter el brazo contra la cinta o contra los tachos, asi que va en
+    // servicio: se toca cuando se mueve algo de la mesa, no todos los dias.
+    // El piso en Z no esta aca porque cuelga de 'grab_z' (ver TEACH_ZUP).
+    params.registrar("t_xmin", &TEACH_XMIN, -20.0f, 0.0f,  "cm", NIVEL_SERVICIO);
+    params.registrar("t_xmax", &TEACH_XMAX,   0.0f, 20.0f, "cm", NIVEL_SERVICIO);
+    params.registrar("t_ymin", &TEACH_YMIN, -20.0f, 0.0f,  "cm", NIVEL_SERVICIO);
+    params.registrar("t_ymax", &TEACH_YMAX,   0.0f, 20.0f, "cm", NIVEL_SERVICIO);
+    params.registrar("t_zup",  &TEACH_ZUP,    1.0f, 12.0f, "cm", NIVEL_SERVICIO);
 
     params.registrar("home_set", &HOMING_SETTLE_WAIT_MS, 500.0f,  10000.0f, "ms", NIVEL_SERVICIO, 'i');
     params.registrar("home_to",  &HOMING_TIMEOUT_MS,     5000.0f, 60000.0f, "ms", NIVEL_SERVICIO, 'i');
@@ -2807,6 +2965,13 @@ void Robot::emitirTelemetria(uint32_t ahora)
             d.tacho      = 0;
         }
 
+        // Teach. 'ti' vale 0 quieto y 1..tw reproduciendo, asi la interfaz
+        // puede dibujar el avance sin depender de haber visto pasar el
+        // [TEACH] run -- una linea suelta se puede perder en un reinicio,
+        // una linea periodica no.
+        d.teachPuntos = teachPuntos;
+        d.teachIndice = teachReproduciendo ? (uint8_t)(teachIndice + 1) : 0;
+
         d.detectadas  = piezasDetectadas;
         d.depositadas = piezasDepositadas;
         d.descartadas = piezasDescartadas;
@@ -2890,6 +3055,803 @@ void Robot::contarDepositada(const Piece &p)
     }
 }
 
+
+// ============================================================
+//  MODO TEACH
+// ============================================================
+//
+//  Lo que hace el firmware y lo que hace la interfaz esta repartido asi:
+//
+//    ESP32    recorta al volumen de trabajo, resuelve la cinematica, mueve
+//             y encadena los puntos de una ruta ya cargada.
+//    Python   dibuja, graba, guarda las secuencias con nombre y lleva la
+//             cuenta de a que porcentaje se verifico cada una.
+//
+//  El corte esta ahi porque lo unico que no se puede delegar es lo que
+//  protege al robot: el recorte del volumen y el chequeo de alcance tienen
+//  que estar de este lado aunque la interfaz ya los haga.
+//
+//  Encadenar los puntos tambien es de este lado, y no del PC: si cada punto
+//  esperara la confirmacion de llegada por serie, entre punto y punto se
+//  meteria el ida y vuelta del enlace (100 ms de telemetria en el peor caso)
+//  y la secuencia se reproduciria a los tirones. Asi el salto de uno al
+//  siguiente es una vuelta de loop.
+// ============================================================
+
+Motors::MotionLimits Robot::limitesTeach(float escalaPct) const
+{
+    if (escalaPct < 1.0f)   escalaPct = 1.0f;
+    if (escalaPct > 100.0f) escalaPct = 100.0f;
+
+    Motors::MotionLimits limites;
+
+    limites.maxSpeed        = Motors::VEL_MAX * (escalaPct / 100.0f);
+    limites.maxAcceleration = TEACH_ACEL      * (escalaPct / 100.0f);
+
+    return limites;
+}
+
+void Robot::teachRecortar(float &x, float &y, float &z) const
+{
+    // El piso cuelga de GRAB_Z: es la altura a la que se agarra una pieza
+    // apoyada, o sea lo mas bajo que tiene sentido bajar sin tocar la cinta.
+    const float zMin = GRAB_Z;
+    const float zMax = GRAB_Z + TEACH_ZUP;
+
+    if (x < TEACH_XMIN) x = TEACH_XMIN;
+    if (x > TEACH_XMAX) x = TEACH_XMAX;
+    if (y < TEACH_YMIN) y = TEACH_YMIN;
+    if (y > TEACH_YMAX) y = TEACH_YMAX;
+    if (z < zMin)       z = zMin;
+    if (z > zMax)       z = zMax;
+}
+
+bool Robot::teachMover(float x, float y, float z, float escalaPct)
+{
+    teachRecortar(x, y, z);
+
+    if (escalaPct < 1.0f)   escalaPct = 1.0f;
+    if (escalaPct > 100.0f) escalaPct = 100.0f;
+
+    const Motors::MotionLimits limites = limitesTeach(escalaPct);
+
+    if (!goToPositionIK(x, y, z, limites))
+    {
+        return false; // sin solucion: no se movio nada
+    }
+
+    teachX = x;
+    teachY = y;
+    teachZ = z;
+
+    return true;
+}
+
+// ------------------------------------------------------------------
+bool Robot::entrarTeach()
+{
+    teachPedido = false;
+
+    if (!homed)
+    {
+        Serial.println("[TEACH] err=sinhoming");
+        return false;
+    }
+
+    // La cinta se para: en teach nadie va a levantar lo que traiga, y con el
+    // brazo manejado a mano por encima de ella es una cosa menos moviendose.
+    conveyor.stop();
+
+    queueHead  = 0;
+    queueCount = 0;
+
+    pneumatics.release();
+    pumpOn = false;
+
+    // Punto de partida: centrado y en el techo del volumen. Se entra siempre
+    // desde WAIT_PIECE (brazo quieto, en home y con las manos vacias), asi
+    // que este es el unico movimiento del que hace falta saber de donde sale
+    // -- y por eso el firmware no necesita cinematica DIRECTA.
+    const float x = 0.0f;
+    const float y = 0.0f;
+    const float z = GRAB_Z + TEACH_ZUP;
+
+    if (!teachMover(x, y, z, TEACH_JOG_PCT))
+    {
+        Serial.println("[TEACH] err=ik");
+        conveyor.setSpeedPercent(CONVEYOR_PWM);
+        return false;
+    }
+
+    jogVx = jogVy = jogVz = 0.0f;
+    jogVigenteHasta_ms = 0;
+    jogUltimoPaso_ms   = millis();
+
+    teachReproduciendo = false;
+    teachLanzado       = false;
+    teachEsperando     = false;
+    teachIndice        = 0;
+
+    teachOrigenX = teachX;
+    teachOrigenY = teachY;
+    teachOrigenZ = teachZ;
+
+    moveIssued = false;
+    state      = TEACH;
+
+    Serial.println("[TEACH] on");
+    teachInformar();
+
+    return true;
+}
+
+void Robot::salirTeach()
+{
+    teachReproduciendo = false;
+    teachLanzado       = false;
+    teachEsperando     = false;
+    jogVx = jogVy = jogVz = 0.0f;
+    teachStream = false;
+
+    pneumatics.release();
+    pumpOn = false;
+    guard.silenciar((uint32_t)BLANQUEO_NEUMATICA_MS);
+
+    conveyor.setSpeedPercent(CONVEYOR_PWM);
+
+    // Se vuelve por GO_HOME_IDLE y no directo a WAIT_PIECE: el brazo quedo
+    // donde lo dejo el operador, y ese estado es justamente el que lo lleva
+    // a home antes de volver a aceptar piezas.
+    moveIssued = false;
+    state      = GO_HOME_IDLE;
+
+    Serial.println("[TEACH] off");
+}
+
+void Robot::teachAbortar(const char *motivo)
+{
+    if (!teachReproduciendo)
+    {
+        return;
+    }
+
+    teachReproduciendo = false;
+    teachLanzado       = false;
+    teachEsperando     = false;
+
+    motor1.stop();
+    motor2.stop();
+    motor3.stop();
+
+    Serial.print("[TEACH] abort motivo=");
+    Serial.println(motivo);
+}
+
+// ------------------------------------------------------------------
+void Robot::updateTeach()
+{
+    if (teachStream &&
+        (uint32_t)(millis() - teachStreamUltimo_ms) >= TEACH_STREAM_MS)
+    {
+        teachStreamUltimo_ms = millis();
+
+        Serial.print("[TEACH] p x=");
+        Serial.print(teachX, 2);
+        Serial.print(" y=");
+        Serial.print(teachY, 2);
+        Serial.print(" z=");
+        Serial.print(teachZ, 2);
+        Serial.print(" b=");
+        Serial.println(pumpOn ? 1 : 0);
+    }
+
+    if (teachReproduciendo)
+    {
+        updateTeachPlayback();
+        return;
+    }
+
+    const uint32_t ahora = millis();
+
+    // La direccion vence sola. Es el hombre-muerto del jog: si la interfaz
+    // deja de refrescarla -- navegador cerrado, enlace caido, la pestana que
+    // pasa a segundo plano -- el brazo termina el tramo que tenia y se para,
+    // en vez de seguir viaje hasta la pared del volumen.
+    if (jogVigenteHasta_ms != 0 && (int32_t)(ahora - jogVigenteHasta_ms) >= 0)
+    {
+        jogVx = jogVy = jogVz = 0.0f;
+        jogVigenteHasta_ms = 0;
+    }
+
+    if (fabsf(jogVx) + fabsf(jogVy) + fabsf(jogVz) < 0.02f)
+    {
+        return;
+    }
+
+    // Un tramo nuevo solo cuando el anterior termino. Es lo que mantiene al
+    // brazo siempre yendo a un destino conocido: Stepper::moveTo() reinicia
+    // la rampa desde cero, asi que reemitir un destino con el eje todavia
+    // andando lo dejaria persiguiendo un objetivo que se le escapa, y al
+    // soltar la tecla tendria por delante todo el atraso acumulado.
+    if (!enPosicion())
+    {
+        return;
+    }
+
+    if ((uint32_t)(ahora - jogUltimoPaso_ms) < TEACH_JOG_TICK_MS)
+    {
+        return;
+    }
+
+    jogUltimoPaso_ms = ahora;
+
+    // La velocidad pedida sale de recorrer un tramo por tick. Si el brazo no
+    // llega a hacerlo en ese tiempo, el enPosicion() de arriba saltea ticks
+    // y el jog se frena solo: el pedido nunca se convierte en atraso.
+    const float paso = TEACH_JOG_CMS * (TEACH_JOG_TICK_MS / 1000.0f);
+
+    const float x = teachX + jogVx * paso;
+    const float y = teachY + jogVy * paso;
+    const float z = teachZ + jogVz * paso;
+
+    // Un destino sin solucion (una esquina del cajon a la que el brazo no
+    // llega) simplemente no se toma: el jog se queda donde estaba en vez de
+    // trabarse, y se nota porque el brazo deja de avanzar para ese lado.
+    teachMover(x, y, z, TEACH_JOG_PCT);
+}
+
+// ------------------------------------------------------------------
+void Robot::updateTeachPlayback()
+{
+    const uint32_t ahora = millis();
+
+    if (teachEsperando)
+    {
+        if ((int32_t)(ahora - teachEsperaHasta_ms) < 0)
+        {
+            return;
+        }
+
+        teachEsperando = false;
+        teachIndice++;
+        teachLanzado = false;
+    }
+
+    if (teachIndice >= teachPuntos)
+    {
+        teachReproduciendo = false;
+        teachLanzado       = false;
+
+        Serial.println("[TEACH] fin");
+        return;
+    }
+
+    const TeachPunto &p = teachRuta[teachIndice];
+
+    if (!teachLanzado)
+    {
+        teachOrigenX = teachX;
+        teachOrigenY = teachY;
+        teachOrigenZ = teachZ;
+
+        if (!teachMover(p.x, p.y, p.z, teachEscala))
+        {
+            // La ruta se cargo ya recortada al volumen, asi que esto
+            // significa que la geometria cambio desde que se grabo (otra
+            // altura de agarre, por ejemplo). Se corta: saltear puntos
+            // convertiria la secuencia en otra distinta, que es justo lo que
+            // la verificacion por etapas trata de evitar.
+            teachAbortar("ik");
+            return;
+        }
+
+        teachTramoCm = sqrtf(sq(p.x - teachOrigenX) +
+                             sq(p.y - teachOrigenY) +
+                             sq(p.z - teachOrigenZ));
+
+        teachTramoPasos = max(motor1.pasosRestantes(),
+                              max(motor2.pasosRestantes(),
+                                  motor3.pasosRestantes()));
+
+        teachLanzado = true;
+        return;
+    }
+
+    // --- Mezcla de la esquina ---
+    // A TEACH_MEZCLA_CM del punto se redirige al siguiente sin frenar: el
+    // brazo lo pasa cerca en vez de clavarse en el. Es lo que convierte una
+    // sucesion de tramos en un movimiento solo.
+    if (TEACH_MEZCLA_CM > 0.0f && teachTramoCm > 0.001f &&
+        teachIndice + 1 < teachPuntos && teachMezclable(teachIndice))
+    {
+        const long restante = max(motor1.pasosRestantes(),
+                                  max(motor2.pasosRestantes(),
+                                      motor3.pasosRestantes()));
+
+        // El radio en pasos sale de la regla de tres del tramo: los pasos y
+        // los centimetros son proporcionales dentro de un mismo tramo. Se
+        // topea en la mitad para no empezar a mezclar apenas arranca.
+        long radio = (long)(teachTramoPasos * (TEACH_MEZCLA_CM / teachTramoCm));
+
+        if (radio > teachTramoPasos / 2) radio = teachTramoPasos / 2;
+
+        if (restante > 0 && restante <= radio && teachMezclar(teachIndice + 1))
+        {
+            teachIndice++;
+            return;
+        }
+    }
+
+    if (!enPosicion())
+    {
+        return;
+    }
+
+    // Llego al punto. La bomba se aplica AL LLEGAR y no antes: lo que se
+    // grabo fue el estado del vacio en ese lugar.
+    if (p.bomba != pumpOn)
+    {
+        if (p.bomba)
+        {
+            pneumatics.grab();
+        }
+        else
+        {
+            pneumatics.release();
+        }
+
+        pumpOn = p.bomba;
+
+        // Misma ventana que en el ciclo normal: la bomba hunde el riel que
+        // alimenta los encoders y corre las tres lecturas de golpe.
+        guard.silenciar((uint32_t)BLANQUEO_NEUMATICA_MS);
+    }
+
+    // La espera NO se escala con el porcentaje. El porcentaje es velocidad y
+    // aceleracion; una espera es el tiempo que tarda el vacio en formarse o
+    // la pieza en despegarse, y eso no cambia porque el brazo vaya mas
+    // rapido entre punto y punto.
+    if (p.espera_ms > 0)
+    {
+        teachEsperando      = true;
+        teachEsperaHasta_ms = ahora + p.espera_ms;
+        return;
+    }
+
+    teachIndice++;
+    teachLanzado = false;
+}
+
+// ------------------------------------------------------------------
+bool Robot::teachMezclable(uint8_t k) const
+{
+    if (k + 1 >= teachPuntos)
+    {
+        return false; // el ultimo punto se cumple exacto, siempre
+    }
+
+    const TeachPunto &p = teachRuta[k];
+
+    // Un punto con espera o con cambio de bomba es un punto que SIGNIFICA
+    // algo: ahi se agarra o se suelta una pieza. Pasar cerca en vez de por
+    // el lugar exacto seria soltar la pieza en otro lado.
+    if (p.espera_ms > 0 || p.bomba != pumpOn)
+    {
+        return false;
+    }
+
+    // Angulo de la esquina, en cartesiano. Con el tramo que viene el brazo y
+    // el que sigue casi alineados, mezclar cuesta poco y se gana todo. Con
+    // una esquina cerrada, en cambio, el tiron lo produce la esquina en si
+    // -- y si algun eje tiene que invertir el sentido, no hay forma de
+    // hacerlo sin pasar por velocidad cero.
+    const float ax = p.x - teachOrigenX;
+    const float ay = p.y - teachOrigenY;
+    const float az = p.z - teachOrigenZ;
+
+    const TeachPunto &q = teachRuta[k + 1];
+
+    const float bx = q.x - p.x;
+    const float by = q.y - p.y;
+    const float bz = q.z - p.z;
+
+    const float na = sqrtf(ax * ax + ay * ay + az * az);
+    const float nb = sqrtf(bx * bx + by * by + bz * bz);
+
+    if (na < 0.001f || nb < 0.001f)
+    {
+        return false;
+    }
+
+    const float coseno = (ax * bx + ay * by + az * bz) / (na * nb);
+
+    return coseno >= cosf(TEACH_ESQUINA_DEG * DEG_TO_RAD);
+}
+
+bool Robot::teachMezclar(uint8_t siguiente)
+{
+    const TeachPunto &q = teachRuta[siguiente];
+
+    const DeltaKinematics::DeltaAngles pose =
+        DeltaKinematics::solveIK(q.x, q.y, q.z);
+
+    if (!pose.success)
+    {
+        return false;
+    }
+
+    const Motors::MotionLimits limites = limitesTeach(teachEscala);
+
+    // El tramo nuevo arranca donde esta el brazo AHORA, no en el punto que
+    // se acaba de saltear: es justamente el atajo de la esquina.
+    const long pasos = max(labs(pose.steps1 - motor1.getPosition()),
+                           max(labs(pose.steps2 - motor2.getPosition()),
+                               labs(pose.steps3 - motor3.getPosition())));
+
+    if (!Motors::redirigirSincronizado(motor1, motor2, motor3,
+                                       pose.steps1, pose.steps2, pose.steps3,
+                                       limites))
+    {
+        return false;
+    }
+
+    // El origen del tramo nuevo es el punto que se paso de largo: es contra
+    // el que hay que medir la esquina siguiente, y el error de tomarlo por
+    // la posicion real es como mucho el radio de mezcla.
+    const TeachPunto &p = teachRuta[siguiente - 1];
+
+    teachOrigenX = p.x;
+    teachOrigenY = p.y;
+    teachOrigenZ = p.z;
+
+    teachTramoCm = sqrtf(sq(q.x - p.x) + sq(q.y - p.y) + sq(q.z - p.z));
+    teachTramoPasos = pasos;
+
+    teachX = q.x;
+    teachY = q.y;
+    teachZ = q.z;
+
+    return true;
+}
+
+// ------------------------------------------------------------------
+void Robot::teachInformar() const
+{
+    Serial.print("[TEACH] est=");
+    Serial.print(state == TEACH ? "on" : (teachPedido ? "pedido" : "off"));
+    Serial.print(" n=");
+    Serial.print(teachPuntos);
+    Serial.print(" i=");
+    Serial.print(teachReproduciendo ? (uint16_t)(teachIndice + 1) : 0);
+    Serial.print(" pct=");
+    Serial.print(teachEscala, 0);
+    Serial.print(" x=");
+    Serial.print(teachX, 2);
+    Serial.print(" y=");
+    Serial.print(teachY, 2);
+    Serial.print(" z=");
+    Serial.print(teachZ, 2);
+    Serial.print(" xmin=");
+    Serial.print(TEACH_XMIN, 2);
+    Serial.print(" xmax=");
+    Serial.print(TEACH_XMAX, 2);
+    Serial.print(" ymin=");
+    Serial.print(TEACH_YMIN, 2);
+    Serial.print(" ymax=");
+    Serial.print(TEACH_YMAX, 2);
+    Serial.print(" zmin=");
+    Serial.print(GRAB_Z, 2);
+    Serial.print(" zmax=");
+    Serial.print(GRAB_Z + TEACH_ZUP, 2);
+    Serial.print(" cap=");
+    Serial.println(TEACH_MAX_PUNTOS);
+}
+
+// ------------------------------------------------------------------
+//  Comandos 'J...'
+// ------------------------------------------------------------------
+//
+//    J1                      pedir entrada a teach (entra al llegar a home)
+//    J0                      salir
+//    J?                      informar estado y volumen de trabajo
+//    JM<x>,<y>,<z>           mover la punta a un destino absoluto, en cm
+//    JD<vx>,<vy>,<vz>        direccion de jog, cada una en [-1, 1]
+//    JP1 / JP0               bomba de vacio
+//    JC                      vaciar la ruta cargada
+//    JA<x>,<y>,<z>,<b>,<w>   agregar un punto (b = bomba 0/1, w = espera ms)
+//    JR<pct>                 reproducir la ruta al <pct> % de vel y acel
+//    JX                      cortar la reproduccion
+//    JG1 / JG0               volcado de la posicion comandada a 20 Hz
+//
+bool Robot::procesarComandoTeach(const char *cmd)
+{
+    if (toupper(cmd[0]) != 'J')
+    {
+        return false;
+    }
+
+    const char  sub    = toupper(cmd[1]);
+    const char *resto  = cmd + 2;
+    const bool  enModo = (state == TEACH);
+
+    // --- Entrar / salir / informar ---
+    if (sub == '1' && resto[0] == '\0')
+    {
+        if (enModo)
+        {
+            teachInformar();
+            return true;
+        }
+
+        if (!homed)
+        {
+            Serial.println("[TEACH] err=sinhoming");
+            return true;
+        }
+
+        // Desde ERROR o IDLE el robot no llega a WAIT_PIECE por su cuenta, y
+        // ese es el unico punto por el que se entra a teach: el pedido
+        // quedaria esperando para siempre y la interfaz mostrando "entrando".
+        // Ademas, despues de un paro manual la posicion real dejo de
+        // corresponderse con los pasos -- hay que rehomear antes de mover
+        // nada a mano.
+        if (state == ERROR || state == IDLE)
+        {
+            Serial.println("[TEACH] err=rehomear");
+            return true;
+        }
+
+        // No se entra en el acto: primero hay que terminar la pieza que este
+        // en vuelo y volver a home. Puede tardar un ciclo, y la interfaz
+        // muestra "entrando" hasta que llega el estado TEACH.
+        teachPedido = true;
+        Serial.println("[TEACH] pedido");
+        return true;
+    }
+
+    if (sub == '0' && resto[0] == '\0')
+    {
+        if (enModo)
+        {
+            salirTeach();
+        }
+        else
+        {
+            teachPedido = false;
+            Serial.println("[TEACH] off");
+        }
+
+        return true;
+    }
+
+    if (sub == '?' && resto[0] == '\0')
+    {
+        teachInformar();
+        return true;
+    }
+
+    // --- Carga de la ruta ---
+    // Se acepta con el robot fuera de teach a proposito: asi la interfaz
+    // puede ir subiendo la secuencia mientras el brazo todavia esta
+    // terminando la pieza que tenia, y reproducirla apenas entra.
+    if (sub == 'C' && resto[0] == '\0')
+    {
+        teachAbortar("carga");
+        teachPuntos = 0;
+        Serial.println("[TEACH] buf n=0");
+        return true;
+    }
+
+    if (sub == 'A')
+    {
+        float v[5];
+
+        if (leerFloats(resto, v, 5) != 5)
+        {
+            Serial.println("[TEACH] err=formato");
+            return true;
+        }
+
+        if (teachPuntos >= TEACH_MAX_PUNTOS)
+        {
+            Serial.println("[TEACH] err=lleno");
+            return true;
+        }
+
+        TeachPunto &p = teachRuta[teachPuntos];
+
+        p.x = v[0];
+        p.y = v[1];
+        p.z = v[2];
+
+        // Se recorta AL CARGAR y no solo al ejecutar: asi lo que se
+        // reproduce es exactamente lo mismo en todas las pasadas, y no una
+        // version recortada distinta cada vez.
+        teachRecortar(p.x, p.y, p.z);
+
+        p.bomba     = (v[3] != 0.0f);
+        p.espera_ms = (v[4] < 0.0f) ? 0
+                    : ((v[4] > 60000.0f) ? 60000 : (uint16_t)v[4]);
+
+        teachPuntos++;
+
+        Serial.print("[TEACH] buf n=");
+        Serial.println(teachPuntos);
+        return true;
+    }
+
+    if (sub == 'R')
+    {
+        if (!enModo)
+        {
+            Serial.println("[TEACH] err=nomodo");
+            return true;
+        }
+
+        if (teachPuntos == 0)
+        {
+            Serial.println("[TEACH] err=vacio");
+            return true;
+        }
+
+        float pct = 0.0f;
+
+        if (leerFloats(resto, &pct, 1) != 1)
+        {
+            Serial.println("[TEACH] err=formato");
+            return true;
+        }
+
+        if (pct < 1.0f)   pct = 1.0f;
+        if (pct > 100.0f) pct = 100.0f;
+
+        teachEscala        = pct;
+        teachIndice        = 0;
+        teachLanzado       = false;
+        teachEsperando     = false;
+        teachReproduciendo = true;
+
+        jogVx = jogVy = jogVz = 0.0f;
+        jogVigenteHasta_ms = 0;
+
+        Serial.print("[TEACH] run pct=");
+        Serial.print(teachEscala, 0);
+        Serial.print(" n=");
+        Serial.println(teachPuntos);
+        return true;
+    }
+
+    if (sub == 'X' && resto[0] == '\0')
+    {
+        teachAbortar("manual");
+        return true;
+    }
+
+    if (sub == 'G')
+    {
+        if ((resto[0] != '0' && resto[0] != '1') || resto[1] != '\0')
+        {
+            Serial.println("[TEACH] err=formato");
+            return true;
+        }
+
+        teachStream          = (resto[0] == '1');
+        teachStreamUltimo_ms = millis();
+        return true;
+    }
+
+    // --- Todo lo que sigue mueve el brazo: solo dentro del modo ---
+    if (!enModo)
+    {
+        Serial.println("[TEACH] err=nomodo");
+        return true;
+    }
+
+    if (sub == 'P')
+    {
+        if ((resto[0] != '0' && resto[0] != '1') || resto[1] != '\0')
+        {
+            Serial.println("[TEACH] err=formato");
+            return true;
+        }
+
+        // La bomba se puede tocar durante la reproduccion sin romper nada:
+        // el proximo punto que traiga un estado distinto la vuelve a poner
+        // donde corresponde.
+        const bool encender = (resto[0] == '1');
+
+        if (encender)
+        {
+            pneumatics.grab();
+        }
+        else
+        {
+            pneumatics.release();
+        }
+
+        pumpOn = encender;
+        guard.silenciar((uint32_t)BLANQUEO_NEUMATICA_MS);
+
+        return true;
+    }
+
+    if (sub == 'D')
+    {
+        float v[3];
+
+        if (leerFloats(resto, v, 3) != 3)
+        {
+            Serial.println("[TEACH] err=formato");
+            return true;
+        }
+
+        for (uint8_t i = 0; i < 3; i++)
+        {
+            if (v[i] < -1.0f) v[i] = -1.0f;
+            if (v[i] >  1.0f) v[i] =  1.0f;
+        }
+
+        // Un jog con una reproduccion en curso serian dos cosas peleando por
+        // el mismo brazo. El vector NULO es la excepcion, y no es un caso de
+        // borde: la interfaz lo manda al arrancar la reproduccion, como
+        // forma de decir "solte todo". Rechazarlo devolvia un err=ocupado
+        // que no significaba nada.
+        if (teachReproduciendo)
+        {
+            if (fabsf(v[0]) + fabsf(v[1]) + fabsf(v[2]) > 0.02f)
+            {
+                Serial.println("[TEACH] err=ocupado");
+            }
+
+            return true;
+        }
+
+        jogVx = v[0];
+        jogVy = v[1];
+        jogVz = v[2];
+
+        // Solo una direccion viva refresca el hombre-muerto. El vector nulo
+        // es "solte la tecla" y tiene que frenar ya, no dentro de 350 ms.
+        jogVigenteHasta_ms = (fabsf(jogVx) + fabsf(jogVy) + fabsf(jogVz) > 0.02f)
+                                 ? (millis() + TEACH_JOG_VIDA_MS)
+                                 : 0;
+        return true;
+    }
+
+    if (sub == 'M')
+    {
+        if (teachReproduciendo)
+        {
+            Serial.println("[TEACH] err=ocupado");
+            return true;
+        }
+
+        float v[3];
+
+        if (leerFloats(resto, v, 3) != 3)
+        {
+            Serial.println("[TEACH] err=formato");
+            return true;
+        }
+
+        jogVx = jogVy = jogVz = 0.0f;
+        jogVigenteHasta_ms = 0;
+
+        if (!teachMover(v[0], v[1], v[2], TEACH_JOG_PCT))
+        {
+            Serial.println("[TEACH] err=ik");
+        }
+
+        return true;
+    }
+
+    Serial.print("[SERIAL] comando de teach invalido: '");
+    Serial.print(cmd);
+    Serial.println("'. Validos: J1 J0 J? JM JD JP JC JA JR JX JG");
+
+    return true;
+}
+
 // ============================================================
 //  EMERGENCIA
 // ============================================================
@@ -2908,6 +3870,13 @@ void Robot::emergencyStop()
     guard.desarmar();
 
     registrarFallo(FALLO_MANUAL, 0);
+
+    teachPedido        = false;
+    teachReproduciendo = false;
+    teachLanzado       = false;
+    teachEsperando     = false;
+    teachStream        = false;
+    jogVx = jogVy = jogVz = 0.0f;
 
     Serial.println("[EMERGENCIA] Parada manual. Presiona 'R' para rehomear.");
 

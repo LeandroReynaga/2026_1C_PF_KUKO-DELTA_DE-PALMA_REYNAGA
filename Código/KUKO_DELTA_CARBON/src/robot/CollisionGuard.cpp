@@ -306,13 +306,10 @@ void CollisionGuard::desarmar()
 // ------------------------------------------------------------------
 void CollisionGuard::silenciar(uint32_t ms)
 {
-    silencioHasta_ms  = millis() + ms;
-    silencioPendiente = true;
+    silencioHasta_ms = millis() + ms;
 
     for (uint8_t i = 0; i < NUM_EJES; i++)
     {
-        errorAlSilenciar[i] = errorDeg[i];
-
         // La sospecha que hubiera en curso no se arrastra: el silencio
         // existe porque lo que pase durante el no es informacion valida.
         enFalta[i]       = false;
@@ -366,51 +363,13 @@ bool CollisionGuard::actualizar(long pasos1, long pasos2, long pasos3)
     const bool enSilencio = (silencioHasta_ms != 0) &&
                             ((int32_t)(ahora - silencioHasta_ms) < 0);
 
-    if (silencioPendiente && !enSilencio)
-    {
-        silencioPendiente = false;
-
-        // Cuanto corrio el error de cada eje mientras conmutaba la bomba.
-        // Los 3 juntos y para el mismo lado = la alimentacion se hundio;
-        // uno solo = movimiento real de ese eje.
-        const float salto[NUM_EJES] = {errorDeg[0] - errorAlSilenciar[0],
-                                        errorDeg[1] - errorAlSilenciar[1],
-                                        errorDeg[2] - errorAlSilenciar[2]};
-
-        Serial.print("[GUARD] bomba: salto del error e1=");
-        Serial.print(salto[0], 1);
-        Serial.print(" e2=");
-        Serial.print(salto[1], 1);
-        Serial.print(" e3=");
-        Serial.print(salto[2], 1);
-
-        // Si los TRES se corrieron juntos y para el mismo lado, no se movio
-        // nada: se hundio el riel que alimenta los encoders (la salida del
-        // AS5600 es ratiometrica a su VCC, el ADC del ESP32 no). Ese escalon
-        // se mete en la referencia y listo, porque mientras la bomba siga
-        // andando el corrimiento no se va a ir solo -- silenciar un rato no
-        // alcanza, vuelve a aparecer apenas termina el silencio.
-        //
-        // Una colision no hace esto: no mueve los 3 ejes la misma cantidad
-        // y para el mismo lado justo en el instante en que conmuto la bomba.
-        // El limite de 45 grados es para no tragarse cualquier cosa.
-        const bool mismoSigno = (salto[0] > 0.0f && salto[1] > 0.0f && salto[2] > 0.0f) ||
-                                 (salto[0] < 0.0f && salto[1] < 0.0f && salto[2] < 0.0f);
-
-        bool acotado = true;
-        for (uint8_t i = 0; i < NUM_EJES; i++)
-        {
-            if (fabsf(salto[i]) > 45.0f) acotado = false;
-        }
-
-        // Solo informativo: el corrimiento se cancela en cada vuelta por
-        // rechazo de modo comun (ver mas abajo), no aca. Meterlo en la
-        // referencia era peligroso: si el brazo ya arranco a moverse
-        // -- pasa con la pieza siguiente, que sale 5 ms despues de soltar --
-        // lo que se mide no es la bomba sino movimiento real, y se absorbia
-        // un error enorme que despues aparecia como colision.
-        Serial.println(mismoSigno && acotado ? "  -> comun a los 3: es la alimentacion" : "");
-    }
+    // El corrimiento que mete la bomba NO se compensa aca: lo cancela en
+    // cada vuelta el rechazo de modo comun de abajo. Hubo una version que
+    // ademas lo volcaba por Serial ("bomba: salto del error e1=..."), y se
+    // saco: salia dos veces por pieza -- varias lineas por segundo con el
+    // robot produciendo -- y no es algo que se lea en vivo. Lo que hace
+    // falta para diagnosticar esto sigue estando en [T] (error contra
+    // umbral, 10 Hz) y en [H] (picos y ganancia por eje).
 
     // --- Rechazo de modo comun ---
     // Cuando se hunde el riel de los encoders (la bomba), las TRES lecturas
@@ -697,13 +656,11 @@ bool CollisionGuard::actualizar(long pasos1, long pasos2, long pasos3)
                 hayFirmaPrevia[i]      = true;
                 recorridoDesdeFirma[i] = 0.0f;
 
-                Serial.print("[GUARD] eje ");
-                Serial.print(i + 1);
-                Serial.print(": firma de reposo en home = ");
-                Serial.print(firmaRep[i], 2);
-                Serial.print(" grados (salto desde la parada anterior ");
-                Serial.print(salto, 2);
-                Serial.println(")");
+                // Aca se imprimia la firma de cada parada. Se saco: se toma
+                // una firma nueva por eje CADA VEZ que el brazo se asienta
+                // en home, o sea tres lineas por pieza. El salto entre dos
+                // firmas sigue avisando cuando se pasa de la tolerancia
+                // (arriba), que es el unico caso que hay que mirar.
             }
 
             // Sin firma no hay contra que comparar: no se evalua nada.

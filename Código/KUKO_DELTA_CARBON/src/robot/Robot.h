@@ -43,7 +43,15 @@ public:
         BOX_DESCEND,     // alfajores: accel MIN, apoya el alfajor en la celda
         BOX_LIFT,        // alfajores: accel MAX, sale de la caja hacia arriba
         COLLISION_STOP,  // colision detectada: frenado y quieto antes de recalibrar
-        ERROR
+        ERROR,
+
+        // Modo aprendizaje: el ciclo de clasificacion esta suspendido y el
+        // brazo lo maneja el operador desde la interfaz (jog manual) o la
+        // reproduccion de una secuencia grabada. Va AL FINAL a proposito:
+        // el indice de este enum viaja tal cual en la telemetria y meter un
+        // estado en el medio corre la numeracion de todos los siguientes
+        // (ver PROTOCOLO.md 3.1). Por eso ERROR ya no es el ultimo.
+        TEACH
     };
 
     // Como se decide a donde va cada pieza. Lo elige el operador desde la
@@ -263,6 +271,128 @@ private:
     void updateBoxDescend();
     void updateBoxLift();
     void updateCollisionStop();
+
+    // ------------------------------------------------------------------
+    //  Modo Teach (aprendizaje)
+    // ------------------------------------------------------------------
+    // Dos cosas distintas conviven en el mismo estado:
+    //
+    //   JOG        el operador mueve el brazo a mano. La interfaz manda una
+    //              DIRECCION (no una posicion) y el firmware la integra en
+    //              tramos cortos: asi el brazo va siempre a un destino que
+    //              ya sabe que es alcanzable y esta dentro del volumen, y
+    //              nunca queda persiguiendo un objetivo que se le escapa.
+    //
+    //   PLAYBACK   se sube una ruta de puntos y el firmware la recorre
+    //              solo. Esta del lado del ESP32 y no del PC porque encadenar
+    //              los tramos por serie meteria el ida y vuelta del enlace
+    //              entre punto y punto; asi el salto de uno al siguiente es
+    //              una vuelta de loop.
+    //
+    // La grabacion, el nombre de cada secuencia y los porcentajes ya
+    // verificados viven en la interfaz de Python: el firmware solo ejecuta.
+    static const uint8_t TEACH_MAX_PUNTOS = 150;
+
+    struct TeachPunto
+    {
+        float    x, y, z;      // punta del gripper, cm
+        uint16_t espera_ms;    // cuanto se queda quieto AL LLEGAR
+        bool     bomba;        // estado del vacio al llegar
+    };
+
+    TeachPunto teachRuta[TEACH_MAX_PUNTOS];
+    uint8_t    teachPuntos = 0;   // cargados en el buffer
+    uint8_t    teachIndice = 0;   // punto que se esta ejecutando (0-based)
+
+    bool     teachReproduciendo = false;
+    bool     teachLanzado       = false; // el movimiento del punto ya salio
+    bool     teachEsperando     = false; // cumpliendo la espera del punto
+    uint32_t teachEsperaHasta_ms = 0;
+
+    // Porcentaje de VEL_MAX / ACC_RAPIDA con el que corre la reproduccion.
+    // Lo fija la interfaz en cada pasada (15 -> 50 -> 100), que es la
+    // verificacion progresiva de una secuencia recien grabada.
+    float teachEscala = 15.0f;
+
+    // Se pidio entrar a teach pero el robot todavia esta terminando lo que
+    // tenia entre manos. No se entra en el acto a proposito: se entra desde
+    // home y con el brazo detenido, y eso es lo que hace que la posicion de
+    // partida sea conocida sin necesitar cinematica DIRECTA en el firmware.
+    bool teachPedido = false;
+
+    // Posicion comandada de la punta (cm). Es la referencia del jog y la
+    // deja escrita todo movimiento de teach.
+    float teachX = 0.0f, teachY = 0.0f, teachZ = 0.0f;
+
+    // Direccion de jog pedida por la interfaz, cada componente en [-1, 1].
+    // VENCE SOLA: si la interfaz deja de refrescarla (se cerro el navegador,
+    // se corto el enlace) el brazo se para en el tramo que este haciendo,
+    // en vez de seguir hasta la pared del volumen.
+    float    jogVx = 0.0f, jogVy = 0.0f, jogVz = 0.0f;
+    uint32_t jogVigenteHasta_ms = 0;
+    uint32_t jogUltimoPaso_ms   = 0;
+
+    static const uint32_t TEACH_JOG_TICK_MS  = 80;  // cadencia de los tramos
+    static const uint32_t TEACH_JOG_VIDA_MS  = 350; // vigencia de la direccion
+
+    // Volcado de la posicion COMANDADA a 20 Hz, que la interfaz enciende
+    // mientras tiene la pestana de teach a la vista ('JG1').
+    //
+    // Es lo que se graba. Podria grabarse en cambio la posicion MEDIDA, que
+    // ya viaja en [T], pero el AS5600 analogico tiene ~1 grado de ruido y en
+    // cartesiano eso son milimetros que despues se reproducen como temblor:
+    // lo que el operador enseño es a donde llevo el brazo, no como vibro el
+    // sensor. Y podria calcularla la interfaz integrando el jog, pero el
+    // firmware saltea ticks cuando el brazo no llega, asi que las dos cuentas
+    // divergirian sin que nadie se entere.
+    //
+    // Solo existe con la pestana abierta: 20 Hz por 38 bytes son 760 B/s, que
+    // no tiene sentido gastar el 99 % del tiempo en que nadie los mira.
+    bool     teachStream          = false;
+    uint32_t teachStreamUltimo_ms = 0;
+
+    static const uint32_t TEACH_STREAM_MS = 50;
+
+    // Tramo que se esta recorriendo ahora mismo: de donde salio, cuanto
+    // mide en cm y cuanto en pasos del eje que mas recorre. Con eso se
+    // calcula a que altura del tramo hay que empezar a mezclar la esquina.
+    float teachOrigenX = 0.0f, teachOrigenY = 0.0f, teachOrigenZ = 0.0f;
+    float teachTramoCm    = 0.0f;
+    long  teachTramoPasos = 0;
+
+    void updateTeach();
+    void updateTeachPlayback();
+
+    // Limites de movimiento del modo teach al `escalaPct` %. Un solo lugar
+    // para que el jog y la reproduccion no se separen nunca.
+    Motors::MotionLimits limitesTeach(float escalaPct) const;
+
+    // Si el punto `k` se puede pasar de largo sin frenar. No se mezcla un
+    // punto que tenga espera o cambio de bomba (esos hay que cumplirlos
+    // donde estan), ni una esquina cerrada (ahi el tiron que se quiere
+    // evitar lo produce la esquina misma, no el freno).
+    bool teachMezclable(uint8_t k) const;
+
+    // Redirige al punto `siguiente` sin frenar. false si no se pudo, y en
+    // ese caso no se toco nada: se sigue por el camino de siempre.
+    bool teachMezclar(uint8_t siguiente);
+
+    bool entrarTeach();
+    void salirTeach();
+    void teachAbortar(const char *motivo);
+
+    // Recorta el destino al volumen de trabajo declarado. Se aplica SIEMPRE,
+    // venga de donde venga el pedido: la interfaz tambien recorta, pero el
+    // que no puede equivocarse es este.
+    void teachRecortar(float &x, float &y, float &z) const;
+
+    // Recorta, resuelve la cinematica y lanza el movimiento con los limites
+    // reducidos. false si el punto no tiene solucion (no se mueve nada).
+    bool teachMover(float x, float y, float z, float escalaPct);
+
+    bool procesarComandoTeach(const char *cmd);
+
+    void teachInformar() const;
 
     // ------------------------------------------------------------------
     //  Supervision por encoders (lazo cerrado de seguridad)

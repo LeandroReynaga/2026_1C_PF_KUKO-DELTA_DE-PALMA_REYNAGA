@@ -681,9 +681,7 @@ private:
     static const uint32_t REPETIR_AVISO_OBS_MS = 2000;
 
     // Silencio temporal (conmutacion de la bomba).
-    uint32_t silencioHasta_ms         = 0;
-    bool     silencioPendiente        = false;
-    float    errorAlSilenciar[NUM_EJES] = {0.0f, 0.0f, 0.0f};
+    uint32_t silencioHasta_ms = 0;
 
     // Grados de encoder de un eje, con el signo de montaje ya aplicado.
     float leerEncoder(uint8_t eje) const;
