@@ -187,6 +187,12 @@ tocarlo son:
   así que reemitir uno con el eje andando dejaría al brazo persiguiendo un
   objetivo que se le escapa. Con esta forma se frena solo en vez de acumular
   atraso.
+- **«Ir a una coordenada» (`JI`) pasa por home si el brazo no está ahí.**
+  Quien escribe X, Y, Z no ve por dónde va a pasar el brazo, y la recta entre
+  dos puntos bajos del volumen raspa la cinta. Home es brazos horizontales,
+  lo más alto que llega el robot, así que subir y bajar no toca nada. Los dos
+  tramos van a `FAST_LIMITS` y **no** se encadenan sin frenar: redondear la
+  esquina de home cortaría el rodeo, que es todo el punto.
 - **Se entra desde `WAIT_PIECE` y no en el acto** (`J1` deja el pedido). Ahí el
   brazo está quieto, en home y con las manos vacías, que es lo que hace
   conocida la posición de partida sin que el firmware necesite cinemática

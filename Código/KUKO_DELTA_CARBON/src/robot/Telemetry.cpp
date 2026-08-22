@@ -4,7 +4,7 @@
 // formato de una linea de forma que rompa a la interfaz vieja: agregar un
 // campo al final NO rompe nada (el parser de Python ignora lo que no
 // conoce), pero renombrar o sacar uno si.
-static const uint8_t VERSION_PROTOCOLO = 2;
+static const uint8_t VERSION_PROTOCOLO = 3;
 
 // Fecha de compilacion como identificacion del firmware. No es un hash de
 // git, pero alcanza para lo que hace falta: darse cuenta de que la placa

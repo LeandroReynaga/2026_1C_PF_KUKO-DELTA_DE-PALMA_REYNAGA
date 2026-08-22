@@ -29,7 +29,7 @@ from typing import Optional
 # Versión del contrato. El firmware la anuncia en su línea [BOOT] y el
 # núcleo compara: si no coinciden, la interfaz no habilita los controles.
 # Un protocolo desparejo hay que verlo ANTES de mover el brazo.
-VERSION_PROTOCOLO = 2
+VERSION_PROTOCOLO = 3
 
 
 # ==================================================================
@@ -411,6 +411,8 @@ class Teach(Mensaje):
     #:   "buf"     cambió la cantidad de puntos cargados
     #:   "run"     arrancó una reproducción
     #:   "fin"     terminó bien
+    #:   "ir"      arrancó un "ir a una coordenada" (x, y, z del destino)
+    #:   "irfin"   el "ir a" llegó
     #:   "abort"   se cortó (ver `motivo`)
     #:   "err"     un pedido rechazado (ver `error`)
     #:   "estado"  el volcado completo de `J?`
@@ -928,6 +930,23 @@ def cmd_teach_mover(x: float, y: float, z: float) -> str:
     """Destino absoluto de la punta, en cm. El firmware recorta al volumen."""
 
     return f"JM{x:.2f},{y:.2f},{z:.2f}\n"
+
+
+def cmd_teach_ir(x: float, y: float, z: float) -> str:
+    """Va a un punto PASANDO POR HOME, a máxima velocidad y aceleración.
+
+    La diferencia con `cmd_teach_mover` no es la velocidad sino el camino:
+    quien escribe una coordenada no ve por dónde va a pasar el brazo, y la
+    recta entre dos puntos bajos del volumen va raspando la cinta. Home es
+    brazos horizontales -- lo más arriba que llega el robot --, así que subir
+    primero y bajar después no puede tocar nada. Si el brazo ya está en home,
+    el rodeo se saltea.
+
+    El firmware contesta `[TEACH] ir ...` al arrancar y `[TEACH] irfin` al
+    llegar; `JX` lo corta igual que a una reproducción.
+    """
+
+    return f"JI{x:.2f},{y:.2f},{z:.2f}\n"
 
 
 def cmd_teach_jog(vx: float, vy: float, vz: float) -> str:

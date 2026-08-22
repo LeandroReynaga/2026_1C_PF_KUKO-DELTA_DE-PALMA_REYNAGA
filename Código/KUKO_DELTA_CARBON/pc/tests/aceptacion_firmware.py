@@ -165,7 +165,7 @@ def main() -> int:
         if r.check(lat is not None, "existe el parametro 'vis_lat'"):
             r.check(
                 lat.minimo < 0,
-                "'vis_lat' acepta negativos (el slider va de -0,1 a 0,3)",
+                "'vis_lat' acepta negativos (el slider va de -0,2 a 0,5)",
                 f"min={lat.minimo} max={lat.maximo} u={lat.unidad}",
             )
 

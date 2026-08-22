@@ -68,6 +68,27 @@ COLUMNAS_ALCANCE = 33
 FILAS_ALCANCE = 48
 PASO_CACHE_Z = 0.25
 
+# Lienzo del plano isometrico del modo teach. Es una relacion de aspecto
+# fija, y el panel que lo contiene se dimensiona con ella (ver `_teach`): si
+# el panel fuera mas ancho, el SVG se centraria adentro y las dos franjas que
+# quedan al costado son ancho de pantalla tirado.
+ANCHO_PLANO, ALTO_PLANO = 640.0, 470.0
+
+# Lado del joystick en pixeles. Lo necesitan el div, el dibujo y la cuenta
+# que pasa de pixeles a direccion, asi que va en un solo lugar.
+LADO_JOYSTICK = 150.0
+
+# Cuanto se da por buena la marca de "hay un ir a una coordenada en curso"
+# sin noticias del firmware. El movimiento real son uno o dos segundos; esto
+# es el vencimiento por si se pierde el evento de llegada, y por eso es tan
+# holgado: sobra para cualquier recorrido y no deja la pantalla trabada.
+ESPERA_IR_S = 20.0
+
+# Lo que se espera la CONFIRMACION del firmware ('[TEACH] ir'). Es corto a
+# proposito: un pedido que no se confirma no es un movimiento largo, es un
+# firmware que no conoce el comando, y ahi la pantalla tiene que volver sola.
+ESPERA_IR_CONFIRMA_S = 1.5
+
 
 def _svg_dial(indice: int, comandado: Optional[float], medido: Optional[float]) -> str:
     """Un dial: sector celeste = angulo comandado, aguja amarilla = encoder."""
@@ -249,6 +270,13 @@ class Interfaz:
         self.teach_sel: Optional[int] = None
         self.teach_mov_en_curso: Optional[tch.Movimiento] = None
         self.teach_pct_en_curso = 0
+
+        # Hay un "ir a una coordenada" en curso. El firmware no lo informa en
+        # la telemetría periódica -- son uno o dos segundos --, así que se
+        # sigue por los eventos `[TEACH] ir` / `irfin`. Por si alguno se
+        # pierde, la marca vence sola: el peor caso es un botón que se
+        # rehabilita tarde, no uno que no se rehabilita nunca.
+        self.teach_yendo_hasta = 0.0
 
         self._teach_evento_visto = 0
         self._cola_subida: list = []
@@ -1215,11 +1243,27 @@ class Interfaz:
         est = self.estado
         vivo = est.enlace_vivo()
 
-        color = COLOR_ESTADO[VERDE] if vivo else COLOR_ESTADO[ROJO]
-        texto = (f"{est.puerto} · {est.fps_camara:.0f} fps"
-                 if vivo else (est.error_enlace or "sin enlace"))
+        # Un firmware con otra versión de protocolo se avisa ACÁ y no sólo
+        # en la consola. Es la falla que más caro sale de encontrar: la
+        # interfaz nueva dibuja controles que la placa vieja no conoce, así
+        # que el botón anda, el comando sale, el ESP32 contesta "comando
+        # invalido" en una línea que nadie está mirando y el brazo no se
+        # mueve. Pasó de verdad con `JI`.
+        vieja = bool(est.boot and not est.boot.compatible)
+
+        if vivo and vieja:
+            senal, color = ROJO, COLOR_ESTADO[ROJO]
+            texto = (f"firmware desparejo (proto={est.boot.proto}, "
+                     f"la interfaz habla {pr.VERSION_PROTOCOLO}): hay que reflashear")
+        elif vivo:
+            senal, color = VERDE, COLOR_ESTADO[VERDE]
+            texto = f"{est.puerto} · {est.fps_camara:.0f} fps"
+        else:
+            senal, color = ROJO, COLOR_ESTADO[ROJO]
+            texto = est.error_enlace or "sin enlace"
+
         self.chip_enlace.content = (
-            f'{_punto(VERDE if vivo else ROJO)}'
+            f'{_punto(senal)}'
             f'<span style="color:{color};font-size:13px">{texto}</span>')
 
         for clave, chequeo in est.chequeos().items():
@@ -1436,14 +1480,54 @@ class Interfaz:
 
     def _teach(self) -> None:
         with ui.row().classes("w-full gap-2 p-2 no-wrap").style("height:100%"):
+            # ================= Movimientos grabados =================
+            # A la izquierda y de alto completo: es la lista que se recorre
+            # para elegir que reproducir, y con doce secuencias adentro de un
+            # panel de un cuarto de alto habia que scrollear para ver
+            # cualquier cosa. Se lleva el ancho que sobra (flex:1) porque el
+            # volumen de al lado ya no lo usa: su panel se ajusta al dibujo.
+            with ui.column().classes("panel p-3 gap-2 no-wrap") \
+                    .style("flex:1 1 0;min-width:270px;height:100%;min-height:0"):
+                with ui.row().classes("w-full items-center no-wrap gap-2"):
+                    ui.label("Movimientos").classes("titulo").style("flex:1 1 0")
+                    self.etiqueta_grabacion = ui.label("").style(
+                        f"color:{APAGADO};font-size:12px")
+
+                with ui.row().classes("w-full gap-2 no-wrap"):
+                    self.boton_grabar = ui.button(
+                        "Grabar  ·  R", on_click=self._teach_grabar) \
+                        .props("unelevated dense no-caps").style("flex:1 1 0")
+                    self.boton_reproducir = ui.button(
+                        "Reproducir  ·  P", on_click=self._teach_reproducir) \
+                        .props("unelevated dense no-caps").style("flex:1 1 0")
+
+                self.lista_teach = ui.column().classes("w-full gap-0") \
+                    .style("flex:1 1 0;min-height:0;overflow-y:auto")
+
             # ================= Volumen de trabajo =================
-            # 'items-stretch' no es decorativo: la columna de NiceGUI alinea
-            # sus hijos al principio, asi que sin esto el panel se encoge al
-            # ancho de su contenido y deja media pantalla vacia al lado.
+            # La columna se ajusta al ANCHO DEL DIBUJO en vez de estirarse.
+            # El SVG tiene una relacion de aspecto fija, asi que adentro de
+            # un panel mas ancho se centraba y dejaba dos franjas muertas a
+            # los costados -- que es lo que se veia. Con 'aspect-ratio' sobre
+            # la columna, el ancho sale del alto y el panel termina justo
+            # donde termina el dibujo: mismo tamaño, sin los margenes.
+            #
+            # El alto tiene que ser el de la propiedad 'height' y no el que
+            # reparte el flex: el ancho de una fila se resuelve ANTES que el
+            # alto de sus hijos, asi que un alto que sale de estirarse todavia
+            # no existe cuando hace falta. Por eso va aca (height:100%, que
+            # cuelga de una cadena de altos definidos) y no en el panel.
+            #
+            # Los 60 px de mas son lo que el dibujo no ocupa: el titulo, el
+            # padding y el panel de posicion de abajo. Aproximado a proposito
+            # -- errarle por unos pixeles deja un margen de unos pocos, no las
+            # franjas de antes.
             with ui.column().classes("gap-2 no-wrap items-stretch") \
-                    .style("flex:1 1 0;height:100%;min-height:0"):
+                    .style(f"flex:0 1 auto;height:100%;min-height:0;"
+                           f"min-width:320px;"
+                           f"aspect-ratio:{ANCHO_PLANO:.0f} / {ALTO_PLANO + 60:.0f}"):
                 with ui.column().classes("panel p-2 gap-1 no-wrap") \
-                        .style("flex:1 1 0;min-height:0"):
+                        .style("flex:1 1 0;min-height:0;min-width:0"):
                     ui.label("Volumen de trabajo").classes("titulo")
                     self.html_plano = ui.html().style(
                         "flex:1 1 0;min-height:0;width:100%")
@@ -1476,20 +1560,40 @@ class Interfaz:
 
                     with ui.row().classes("w-full gap-3 no-wrap items-center"):
                         self.zona_joystick = ui.element("div").style(
-                            "flex:0 0 150px;height:150px;position:relative;"
+                            f"flex:0 0 {LADO_JOYSTICK:.0f}px;"
+                            f"height:{LADO_JOYSTICK:.0f}px;position:relative;"
                             "cursor:crosshair;touch-action:none;user-select:none")
 
                         with self.zona_joystick:
                             self.html_joystick = ui.html().style(
                                 "width:100%;height:100%;pointer-events:none")
 
-                        self.zona_joystick.on("mousedown", self._joy_apretar,
-                                              ["offsetX", "offsetY"])
-                        self.zona_joystick.on("mousemove", self._joy_mover,
+                        # Eventos de PUNTERO y no de mouse, por la captura:
+                        # 'setPointerCapture' hace que todos los eventos de
+                        # ese puntero sigan llegando a este div aunque el
+                        # cursor se vaya afuera. Sin eso el navegador deja de
+                        # mandar 'mousemove' apenas se sale del cuadrado y el
+                        # jog se cortaba solo -- que con un circulo de 150 px
+                        # es a cada rato, porque para pedir velocidad maxima
+                        # hay que estar justo contra el borde.
+                        #
+                        # Ojo: el que se suelta ya no es 'mouseleave' sino
+                        # 'pointerup'/'pointercancel', que con la captura
+                        # llegan igual con el cursor afuera. 'mouseleave'
+                        # NO puede seguir estando: se dispara al cruzar el
+                        # borde arrastrando, que es justamente lo que se
+                        # quiere permitir.
+                        self.zona_joystick.on(
+                            "pointerdown", self._joy_apretar,
+                            ["offsetX", "offsetY"],
+                            js_handler="(e) => { "
+                                       "e.currentTarget.setPointerCapture(e.pointerId); "
+                                       "emit(e); }")
+                        self.zona_joystick.on("pointermove", self._joy_mover,
                                               ["offsetX", "offsetY", "buttons"],
                                               throttle=PERIODO_TEACH_S)
-                        self.zona_joystick.on("mouseup", self._joy_soltar)
-                        self.zona_joystick.on("mouseleave", self._joy_soltar)
+                        self.zona_joystick.on("pointerup", self._joy_soltar)
+                        self.zona_joystick.on("pointercancel", self._joy_soltar)
 
                         with ui.column().classes("gap-2 no-wrap").style("flex:1 1 0"):
                             self.boton_z_sube = self._boton_pulsado(
@@ -1500,29 +1604,46 @@ class Interfaz:
                                 "Vacío  ·  E", on_click=self._teach_bomba) \
                                 .props("unelevated dense no-caps").classes("w-full")
 
-                    ui.label("Arrastrá el joystick con el mouse o usá W A S D "
+                    ui.label("Arrastrá el joystick con el mouse (podés salirte del "
+                             "círculo sin soltar) o usá W A S D "
                              "en el plano, ↑ ↓ para la altura y E para el vacío. "
                              "La velocidad y la aceleración van al 15 %.") \
                         .style(f"color:{APAGADO};font-size:11.5px;line-height:1.35")
 
-                # --- grabacion ---
-                with ui.column().classes("panel p-3 gap-2") \
-                        .style("flex:1 1 0;min-height:0"):
-                    with ui.row().classes("w-full items-center no-wrap gap-2"):
-                        ui.label("Movimientos").classes("titulo").style("flex:1 1 0")
-                        self.etiqueta_grabacion = ui.label("").style(
-                            f"color:{APAGADO};font-size:12px")
+                # El hueco empuja el módulo de coordenada contra el borde de
+                # abajo: el modo y el jog no crecen, y la lista de
+                # movimientos -- lo único que tiene sentido estirar -- está
+                # del otro lado.
+                ui.element("div").style("flex:1 1 0;min-height:0")
 
-                    with ui.row().classes("w-full gap-2 no-wrap"):
-                        self.boton_grabar = ui.button(
-                            "Grabar  ·  R", on_click=self._teach_grabar) \
-                            .props("unelevated dense no-caps").style("flex:1 1 0")
-                        self.boton_reproducir = ui.button(
-                            "Reproducir  ·  P", on_click=self._teach_reproducir) \
-                            .props("unelevated dense no-caps").style("flex:1 1 0")
+                # --- ir a una coordenada ---
+                with ui.column().classes("panel p-3 gap-2").style("flex:0 0 auto"):
+                    ui.label("Ir a una coordenada").classes("titulo")
 
-                    self.lista_teach = ui.column().classes("w-full gap-0") \
-                        .style("flex:1 1 0;min-height:0;overflow-y:auto")
+                    with ui.row().classes("w-full gap-2 no-wrap items-center"):
+                        self.campos_ir = {}
+
+                        for eje in ("x", "y", "z"):
+                            campo = ui.number(label=eje.upper(), value=None,
+                                              step=0.5, format="%.2f") \
+                                .props("dense outlined").style("flex:1 1 0")
+                            campo.on("keydown.enter", lambda _: self._teach_ir())
+                            self.campos_ir[eje] = campo
+
+                        self.boton_ir = ui.button("Ir", on_click=self._teach_ir) \
+                            .props("unelevated dense no-caps") \
+                            .style("flex:0 0 66px")
+
+                    # El rango se escribe acá y no se deja para el rechazo: es
+                    # la diferencia entre elegir un número que entra y probar
+                    # a ver cuál entra.
+                    # El rango es lo ÚNICO que va debajo de los campos: el
+                    # panel tiene que entrar en la columna sin scrollear, y
+                    # una explicación de tres renglones que se lee una vez en
+                    # la vida no vale ese precio. Lo que hace el botón está
+                    # en PROTOCOLO.md §6.3.1.
+                    self.etiqueta_ir = ui.label("").style(
+                        f"color:{APAGADO};font-size:11.5px;line-height:1.35")
 
         self._teach_rearmar_lista()
 
@@ -1647,7 +1768,7 @@ class Interfaz:
         self.joy_y = 0.0
 
     def _joy_desde_pixeles(self, evento) -> None:
-        lado = 150.0
+        lado = LADO_JOYSTICK
         radio = lado / 2.0
 
         dx = (float(evento.args.get("offsetX", radio)) - radio) / radio
@@ -1657,7 +1778,12 @@ class Interfaz:
 
         # Fuera del círculo se satura en el borde en vez de crecer: el
         # cuadrado del div tiene esquinas, y el brazo no tiene por qué ir más
-        # rápido en diagonal que de frente.
+        # rápido en diagonal que de frente. Con la captura del puntero esto
+        # dejó de ser el caso raro y pasó a ser el normal: el cursor se va
+        # bien afuera del div (offsets negativos o mayores al lado) y lo que
+        # se manda es el borde en esa dirección, o sea velocidad máxima hacia
+        # donde apunta la mano. Es lo que hace que no haya que apuntarle a un
+        # anillo de pocos píxeles para ir rápido.
         if largo > 1.0:
             dx, dy = dx / largo, dy / largo
 
@@ -1684,7 +1810,7 @@ class Interfaz:
 
         self._teach_eventos()
 
-        if not activo or self._reproduciendo():
+        if not activo or self._reproduciendo() or self._yendo():
             self.teach_teclas.clear()
             self.joy_x = self.joy_y = 0.0
             self._jog_enviar(0.0, 0.0, 0.0)
@@ -1747,6 +1873,10 @@ class Interfaz:
         self._sin_foco()
 
         if self._en_teach():
+            # Salir cancela todo lo que estuviera en curso, así que la marca
+            # del "ir a" se limpia acá y no vence sola: si no, al volver a
+            # entrar la pantalla seguiría creyendo que hay algo yendo.
+            self.teach_yendo_hasta = 0.0
             self.enviar(pr.cmd_teach(False))
             return
 
@@ -1774,6 +1904,70 @@ class Interfaz:
 
         t = self.estado.t
         self.enviar(pr.cmd_teach_bomba(not bool(t and t.bomba)))
+
+    # ------------------------------------------------------------------
+    #  Ir a una coordenada escrita
+    # ------------------------------------------------------------------
+    def _teach_ir(self) -> None:
+        """Manda el brazo a la coordenada de los tres campos.
+
+        El camino (por home si hace falta) y el recorte al volumen los
+        resuelve el firmware, que es el que no puede equivocarse. Lo que se
+        hace acá es no mandarle un pedido que ya se sabe que va a rechazar:
+        un rechazo se ve como una línea roja en la consola, y el operador se
+        queda sin saber cuál de los tres números estaba mal.
+        """
+
+        self._sin_foco()
+
+        if not self._en_teach():
+            ui.notify("Primero hay que entrar al modo Teach", color="warning")
+            return
+
+        if self.teach_grabando or self._reproduciendo() or self._yendo():
+            return
+
+        valores = {}
+
+        for eje, campo in self.campos_ir.items():
+            if campo.value is None:
+                ui.notify("Escribí las tres coordenadas", color="warning")
+                return
+
+            valores[eje] = float(campo.value)
+
+        limites = dict(zip("xyz", self._teach_limites()))
+
+        for eje, (lo, hi) in limites.items():
+            v = valores[eje]
+
+            if not lo <= v <= hi:
+                ui.notify(f"{eje.upper()} = {v:.2f} cm queda fuera del volumen "
+                          f"({lo:.2f} a {hi:.2f} cm)", color="warning")
+                return
+
+        x, y, z = valores["x"], valores["y"], valores["z"]
+
+        # El cajón tiene esquinas a las que un delta no llega: estar adentro
+        # de los límites no alcanza para que el punto exista.
+        if not cin.alcanzable(x, y, z):
+            ui.notify("El brazo no llega a ese punto: está adentro de los "
+                      "límites pero fuera de su alcance", color="warning")
+            return
+
+        if not self.enviar(pr.cmd_teach_ir(x, y, z)):
+            ui.notify("sin enlace con el robot", color="negative")
+            return
+
+        # Se bloquea CORTO hasta que el firmware confirme (`[TEACH] ir`), y
+        # recién ahí por el tiempo largo del movimiento. Si la placa no
+        # entiende el comando -- firmware viejo -- no contesta nada, y con el
+        # tiempo largo la pantalla se quedaba veinte segundos diciendo que
+        # estaba yendo, con el botón de parar sin nada que parar.
+        self.teach_yendo_hasta = time.monotonic() + ESPERA_IR_CONFIRMA_S
+
+    def _yendo(self) -> bool:
+        return time.monotonic() < self.teach_yendo_hasta
 
     # ------------------------------------------------------------------
     #  Grabación
@@ -1823,6 +2017,14 @@ class Interfaz:
     def _teach_reproducir(self) -> None:
         self._sin_foco()
 
+        # Con algo en curso, el mismo botón (y la misma tecla) es el de
+        # parar. Es a propósito: parar es lo único que hay que poder hacer
+        # sin buscar nada, y con el brazo yendo no existe otra cosa que ese
+        # botón pueda significar.
+        if self._reproduciendo() or self._yendo():
+            self.enviar(pr.cmd_teach_abortar())
+            return
+
         movimiento = self.biblioteca.obtener(self.teach_sel) \
             if self.teach_sel is not None else None
 
@@ -1834,7 +2036,7 @@ class Interfaz:
             ui.notify("Primero hay que entrar al modo Teach", color="warning")
             return
 
-        if self.teach_grabando or self._reproduciendo():
+        if self.teach_grabando:
             return
 
         self._teach_lanzar(movimiento, movimiento.siguiente_escalon)
@@ -1900,13 +2102,23 @@ class Interfaz:
         if evento.evento == "fin":
             self._teach_preguntar()
 
+        elif evento.evento == "ir":
+            # El firmware confirma que lo tomó: a partir de acá el jog y los
+            # botones quedan en pausa hasta que llegue (o hasta que venza).
+            self.teach_yendo_hasta = time.monotonic() + ESPERA_IR_S
+
+        elif evento.evento == "irfin":
+            self.teach_yendo_hasta = 0.0
+
         elif evento.evento == "abort":
             self.teach_mov_en_curso = None
-            ui.notify(f"Reproducción cortada ({evento.motivo or 'sin motivo'})",
+            self.teach_yendo_hasta = 0.0
+            ui.notify(f"Movimiento cortado ({evento.motivo or 'sin motivo'})",
                       color="negative")
 
         elif evento.evento == "err":
             self.teach_mov_en_curso = None
+            self.teach_yendo_hasta = 0.0
             ui.notify(f"Teach: {evento.error}", color="negative")
 
     def _teach_preguntar(self) -> None:
@@ -1925,6 +2137,12 @@ class Interfaz:
         self.teach_mov_en_curso = None
 
         if movimiento is None:
+            return
+
+        # Un movimiento que YA estaba verificado al 100 % no tiene nada que
+        # confirmar: el cartel existe para subir de escalón, y de acá no se
+        # sube. Se pregunta por el 100 % una sola vez, la que lo verifica.
+        if not movimiento.falta_verificar:
             return
 
         if self._dialogo_teach is not None:
@@ -2059,8 +2277,14 @@ class Interfaz:
                 f'border-radius:2px;background:{CELESTE if elegido else "transparent"}">'
                 '</span>')
 
+            # El aviso de "sólo en esta PC" hace visible la regla de
+            # `teach.es_local`: lo que conserva el nombre de fábrica no viaja
+            # con el proyecto. Sin esto, la regla es magia y un movimiento
+            # que costó una tarde se pierde en la próxima máquina.
             fila["info"].text = (f"{len(movimiento.puntos)} puntos · "
-                                 f"{movimiento.duracion_s:.1f} s · {movimiento.creado}")
+                                 f"{movimiento.duracion_s:.1f} s · {movimiento.creado}"
+                                 + (" · sólo en esta PC"
+                                    if tch.es_local(movimiento.nombre) else ""))
 
             color = COLOR_ESTADO[colores.get(movimiento.verificado, ROJO)]
             texto = ("sin verificar" if movimiento.verificado == 0
@@ -2090,6 +2314,10 @@ class Interfaz:
 
         if movimiento is not None:
             fila["campo"].value = movimiento.nombre
+
+            # Renombrar puede haber sacado el movimiento del archivo local:
+            # el aviso de la fila tiene que reflejarlo en el acto.
+            self._teach_pintar_lista()
 
     def _teach_borrar(self, indice: int) -> None:
         movimiento = self.biblioteca.obtener(indice)
@@ -2181,7 +2409,7 @@ class Interfaz:
         limites = self._teach_limites()
         (xmin, xmax), (ymin, ymax), (zmin, zmax) = limites
 
-        ancho, alto = 640.0, 470.0
+        ancho, alto = ANCHO_PLANO, ALTO_PLANO
 
         cos30 = 0.8660254
         sin30 = 0.5
@@ -2398,7 +2626,7 @@ class Interfaz:
         return "".join(p)
 
     def _svg_joystick(self) -> str:
-        lado = 150.0
+        lado = LADO_JOYSTICK
         centro = lado / 2.0
         radio = centro - 6.0
 
@@ -2493,35 +2721,64 @@ class Interfaz:
             + celda("vacío", "activo" if (est.t and est.t.bomba) else "apagado"))
 
         # --- botones que dependen del estado ---
+        # "Ocupado" es cualquier movimiento que el operador no está manejando
+        # en vivo: una reproducción o un "ir a una coordenada". Los dos dejan
+        # el jog en pausa y los dos se cortan con el mismo botón.
+        ocupado = self._reproduciendo() or self._yendo()
+
         bomba = bool(est.t and est.t.bomba)
 
         self.boton_bomba.style(
             f'background:{CELESTE if bomba else INACTIVO}!important;'
             f'color:{"#0B1220" if bomba else APAGADO}!important')
-        self.boton_bomba.set_enabled(en_teach and not self._reproduciendo())
+        self.boton_bomba.set_enabled(en_teach and not ocupado)
 
         for boton in (self.boton_z_sube, self.boton_z_baja):
-            boton.set_enabled(en_teach and not self._reproduciendo())
+            boton.set_enabled(en_teach and not ocupado)
             boton.style(f'background:{INACTIVO}!important;color:{TEXTO}!important')
 
         self.boton_grabar.text = "Terminar  ·  R" if self.teach_grabando else "Grabar  ·  R"
         self.boton_grabar.style(
             f'background:{ROJO_STOP if self.teach_grabando else INACTIVO}!important;'
             f'color:{"#fff" if self.teach_grabando else TEXTO}!important')
-        self.boton_grabar.set_enabled(en_teach and not self._reproduciendo())
+        self.boton_grabar.set_enabled(en_teach and not ocupado)
 
         elegido = self.biblioteca.obtener(self.teach_sel) \
             if self.teach_sel is not None else None
 
+        # El porcentaje de la próxima pasada NO va en el botón: es el texto
+        # más largo del panel y desbordaba la columna. Se sigue viendo en la
+        # insignia de cada fila de la lista, en la etiqueta de acá abajo
+        # mientras corre y en el cartel del final, que son los tres lugares
+        # donde hace falta.
         self.boton_reproducir.set_enabled(
-            en_teach and elegido is not None
-            and not self.teach_grabando and not self._reproduciendo())
-        self.boton_reproducir.text = (
-            f"Reproducir al {elegido.siguiente_escalon} %  ·  P" if elegido
-            else "Reproducir  ·  P")
+            en_teach and not self.teach_grabando
+            and (ocupado or elegido is not None))
+        self.boton_reproducir.text = "Parar  ·  P" if ocupado else "Reproducir  ·  P"
+
+        listo = ocupado or elegido is not None
+
         self.boton_reproducir.style(
-            f'background:{CELESTE if elegido else INACTIVO}!important;'
-            f'color:{"#0B1220" if elegido else APAGADO}!important')
+            f'background:{ROJO_STOP if ocupado else (CELESTE if listo else INACTIVO)}'
+            '!important;'
+            f'color:{"#fff" if ocupado else ("#0B1220" if listo else APAGADO)}'
+            '!important')
+
+        # --- ir a una coordenada ---
+        (xmin, xmax), (ymin, ymax), (zmin, zmax) = self._teach_limites()
+
+        self.etiqueta_ir.text = (
+            f"X {xmin:.1f} a {xmax:.1f} · Y {ymin:.1f} a {ymax:.1f} · "
+            f"Z {zmin:.1f} a {zmax:.1f} cm")
+
+        self.boton_ir.set_enabled(en_teach and not ocupado and not self.teach_grabando)
+        self.boton_ir.style(
+            f'background:{CELESTE if (en_teach and not ocupado) else INACTIVO}'
+            '!important;'
+            f'color:{"#0B1220" if (en_teach and not ocupado) else APAGADO}!important')
+
+        for campo in self.campos_ir.values():
+            campo.set_enabled(en_teach and not ocupado)
 
         if self.teach_grabando:
             self.etiqueta_grabacion.text = (

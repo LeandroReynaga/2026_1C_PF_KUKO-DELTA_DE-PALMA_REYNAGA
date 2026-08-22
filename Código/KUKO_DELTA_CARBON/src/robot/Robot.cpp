@@ -186,11 +186,12 @@ static const uint8_t BOX_MAX_POR_COLOR = 3;
 // en que las detecto la vision (la cola es FIFO, ver iniciarSiguientePieza).
 
 // Cuanto se espera con la bomba apagada antes de sacar el brazo de la caja.
-// Es mas que RELEASE_DETACH_MS a proposito: en el tacho la pieza se suelta
-// en el aire y se cae sola, pero en la caja queda APOYADA con la ventosa
-// todavia tocandola, asi que tiene menos ayuda para despegarse. Si igual
-// sale pegada al gripper, este es el numero a subir (y la solucion de
-// fondo, la misma que en el tacho: la electrovalvula que falta).
+// Es un tiempo aparte del RELEASE_DETACH_MS del tacho porque el caso es
+// distinto: en el tacho la pieza se suelta en el aire y se cae sola, pero en
+// la caja queda APOYADA con la ventosa todavia tocandola, asi que tiene
+// menos ayuda para despegarse. Hoy esta en 0 -- con la electrovalvula
+// venteando la linea, el alfajor se suelta antes de que el brazo empiece a
+// subir. Si alguno sale pegado al gripper, este es el numero a subir.
 static float BOX_RELEASE_DETACH_MS = 0;
 
 // Ventana para confirmar un cambio de modo que cruza el limite de la tapa.
@@ -220,10 +221,11 @@ static float HOMING_SETTLE_WAIT_MS = 2500; // ventana de promediado de encoders
 static float BIN_SETTLE_MS         = 5;  // quieto sobre el tacho antes de soltar antes 200
 
 // Cuanto se espera con la bomba apagada para que la pieza se despegue del
-// gripper. Es un parche temporal: falta la electrovalvula que mete aire en
-// la linea de vacio al apagar la bomba. Cuando este montada (misma senal
-// que la bomba, no cambia el pinout) la pieza cae en el instante y este
-// tiempo se puede bajar a ~100 ms.
+// gripper. Con la electrovalvula montada (misma senal que la bomba) la linea
+// se ventea al apagar y la pieza cae en el acto: lo que se espera aca es que
+// entre el aire, no que el vacio se vaya por fuga -- que era lo que hacia
+// falta esperar cuando la linea quedaba cerrada. Si alguna pieza sale pegada
+// al gripper, este es el numero a subir.
 static float RELEASE_DETACH_MS = 80;
 
 // Cuanto antes del instante de bajada se prende la bomba de vacio. Ver el
@@ -1529,6 +1531,7 @@ void Robot::startHoming(bool conservarContexto)
     teachReproduciendo = false;
     teachLanzado       = false;
     teachEsperando     = false;
+    teachIrEtapa       = 0;
     teachStream        = false;
     jogVx = jogVy = jogVz = 0.0f;
 
@@ -2129,10 +2132,12 @@ void Robot::updateBinSettle()
 
 void Robot::updateReleaseWait()
 {
-    // Espera a que la pieza se despegue sola del gripper (ver
-    // RELEASE_DETACH_MS: es un parche hasta montar la electrovalvula). En la
-    // caja la espera es mas larga porque el alfajor queda apoyado y la
-    // ventosa sigue tocandolo (ver BOX_RELEASE_DETACH_MS).
+    // Espera a que la pieza se despegue sola del gripper: con la
+    // electrovalvula montada, lo que tarda en entrar el aire a la linea
+    // (ver RELEASE_DETACH_MS). La caja lleva su propio tiempo porque el
+    // alfajor queda APOYADO y la ventosa sigue tocandolo, o sea que tiene
+    // menos ayuda para despegarse que una pieza que se suelta en el aire
+    // (ver BOX_RELEASE_DETACH_MS).
     const uint32_t espera = (currentCell != CELDA_NINGUNA) ? BOX_RELEASE_DETACH_MS
                                                            : RELEASE_DETACH_MS;
 
@@ -2724,7 +2729,7 @@ void Robot::registrarParametros()
     // avanza la pieza entre que cruza la linea y que llega el mensaje.
     // Admite negativos a proposito (ver PROTOCOLO.md): si alguna vez la
     // correccion tuviera que ir para el otro lado, el rango ya lo permite.
-    params.registrar("vis_lat", &VISION_LATENCY_S, -0.20f, 0.30f, "s", NIVEL_OPERACION);
+    params.registrar("vis_lat", &VISION_LATENCY_S, -0.20f, 0.50f, "s", NIVEL_OPERACION);
 
     // --- Nivel 2: proceso (afinado del agarre y de la supervision) ---
     params.registrar("press_dz", &PRESS_DZ,    0.0f,   0.30f, "cm", NIVEL_PROCESO);
@@ -3108,12 +3113,13 @@ void Robot::teachRecortar(float &x, float &y, float &z) const
 
 bool Robot::teachMover(float x, float y, float z, float escalaPct)
 {
+    return teachMover(x, y, z, limitesTeach(escalaPct));
+}
+
+bool Robot::teachMover(float x, float y, float z,
+                       const Motors::MotionLimits &limites)
+{
     teachRecortar(x, y, z);
-
-    if (escalaPct < 1.0f)   escalaPct = 1.0f;
-    if (escalaPct > 100.0f) escalaPct = 100.0f;
-
-    const Motors::MotionLimits limites = limitesTeach(escalaPct);
 
     if (!goToPositionIK(x, y, z, limites))
     {
@@ -3125,6 +3131,97 @@ bool Robot::teachMover(float x, float y, float z, float escalaPct)
     teachZ = z;
 
     return true;
+}
+
+// ------------------------------------------------------------------
+bool Robot::teachEnHome() const
+{
+    // Home son los pasos (0,0,0): brazos horizontales. No hace falta
+    // cinematica directa para saberlo, que es justamente por que el camino
+    // seguro se define contra home y no contra una coordenada cartesiana.
+    return labs(motor1.getPosition()) <= TEACH_HOME_TOL_PASOS &&
+           labs(motor2.getPosition()) <= TEACH_HOME_TOL_PASOS &&
+           labs(motor3.getPosition()) <= TEACH_HOME_TOL_PASOS;
+}
+
+bool Robot::teachIr(float x, float y, float z)
+{
+    teachRecortar(x, y, z);
+
+    // Se resuelve la cinematica ANTES de mover nada: si el punto no tiene
+    // solucion, no tiene sentido subir a home para despues no poder bajar.
+    if (!DeltaKinematics::solveIK(x, y, z).success)
+    {
+        return false;
+    }
+
+    teachIrX = x;
+    teachIrY = y;
+    teachIrZ = z;
+
+    jogVx = jogVy = jogVz = 0.0f;
+    jogVigenteHasta_ms = 0;
+
+    if (teachEnHome())
+    {
+        // Ya esta arriba del todo: la recta a cualquier punto del volumen
+        // baja, y bajar no puede raspar nada.
+        if (!teachMover(teachIrX, teachIrY, teachIrZ, Motors::FAST_LIMITS))
+        {
+            return false;
+        }
+
+        teachIrEtapa = 2;
+    }
+    else
+    {
+        Motors::moveSynchronized(motor1, motor2, motor3, 0, 0, 0,
+                                 Motors::FAST_LIMITS);
+        teachIrEtapa = 1;
+    }
+
+    Serial.print("[TEACH] ir x=");
+    Serial.print(teachIrX, 2);
+    Serial.print(" y=");
+    Serial.print(teachIrY, 2);
+    Serial.print(" z=");
+    Serial.print(teachIrZ, 2);
+    Serial.print(" home=");
+    Serial.println(teachIrEtapa == 1 ? 1 : 0);
+
+    return true;
+}
+
+void Robot::updateTeachIr()
+{
+    // Un tramo por vez, igual que el jog: recien cuando el brazo llego se
+    // emite el siguiente. Encadenarlos sin frenar (redirigirSincronizado)
+    // seria redondear la esquina de home, que es lo unico que este camino
+    // no puede hacer -- el rodeo por arriba es todo el punto.
+    if (!enPosicion())
+    {
+        return;
+    }
+
+    if (teachIrEtapa == 1)
+    {
+        // En home. Durante este tramo teachX/Y/Z quedaron en el punto de
+        // donde salio (el firmware no tiene cinematica DIRECTA para saber
+        // en cartesiano donde esta home), y se corrigen aca, al lanzar el
+        // tramo que si termina en un punto conocido.
+        if (!teachMover(teachIrX, teachIrY, teachIrZ, Motors::FAST_LIMITS))
+        {
+            teachIrEtapa = 0;
+            Serial.println("[TEACH] err=ik");
+            return;
+        }
+
+        teachIrEtapa = 2;
+        return;
+    }
+
+    teachIrEtapa = 0;
+    Serial.println("[TEACH] irfin");
 }
 
 // ------------------------------------------------------------------
@@ -3170,6 +3267,7 @@ bool Robot::entrarTeach()
     teachReproduciendo = false;
     teachLanzado       = false;
     teachEsperando     = false;
+    teachIrEtapa       = 0;
     teachIndice        = 0;
 
     teachOrigenX = teachX;
@@ -3190,6 +3288,7 @@ void Robot::salirTeach()
     teachReproduciendo = false;
     teachLanzado       = false;
     teachEsperando     = false;
+    teachIrEtapa       = 0;
     jogVx = jogVy = jogVz = 0.0f;
     teachStream = false;
 
@@ -3210,7 +3309,10 @@ void Robot::salirTeach()
 
 void Robot::teachAbortar(const char *motivo)
 {
-    if (!teachReproduciendo)
+    // Corta lo que haya en curso: una reproduccion o un 'ir a'. Los dos son
+    // movimientos que el operador no esta manejando en vivo, y el boton de
+    // parar de la interfaz tiene que valer para los dos.
+    if (!teachOcupado())
     {
         return;
     }
@@ -3218,6 +3320,7 @@ void Robot::teachAbortar(const char *motivo)
     teachReproduciendo = false;
     teachLanzado       = false;
     teachEsperando     = false;
+    teachIrEtapa       = 0;
 
     motor1.stop();
     motor2.stop();
@@ -3248,6 +3351,12 @@ void Robot::updateTeach()
     if (teachReproduciendo)
     {
         updateTeachPlayback();
+        return;
+    }
+
+    if (teachIrEtapa != 0)
+    {
+        updateTeachIr();
         return;
     }
 
@@ -3555,6 +3664,7 @@ void Robot::teachInformar() const
 //    J0                      salir
 //    J?                      informar estado y volumen de trabajo
 //    JM<x>,<y>,<z>           mover la punta a un destino absoluto, en cm
+//    JI<x>,<y>,<z>           ir a un punto pasando por home, a maxima
 //    JD<vx>,<vy>,<vz>        direccion de jog, cada una en [-1, 1]
 //    JP1 / JP0               bomba de vacio
 //    JC                      vaciar la ruta cargada
@@ -3694,6 +3804,12 @@ bool Robot::procesarComandoTeach(const char *cmd)
             return true;
         }
 
+        if (teachIrEtapa != 0)
+        {
+            Serial.println("[TEACH] err=ocupado");
+            return true;
+        }
+
         float pct = 0.0f;
 
         if (leerFloats(resto, &pct, 1) != 1)
@@ -3796,9 +3912,14 @@ bool Robot::procesarComandoTeach(const char *cmd)
         // borde: la interfaz lo manda al arrancar la reproduccion, como
         // forma de decir "solte todo". Rechazarlo devolvia un err=ocupado
         // que no significaba nada.
-        if (teachReproduciendo)
+        if (teachOcupado())
         {
-            if (fabsf(v[0]) + fabsf(v[1]) + fabsf(v[2]) > 0.02f)
+            // Con una reproduccion en curso el rechazo se avisa; con un
+            // 'ir a', no. La diferencia es que el 'ir a' dura un segundo y
+            // el operador puede tener la tecla apretada de antes, y avisar
+            // ahi son diez lineas de err por nada.
+            if (teachReproduciendo &&
+                fabsf(v[0]) + fabsf(v[1]) + fabsf(v[2]) > 0.02f)
             {
                 Serial.println("[TEACH] err=ocupado");
             }
@@ -3818,9 +3939,33 @@ bool Robot::procesarComandoTeach(const char *cmd)
         return true;
     }
 
+    if (sub == 'I')
+    {
+        if (teachOcupado())
+        {
+            Serial.println("[TEACH] err=ocupado");
+            return true;
+        }
+
+        float v[3];
+
+        if (leerFloats(resto, v, 3) != 3)
+        {
+            Serial.println("[TEACH] err=formato");
+            return true;
+        }
+
+        if (!teachIr(v[0], v[1], v[2]))
+        {
+            Serial.println("[TEACH] err=ik");
+        }
+
+        return true;
+    }
+
     if (sub == 'M')
     {
-        if (teachReproduciendo)
+        if (teachOcupado())
         {
             Serial.println("[TEACH] err=ocupado");
             return true;
@@ -3847,7 +3992,7 @@ bool Robot::procesarComandoTeach(const char *cmd)
 
     Serial.print("[SERIAL] comando de teach invalido: '");
     Serial.print(cmd);
-    Serial.println("'. Validos: J1 J0 J? JM JD JP JC JA JR JX JG");
+    Serial.println("'. Validos: J1 J0 J? JM JI JD JP JC JA JR JX JG");
 
     return true;
 }
@@ -3875,6 +4020,7 @@ void Robot::emergencyStop()
     teachReproduciendo = false;
     teachLanzado       = false;
     teachEsperando     = false;
+    teachIrEtapa       = 0;
     teachStream        = false;
     jogVx = jogVy = jogVz = 0.0f;
 

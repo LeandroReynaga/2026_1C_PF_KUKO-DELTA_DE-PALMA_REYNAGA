@@ -1,4 +1,4 @@
-# Protocolo serie KUKO Delta Carbon — versión 2
+# Protocolo serie KUKO Delta Carbon — versión 3
 
 Contrato entre el firmware del ESP32 y la aplicación de PC. **Es la única
 referencia válida**: si el firmware y Python no coinciden acá, el error está
@@ -13,11 +13,15 @@ en el que se apartó del documento, no en el otro.
   descrita acá consume ~1,8 kB/s (16 %). El resto queda libre para eventos
   y para los volcados largos (`D`, `P?`).
 
-**Cambios de la versión 2** (§6): modo teach. Comandos `J...`, línea
-`[TEACH]`, dos campos nuevos en `[E]` y el estado `TEACH` al final del enum.
-Todo lo anterior quedó igual, pero la versión sube igual: si la interfaz y el
-firmware no coinciden, la pestaña de Teach parecería andar y no haría nada,
-que es la clase de falla que hay que ver antes y no delante del jurado.
+**Cambios de la versión 3** (§6.3.1): `JI`, ir a una coordenada escrita
+pasando por home, con sus eventos `[TEACH] ir` / `irfin`. También sube el
+tope de `vis_lat` a 0,50 s. Nada de lo anterior cambió, pero la versión sube
+igual, y esta vez con un caso real que lo justifica: con el firmware viejo en
+la placa, el módulo de coordenadas de la interfaz se dibujaba, aceptaba los
+números, decía que estaba yendo y el brazo no se movía — el ESP32 tiraba un
+`comando de teach invalido` a la consola que nadie estaba mirando. **Un
+firmware que no coincide hay que verlo al conectar, no descubrirlo con el
+brazo quieto.**
 
 **Cambios de la versión 2** (§6): modo teach. Comandos `J...`, línea
 `[TEACH]`, dos campos nuevos en `[E]` y el estado `TEACH` al final del enum.
@@ -129,7 +133,7 @@ error: se trata como texto.
 
 ### 2.1 `[BOOT]` — al arrancar el firmware
 
-    [BOOT] proto=2 fw=2026-08-19 estados=17 params=55
+    [BOOT] proto=3 fw=2026-08-21 estados=17 params=55
 
 `proto` es la versión de este documento. Si no coincide con la que espera
 Python, la interfaz avisa en grande y no habilita los controles: un
@@ -447,6 +451,36 @@ ritmo el jog se frena solo en vez de acumular deuda.
 
 Velocidad y aceleración van al `t_jogpct` % del tope (15 % de fábrica).
 
+### 6.3.1 Ir a una coordenada escrita
+
+    JI<x>,<y>,<z>        ir al punto pasando por home, a máxima
+
+    [TEACH] ir x=1.50 y=-2.00 z=-30.10 home=1
+    [TEACH] irfin
+
+La diferencia con `JM` no es la velocidad sino **el camino**: si el brazo no
+está en home, primero sube a home y recién desde ahí baja al punto. Quien
+escribe una coordenada no ve por dónde va a pasar el brazo, y la recta entre
+dos puntos bajos del volumen va raspando la cinta todo el camino. Home es
+brazos horizontales, o sea lo más arriba que llega el robot: subir primero y
+bajar después no puede tocar nada de lo que haya abajo. `home=1` en el evento
+dice que hizo el rodeo; `home=0`, que ya estaba arriba y fue derecho.
+
+Los dos tramos van a `FAST_LIMITS` —la velocidad y la aceleración del ciclo
+normal, no las de teach— y **no se encadenan sin frenar**: redondear la
+esquina de home sería justamente cortar el rodeo que es todo el punto.
+
+La cinemática se resuelve **antes** de arrancar: un punto sin solución se
+rechaza con `err=ik` sin mover nada, en vez de subir a home para después
+descubrir que no se puede bajar. Durante el tramo a home la posición
+comandada que informa `JG` se queda en el punto de partida — el firmware no
+tiene cinemática directa para decir en cartesiano dónde está home — y se
+corrige al lanzar el segundo tramo.
+
+`JX` lo corta igual que a una reproducción, y mientras dura, el jog se
+ignora en silencio (no `err=ocupado`: el operador puede tener una tecla
+apretada de antes y serían diez líneas por nada).
+
 ### 6.4 Volumen de trabajo
 
 Un cajón, más chico que el alcance real del brazo:
@@ -536,6 +570,13 @@ punto.
 
 Al terminar sale `[TEACH] fin`; si se corta, `[TEACH] abort motivo=<...>`.
 
+`JX` corta **cualquier** movimiento que el operador no esté manejando en vivo
+—una reproducción o un `JI`—, y por eso en la interfaz el botón de reproducir
+se convierte en *Parar* mientras hay algo andando, con la misma tecla. Es una
+parada seca (`Stepper::stop()`, sin rampa): a media velocidad puede perder
+pasos y dejar la posición corrida, que es lo que corresponde a un botón de
+parar y por lo que después conviene rehomear.
+
 ### 6.7 Verificación por etapas
 
 Un movimiento recién grabado **no se estrena a fondo**. Lleva una marca de
@@ -551,6 +592,11 @@ hasta dónde se verificó, con cuatro valores:
 Entre etapa y etapa la interfaz pregunta *«¿salió bien?»*, y **sólo esa
 confirmación sube el escalón**. Decir que no lo deja donde estaba, así que la
 próxima vez vuelve a arrancar por el escalón que faltaba.
+
+La pregunta aparece **mientras falte verificar algo**. Un movimiento que ya
+está en 100 se reproduce sin cartel al terminar: no hay escalón que subir, y
+un cartel que sólo se puede contestar de una forma es un click de más en cada
+pasada.
 
 Existe porque una trayectoria hecha a mano puede pasar cerca de algo que a
 paso de hombre no roza y a toda velocidad sí, y porque a 97.000 pasos/s² un

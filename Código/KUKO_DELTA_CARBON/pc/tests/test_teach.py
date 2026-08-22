@@ -14,6 +14,7 @@ Se corre con:  python -m pytest pc/tests   (o  python pc/tests/test_teach.py)
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import time
@@ -24,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from kuko import protocolo as pr
+from kuko import ui as ui_mod
 from kuko import teach as tch
 from kuko.estado import EstadoSistema
 
@@ -226,6 +228,45 @@ def test_la_biblioteca_sobrevive_al_disco():
         assert m.verificado == 50
         assert len(m.puntos) == 2
         assert m.puntos[1].bomba and m.puntos[1].espera_ms == 300
+
+
+def test_lo_que_conserva_el_nombre_de_fabrica_no_va_al_repositorio():
+    """El reparto entre los dos archivos lo decide el nombre, y nada más.
+
+    Es la regla que hace que el repositorio no se llene con el descarte de
+    cada tarde de pruebas sin que nadie tenga que acordarse de limpiarlo.
+    """
+
+    with tempfile.TemporaryDirectory() as carpeta:
+        archivo = Path(carpeta) / "movimientos.json"
+        biblioteca = tch.Biblioteca(archivo)
+
+        biblioteca.agregar(tch.Movimiento(nombre="Movimiento 7",
+                                          puntos=[tch.Punto(0, 0, -30)],
+                                          creado="2026-08-19 10:00"))
+        biblioteca.agregar(tch.Movimiento(nombre="Baile 1 - Vals",
+                                          puntos=[tch.Punto(1, 1, -30)],
+                                          creado="2026-08-19 11:00"))
+
+        versionados = json.loads(archivo.read_text(encoding="utf-8"))["movimientos"]
+        locales = json.loads(
+            biblioteca.archivo_local.read_text(encoding="utf-8"))["movimientos"]
+
+        assert [m["nombre"] for m in versionados] == ["Baile 1 - Vals"]
+        assert [m["nombre"] for m in locales] == ["Movimiento 7"]
+
+        # Para el operador siguen siendo una biblioteca sola.
+        assert len(tch.Biblioteca(archivo).movimientos) == 2
+
+        # Y renombrar uno lo muda de archivo, que es cómo se lo salva.
+        indice = [m.nombre for m in biblioteca.movimientos].index("Movimiento 7")
+        biblioteca.renombrar(indice, "Saludo")
+
+        versionados = json.loads(archivo.read_text(encoding="utf-8"))["movimientos"]
+
+        assert sorted(m["nombre"] for m in versionados) == ["Baile 1 - Vals", "Saludo"]
+        assert json.loads(
+            biblioteca.archivo_local.read_text(encoding="utf-8"))["movimientos"] == []
 
 
 def test_un_archivo_roto_no_impide_arrancar():
@@ -481,6 +522,133 @@ def test_el_volcado_de_posicion_se_enciende_y_se_apaga_solo():
         interfaz._teach_tick()
 
         assert "JG0" in banco.lineas
+
+    _correr_en_pagina(prueba)
+
+
+def test_ir_a_una_coordenada_manda_el_pedido_una_sola_vez():
+    def prueba(banco: Banco):
+        interfaz = banco.interfaz
+        interfaz._cambio_pestana(SimpleNamespace(value="Teach"))
+        banco.limpiar()
+
+        def escribir(x, y, z):
+            interfaz.campos_ir["x"].value = x
+            interfaz.campos_ir["y"].value = y
+            interfaz.campos_ir["z"].value = z
+
+        escribir(2.0, 3.0, -29.0)
+        interfaz._teach_ir()
+
+        assert banco.ultimas("JI") == ["JI2.00,3.00,-29.00"], banco.lineas
+
+        # Con uno en curso no se manda otro: el firmware lo rechazaría y el
+        # operador vería una línea roja sin entender por qué.
+        banco.limpiar()
+        interfaz._teach_ir()
+
+        assert banco.ultimas("JI") == []
+
+        # Mientras el firmware no confirme, el bloqueo es CORTO. Un firmware
+        # viejo no contesta nada, y la pantalla tiene que volver sola en vez
+        # de quedarse diciendo que el brazo va.
+        falta = interfaz.teach_yendo_hasta - time.monotonic()
+
+        assert falta <= ui_mod.ESPERA_IR_CONFIRMA_S, falta
+
+        # Confirmado, en cambio, se banca todo el movimiento.
+        banco.estado.teach_evento = pr.parsear(
+            "[TEACH] ir x=2.00 y=3.00 z=-29.00 home=1")
+        banco.estado.teach_evento_n += 1
+        interfaz._teach_eventos()
+
+        assert interfaz.teach_yendo_hasta - time.monotonic() > ui_mod.ESPERA_IR_CONFIRMA_S
+
+        # Y el evento de llegada lo desbloquea.
+        banco.estado.teach_evento = pr.parsear("[TEACH] irfin")
+        banco.estado.teach_evento_n += 1
+        interfaz._teach_eventos()
+
+        interfaz._teach_ir()
+
+        assert banco.ultimas("JI") == ["JI2.00,3.00,-29.00"]
+
+        # Fuera del volumen no se manda nada: el firmware recorta, pero
+        # recortar en silencio sería mover el brazo a otro lado del pedido.
+        banco.limpiar()
+        banco.estado.teach_evento = pr.parsear("[TEACH] irfin")
+        banco.estado.teach_evento_n += 1
+        interfaz._teach_eventos()
+
+        escribir(200.0, 3.0, -29.0)
+        interfaz._teach_ir()
+
+        assert banco.ultimas("JI") == []
+
+    _correr_en_pagina(prueba)
+
+
+def test_con_algo_en_curso_el_boton_de_reproducir_es_el_de_parar():
+    def prueba(banco: Banco):
+        interfaz = banco.interfaz
+        est = banco.estado
+
+        interfaz._cambio_pestana(SimpleNamespace(value="Teach"))
+        interfaz.biblioteca.agregar(tch.Movimiento(
+            nombre="Saludo", puntos=[tch.Punto(0, 0, -30)],
+            verificado=100, creado="2026-08-19 10:00"))
+        interfaz._teach_rearmar_lista()
+        interfaz.teach_sel = 0
+
+        # Reproduciendo: el firmware lo dice en [E] con el índice del punto.
+        est.e.teach_indice = 3
+        banco.limpiar()
+
+        interfaz._refrescar_teach()
+
+        assert interfaz.boton_reproducir.text == "Parar  ·  P"
+
+        interfaz._teach_reproducir()
+
+        assert banco.ultimas("JX") == ["JX"], banco.lineas
+        assert banco.ultimas("JR") == [], "arrancó una reproducción en vez de parar"
+
+        # Y quieto vuelve a ser el de reproducir, sin el porcentaje encima.
+        est.e.teach_indice = 0
+        interfaz._refrescar_teach()
+
+        assert interfaz.boton_reproducir.text == "Reproducir  ·  P"
+
+    _correr_en_pagina(prueba)
+
+
+def test_un_movimiento_ya_verificado_no_vuelve_a_preguntar():
+    def prueba(banco: Banco):
+        interfaz = banco.interfaz
+        est = banco.estado
+
+        interfaz._cambio_pestana(SimpleNamespace(value="Teach"))
+
+        movimiento = interfaz.biblioteca.agregar(tch.Movimiento(
+            nombre="Saludo", puntos=[tch.Punto(0, 0, -30)],
+            verificado=100, creado="2026-08-19 10:00"))
+
+        interfaz.teach_mov_en_curso = movimiento
+        interfaz.teach_pct_en_curso = 100
+
+        est.teach_evento = pr.parsear("[TEACH] fin")
+        est.teach_evento_n += 1
+        interfaz._teach_tick()
+
+        assert interfaz._dialogo_teach is None, "preguntó por un 100 % ya verificado"
+
+        # Con uno a medio verificar, en cambio, tiene que preguntar.
+        movimiento.verificado = 50
+        interfaz.teach_mov_en_curso = movimiento
+        est.teach_evento_n += 1
+        interfaz._teach_tick()
+
+        assert interfaz._dialogo_teach is not None
 
     _correr_en_pagina(prueba)
 

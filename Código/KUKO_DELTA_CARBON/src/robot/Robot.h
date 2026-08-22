@@ -389,6 +389,41 @@ private:
     // Recorta, resuelve la cinematica y lanza el movimiento con los limites
     // reducidos. false si el punto no tiene solucion (no se mueve nada).
     bool teachMover(float x, float y, float z, float escalaPct);
+    bool teachMover(float x, float y, float z, const Motors::MotionLimits &limites);
+
+    // ------------------------------------------------------------------
+    //  Ir a una coordenada escrita ('JI')
+    // ------------------------------------------------------------------
+    // El operador escribe X, Y, Z y el brazo va. La diferencia con 'JM' (el
+    // destino del jog) no es la velocidad sino EL CAMINO: si el brazo no
+    // esta en home, primero sube a home y desde ahi baja al punto.
+    //
+    // POR QUE: quien escribe una coordenada no ve por donde va a pasar el
+    // brazo, y la recta entre dos puntos bajos del volumen va raspando la
+    // cinta todo el camino. Home es brazos horizontales, o sea lo mas
+    // arriba que llega el robot: subir primero y bajar despues no puede
+    // tocar nada de lo que hay abajo. Cuesta un tramo de mas y se gana no
+    // tener que pensar cada vez si el camino esta libre.
+    //
+    // Va a maxima velocidad y aceleracion (FAST_LIMITS, los mismos del ciclo
+    // normal) y no a las del modo teach: los dos tramos son rectas largas
+    // entre puntos conocidos, que es exactamente lo que el ciclo de
+    // clasificacion hace todo el dia.
+    uint8_t teachIrEtapa = 0;   // 0 = nada, 1 = subiendo a home, 2 = al punto
+    float   teachIrX = 0.0f, teachIrY = 0.0f, teachIrZ = 0.0f;
+
+    // Tolerancia para dar por bueno que el brazo ya esta en home. Home son
+    // los pasos (0,0,0) exactos, pero pedir exactitud significaria mandarlo
+    // a home aunque este a un centesimo de grado.
+    static const long TEACH_HOME_TOL_PASOS = 30; // ~1,1 grados
+
+    bool teachEnHome() const;
+    bool teachIr(float x, float y, float z);
+    void updateTeachIr();
+
+    // Hay un movimiento de teach en curso que no es el jog: una reproduccion
+    // o un 'ir a'. Es lo que decide si un pedido nuevo se rechaza.
+    bool teachOcupado() const { return teachReproduciendo || teachIrEtapa != 0; }
 
     bool procesarComandoTeach(const char *cmd);
 

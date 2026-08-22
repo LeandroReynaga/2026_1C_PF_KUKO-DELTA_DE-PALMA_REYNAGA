@@ -86,8 +86,11 @@ FICHAS: dict[str, Ficha] = {
     "rel_ms": Ficha(
         "Agarre", "Espera al soltar",
         "Con la bomba ya apagada, cuanto se espera a que la pieza se "
-        "despegue. Es un parche hasta que este la electrovalvula que mete "
-        "aire en la linea de vacio; con ella puesta baja a ~100 ms."),
+        "despegue. Con la electrovalvula montada la linea de vacio se ventea "
+        "sola y la pieza cae en el acto, asi que alcanza con 80 ms: es lo "
+        "que tarda en entrar el aire, no en irse el vacio por fuga. Si "
+        "alguna sale pegada al gripper es el numero a subir, pero de mas es "
+        "tiempo muerto en cada ciclo."),
     "bin_ms": Ficha(
         "Agarre", "Quieto antes de soltar",
         "Cuanto se queda frenado sobre el tacho antes de apagar la bomba. "

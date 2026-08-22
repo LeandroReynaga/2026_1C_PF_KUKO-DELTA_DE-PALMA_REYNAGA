@@ -40,6 +40,18 @@ from typing import Optional
 
 ARCHIVO = Path(__file__).resolve().parents[1] / "config" / "movimientos.json"
 
+
+def es_local(nombre: str) -> bool:
+    """Un movimiento que todavía tiene el nombre de fábrica.
+
+    Los que conservan el «Movimiento N» con el que nacieron son la prueba de
+    la tarde: se graban de a diez, se miran una vez y se tiran. Los que valen
+    la pena se renombran. Esa es toda la regla, y de ahí sale en qué archivo
+    se guarda cada uno (ver `Biblioteca`).
+    """
+
+    return "movimiento" in nombre.lower()
+
 # Cadencia de muestreo de la grabación. 20 Hz alcanza de sobra para una mano
 # humana moviendo un joystick y deja las muestras lo bastante juntas como
 # para que la simplificación tenga de dónde elegir.
@@ -413,41 +425,74 @@ def _repartir_parejo(puntos: list[Punto], max_puntos: int) -> list[Punto]:
 #  Biblioteca en disco
 # ==================================================================
 class Biblioteca:
-    """Las secuencias guardadas, en `pc/config/movimientos.json`.
+    """Las secuencias guardadas, en `pc/config/`.
 
     Se guarda entero en cada cambio (son pocos kB) y se tolera un archivo
     roto devolviendo una biblioteca vacía: perder las secuencias es malo,
     pero no arrancar la interfaz por un JSON mal cerrado es peor.
+
+    Son DOS archivos, y la diferencia no es técnica sino de qué merece
+    viajar con el proyecto:
+
+        movimientos.json           va al repositorio
+        movimientos_locales.json   no (está en .gitignore)
+
+    El reparto lo decide el nombre (`es_local`): lo que todavía se llama
+    «Movimiento N» se quedó con el nombre de fábrica, o sea que nadie lo
+    consideró digno de un nombre, o sea que es descarte de una tarde de
+    pruebas. Renombrarlo es lo que lo salva, y no hay ningún botón de
+    «guardar en el repo» que aprender.
+
+    Por qué dos archivos y no un filtro al commitear: el programa reescribe
+    esto en cada cambio. Un filtro hecho a mano vuelve atrás la primera vez
+    que alguien graba algo, y a partir de ahí el repositorio queda sucio con
+    diffs de miles de líneas que nadie lee. Adentro, en cambio, la regla se
+    cumple sola.
     """
 
     def __init__(self, archivo: Path = ARCHIVO):
         self.archivo = archivo
+        self.archivo_local = archivo.with_name(f"{archivo.stem}_locales{archivo.suffix}")
         self.movimientos: list[Movimiento] = []
         self.cargar()
 
-    def cargar(self) -> None:
-        if not self.archivo.exists():
-            self.movimientos = []
-            return
+    def _leer(self, archivo: Path) -> list:
+        if not archivo.exists():
+            return []
 
         try:
-            datos = json.loads(self.archivo.read_text(encoding="utf-8"))
+            datos = json.loads(archivo.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as err:
-            print(f"[teach] no se pudo leer {self.archivo.name}: {err}")
-            self.movimientos = []
-            return
+            print(f"[teach] no se pudo leer {archivo.name}: {err}")
+            return []
 
-        self.movimientos = [Movimiento.desde_dict(d) for d in datos.get("movimientos", [])]
+        return [Movimiento.desde_dict(d) for d in datos.get("movimientos", [])]
 
-    def guardar(self) -> None:
+    def cargar(self) -> None:
+        # Los dos archivos se juntan en una sola lista y se ordenan por fecha
+        # de grabación: para el operador es una biblioteca sola, y de dónde
+        # salió cada secuencia no es asunto suyo.
+        self.movimientos = self._leer(self.archivo) + self._leer(self.archivo_local)
+        self.movimientos.sort(key=lambda m: (m.creado, m.nombre))
+
+    def _escribir(self, archivo: Path, movimientos: list) -> None:
         try:
-            self.archivo.parent.mkdir(parents=True, exist_ok=True)
-            self.archivo.write_text(
-                json.dumps({"movimientos": [m.como_dict() for m in self.movimientos]},
+            archivo.parent.mkdir(parents=True, exist_ok=True)
+            archivo.write_text(
+                json.dumps({"movimientos": [m.como_dict() for m in movimientos]},
                            indent=2, ensure_ascii=False),
                 encoding="utf-8")
         except OSError as err:
-            print(f"[teach] no se pudo guardar {self.archivo.name}: {err}")
+            print(f"[teach] no se pudo guardar {archivo.name}: {err}")
+
+    def guardar(self) -> None:
+        # El reparto se resuelve en cada guardado y no al crear cada
+        # movimiento: así renombrar uno lo muda de archivo sin que renombrar
+        # tenga que saber que los archivos son dos.
+        self._escribir(self.archivo,
+                       [m for m in self.movimientos if not es_local(m.nombre)])
+        self._escribir(self.archivo_local,
+                       [m for m in self.movimientos if es_local(m.nombre)])
 
     # ------------------------------------------------------------------
     def nombre_libre(self, base: str = "Movimiento") -> str:
