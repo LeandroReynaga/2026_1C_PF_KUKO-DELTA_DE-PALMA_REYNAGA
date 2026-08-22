@@ -10,6 +10,7 @@
 #include "../hardware/Endstops.h"
 #include "Pinout.h"
 #include "../hardware/Motors.h"
+#include "../motion/Trajectory.h"
 
 /**
  * Robot
@@ -417,13 +418,35 @@ private:
     // a home aunque este a un centesimo de grado.
     static const long TEACH_HOME_TOL_PASOS = 30; // ~1,1 grados
 
+    // ------------------------------------------------------------------
+    //  Movimiento lineal (movL)
+    // ------------------------------------------------------------------
+    // El motor esta en src/motion/Trajectory.*, que no sabe nada del robot:
+    // recibe dos puntos y los motores. Robot decide CUANDO usarlo, que es lo
+    // unico que depende del ciclo.
+    //
+    // Hoy se usa desde el modo teach ('JL'). Los otros lugares donde tiene
+    // sentido -- la bajada sobre la pieza, la entrada a una celda de la caja
+    // y la reproduccion de una secuencia grabada -- estan sin conectar a
+    // proposito: cada uno cambia el tiempo de ciclo y hay que medirlo con el
+    // robot antes de dejarlo puesto.
+    MovimientoLineal lineal;
+
+    // Cierra un movimiento lineal que estaba en curso: deja la posicion
+    // comandada de teach donde termino y avisa por serie. Devuelve true si
+    // efectivamente termino (o se corto) en esta vuelta.
+    bool atenderLineal();
+
     bool teachEnHome() const;
     bool teachIr(float x, float y, float z);
     void updateTeachIr();
 
     // Hay un movimiento de teach en curso que no es el jog: una reproduccion
     // o un 'ir a'. Es lo que decide si un pedido nuevo se rechaza.
-    bool teachOcupado() const { return teachReproduciendo || teachIrEtapa != 0; }
+    bool teachOcupado() const
+    {
+        return teachReproduciendo || teachIrEtapa != 0 || lineal.enCurso();
+    }
 
     bool procesarComandoTeach(const char *cmd);
 

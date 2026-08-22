@@ -108,8 +108,21 @@ void moveSynchronized(Stepper &m1, Stepper &m2, Stepper &m3,
  * alcanza para frenar desde la velocidad que trae). Ahi quien llama tiene
  * que hacer lo de siempre: esperar a que lleguen y despues moveSynchronized.
  */
+// `pisoEscala` es el minimo que puede recibir un eje del reparto, en vez de
+// lo estrictamente proporcional. Existe por movL: partiendo una recta en
+// tramos cortos, el eje que menos recorre se lleva a veces el 1 % de la
+// aceleracion (medido: 455 pas/s2 de 40.000), y con esa aceleracion su
+// distancia de frenado se dispara y puedeRedirigir() se niega. Con el
+// reparto estricto eso pasa en la MITAD de los tramos de una diagonal, y
+// cada negativa es una frenada: es exactamente el "va a los tirones".
+//
+// Un eje con el piso puesto llega antes que los otros, no despues, y lo que
+// se aparta de la recta por eso esta acotado por lo poco que ese eje
+// recorria en el tramo -- que es chico por definicion, porque es justamente
+// el eje que casi no se mueve. 0 = reparto estricto (el de siempre).
 bool redirigirSincronizado(Stepper &m1, Stepper &m2, Stepper &m3,
                             long target1, long target2, long target3,
-                            const MotionLimits &limits = DEFAULT_LIMITS);
+                            const MotionLimits &limits = DEFAULT_LIMITS,
+                            float pisoEscala = 0.0f);
 
 }

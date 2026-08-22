@@ -278,6 +278,10 @@ class Interfaz:
         # rehabilita tarde, no uno que no se rehabilita nunca.
         self.teach_yendo_hasta = 0.0
 
+        # Destino del tramo recto que está esperando a que termine el rodeo
+        # por home. None = no hay ninguno pendiente.
+        self._movl_pendiente: Optional[tuple[float, float, float]] = None
+
         self._teach_evento_visto = 0
         self._cola_subida: list = []
         self._timer_subida = None
@@ -1610,11 +1614,10 @@ class Interfaz:
                              "La velocidad y la aceleración van al 15 %.") \
                         .style(f"color:{APAGADO};font-size:11.5px;line-height:1.35")
 
-                # El hueco empuja el módulo de coordenada contra el borde de
-                # abajo: el modo y el jog no crecen, y la lista de
-                # movimientos -- lo único que tiene sentido estirar -- está
-                # del otro lado.
-                ui.element("div").style("flex:1 1 0;min-height:0")
+                # Sin hueco entre paneles: el modulo de coordenadas va
+                # pegado al jog. Empujarlo contra el borde de abajo se veia
+                # mejor pero sacaba scroll en la columna, y una pestaña con
+                # scroll es peor que un espacio vacio.
 
                 # --- ir a una coordenada ---
                 with ui.column().classes("panel p-3 gap-2").style("flex:0 0 auto"):
@@ -1630,9 +1633,16 @@ class Interfaz:
                             campo.on("keydown.enter", lambda _: self._teach_ir())
                             self.campos_ir[eje] = campo
 
-                        self.boton_ir = ui.button("Ir", on_click=self._teach_ir) \
-                            .props("unelevated dense no-caps") \
-                            .style("flex:0 0 66px")
+                    # Dos botones y no un selector: el camino se elige al
+                    # mandar, que es cuando uno sabe si le importa por dónde
+                    # pasa el brazo. Los dos empiezan yendo a home.
+                    with ui.row().classes("w-full gap-2 no-wrap"):
+                        self.boton_ir = ui.button(
+                            "movJ", on_click=lambda: self._teach_ir(False)) \
+                            .props("unelevated dense no-caps").style("flex:1 1 0")
+                        self.boton_ir_lineal = ui.button(
+                            "movL", on_click=lambda: self._teach_ir(True)) \
+                            .props("unelevated dense no-caps").style("flex:1 1 0")
 
                     # El rango se escribe acá y no se deja para el rechazo: es
                     # la diferencia entre elegir un número que entra y probar
@@ -1877,6 +1887,7 @@ class Interfaz:
             # del "ir a" se limpia acá y no vence sola: si no, al volver a
             # entrar la pantalla seguiría creyendo que hay algo yendo.
             self.teach_yendo_hasta = 0.0
+            self._movl_pendiente = None
             self.enviar(pr.cmd_teach(False))
             return
 
@@ -1908,8 +1919,24 @@ class Interfaz:
     # ------------------------------------------------------------------
     #  Ir a una coordenada escrita
     # ------------------------------------------------------------------
-    def _teach_ir(self) -> None:
+    def _teach_ir(self, lineal: bool = False) -> None:
         """Manda el brazo a la coordenada de los tres campos.
+
+        `lineal` elige el camino del último tramo. Los dos empiezan yendo a
+        home, que es lo que garantiza que la bajada no raspe nada:
+
+            movJ   `JI` hasta el punto: los tres ejes en proporción, o sea
+                   derecho en el espacio de los ángulos y curvo en el de la
+                   punta (hasta 27 mm de panza cruzando la cinta).
+            movL   `JI` al centro-arriba del volumen y de ahí `JL`: la punta
+                   va derecho de verdad.
+
+        El rodeo del movL pasa por (0, 0, techo) y no por home a secas porque
+        `JL` sale de la posición comandada, y home en cartesiano no lo sabe
+        nadie: el firmware no tiene cinemática directa. El centro-arriba del
+        volumen sí es un punto conocido -- es el mismo al que el firmware
+        manda el brazo al entrar a teach -- y queda justo debajo de home, así
+        que el rodeo sigue siendo por arriba.
 
         El camino (por home si hace falta) y el recorte al volumen los
         resuelve el firmware, que es el que no puede equivocarse. Lo que se
@@ -1953,6 +1980,20 @@ class Interfaz:
         if not cin.alcanzable(x, y, z):
             ui.notify("El brazo no llega a ese punto: está adentro de los "
                       "límites pero fuera de su alcance", color="warning")
+            return
+
+        if lineal:
+            zmax = limites["z"][1]
+
+            if not self.enviar(pr.cmd_teach_ir(0.0, 0.0, zmax)):
+                ui.notify("sin enlace con el robot", color="negative")
+                return
+
+            # El tramo recto sale recién cuando el firmware avisa que llegó
+            # al punto de partida (`irfin`): mandarlo ahora lo rechazaría con
+            # err=ocupado, y encadenarlo por tiempo sería adivinar.
+            self._movl_pendiente = (x, y, z)
+            self.teach_yendo_hasta = time.monotonic() + ESPERA_IR_CONFIRMA_S
             return
 
         if not self.enviar(pr.cmd_teach_ir(x, y, z)):
@@ -2108,16 +2149,33 @@ class Interfaz:
             self.teach_yendo_hasta = time.monotonic() + ESPERA_IR_S
 
         elif evento.evento == "irfin":
+            if self._movl_pendiente is not None:
+                x, y, z = self._movl_pendiente
+                self._movl_pendiente = None
+
+                if self.enviar(pr.cmd_teach_lineal(x, y, z)):
+                    self.teach_yendo_hasta = time.monotonic() + ESPERA_IR_CONFIRMA_S
+                    return
+
+            self.teach_yendo_hasta = 0.0
+
+        elif evento.evento == "l":
+            # Arrancó el tramo recto: dura lo que dure el movimiento.
+            self.teach_yendo_hasta = time.monotonic() + ESPERA_IR_S
+
+        elif evento.evento == "lfin":
             self.teach_yendo_hasta = 0.0
 
         elif evento.evento == "abort":
             self.teach_mov_en_curso = None
+            self._movl_pendiente = None
             self.teach_yendo_hasta = 0.0
             ui.notify(f"Movimiento cortado ({evento.motivo or 'sin motivo'})",
                       color="negative")
 
         elif evento.evento == "err":
             self.teach_mov_en_curso = None
+            self._movl_pendiente = None
             self.teach_yendo_hasta = 0.0
             ui.notify(f"Teach: {evento.error}", color="negative")
 
@@ -2646,13 +2704,44 @@ class Interfaz:
                 f'<line x1="{centro}" y1="{centro - radio}" x2="{centro}" '
                 f'y2="{centro + radio}" stroke="{BORDE}" stroke-width="1" '
                 'stroke-dasharray="3 4"/>'
-                f'<text x="{centro}" y="14" fill="{APAGADO}" font-size="10" '
-                'text-anchor="middle" font-family="system-ui">W  (+Y)</text>'
-                f'<text x="{centro}" y="{lado - 5}" fill="{APAGADO}" font-size="10" '
-                'text-anchor="middle" font-family="system-ui">S  (-Y)</text>'
-                f'<circle cx="{kx:.1f}" cy="{ky:.1f}" r="15" '
+                + self._letras_joystick(lado, centro, activo)
+                + f'<circle cx="{kx:.1f}" cy="{ky:.1f}" r="15" '
                 f'fill="{CELESTE if activo else BORDE}" fill-opacity="0.85"/>'
                 '</svg>')
+
+    @staticmethod
+    def _letras_joystick(lado: float, centro: float, activo: bool) -> str:
+        """Las cuatro teclas, en los cuatro bordes del círculo.
+
+        Antes estaban sólo W y S, en gris de texto secundario y a 10 px: con
+        el círculo relleno detrás se perdían, y A y D directamente no
+        figuraban. La tecla va en el color del texto y en negrita porque es
+        lo que hay que leer de un vistazo; el eje al que corresponde va al
+        lado, chico y apagado, porque se lee una vez y no se olvida.
+        """
+
+        tinta = TEXTO if activo else APAGADO
+        borde = 11.0
+
+        # (tecla, eje, x, y, alineación)
+        puestos = (
+            ("W", "+Y", centro, borde + 3, "middle"),
+            ("S", "-Y", centro, lado - borde + 2, "middle"),
+            ("A", "-X", borde - 2, centro + 4, "start"),
+            ("D", "+X", lado - borde + 2, centro + 4, "end"),
+        )
+
+        partes = []
+
+        for tecla, eje, x, y, anclaje in puestos:
+            partes.append(
+                f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="{anclaje}" '
+                'font-family="system-ui" font-size="13" font-weight="700" '
+                f'fill="{tinta}">{tecla}'
+                f'<tspan font-size="9.5" font-weight="400" fill="{APAGADO}">'
+                f' {eje}</tspan></text>')
+
+        return "".join(partes)
 
     # ------------------------------------------------------------------
     def _refrescar_teach(self) -> None:
@@ -2771,11 +2860,13 @@ class Interfaz:
             f"X {xmin:.1f} a {xmax:.1f} · Y {ymin:.1f} a {ymax:.1f} · "
             f"Z {zmin:.1f} a {zmax:.1f} cm")
 
-        self.boton_ir.set_enabled(en_teach and not ocupado and not self.teach_grabando)
-        self.boton_ir.style(
-            f'background:{CELESTE if (en_teach and not ocupado) else INACTIVO}'
-            '!important;'
-            f'color:{"#0B1220" if (en_teach and not ocupado) else APAGADO}!important')
+        listo_ir = en_teach and not ocupado and not self.teach_grabando
+
+        for boton in (self.boton_ir, self.boton_ir_lineal):
+            boton.set_enabled(listo_ir)
+            boton.style(
+                f'background:{CELESTE if listo_ir else INACTIVO}!important;'
+                f'color:{"#0B1220" if listo_ir else APAGADO}!important')
 
         for campo in self.campos_ir.values():
             campo.set_enabled(en_teach and not ocupado)

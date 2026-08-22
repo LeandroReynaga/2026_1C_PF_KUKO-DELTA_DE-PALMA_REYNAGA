@@ -13,9 +13,10 @@ en el que se apartó del documento, no en el otro.
   descrita acá consume ~1,8 kB/s (16 %). El resto queda libre para eventos
   y para los volcados largos (`D`, `P?`).
 
-**Cambios de la versión 3** (§6.3.1): `JI`, ir a una coordenada escrita
-pasando por home, con sus eventos `[TEACH] ir` / `irfin`. También sube el
-tope de `vis_lat` a 0,50 s. Nada de lo anterior cambió, pero la versión sube
+**Cambios de la versión 3** (§6.3.1 y §6.3.2): `JI`, ir a una coordenada
+escrita pasando por home, con sus eventos `[TEACH] ir` / `irfin`; y `JL`,
+movimiento lineal, con `[TEACH] l` / `lfin`. También sube el tope de
+`vis_lat` a 0,50 s. Nada de lo anterior cambió, pero la versión sube
 igual, y esta vez con un caso real que lo justifica: con el firmware viejo en
 la placa, el módulo de coordenadas de la interfaz se dibujaba, aceptaba los
 números, decía que estaba yendo y el brazo no se movía — el ESP32 tiraba un
@@ -480,6 +481,52 @@ corrige al lanzar el segundo tramo.
 `JX` lo corta igual que a una reproducción, y mientras dura, el jog se
 ignora en silencio (no `err=ocupado`: el operador puede tener una tecla
 apretada de antes y serían diez líneas por nada).
+
+### 6.3.2 Movimiento lineal (movL)
+
+    JL<x>,<y>,<z>        ir hasta el punto en LINEA RECTA
+
+    [TEACH] l x=1.50 y=-2.00 z=-30.10 paso=1.00 vel=20.0
+    [TEACH] lfin tramos=27 frenadas=0 paso=1.00
+
+Todo lo demás que mueve el brazo (`JM`, `JI`, la reproducción, el ciclo
+normal) es **movJ**: `Motors::moveSynchronized` reparte velocidad y
+aceleración en proporción al recorrido de cada eje, así que los tres motores
+arrancan y llegan juntos. Eso es una recta en el espacio de **los ángulos**,
+no en el de la punta, y en un delta las dos cosas no se parecen. Medido con
+la cinemática de este robot (`pc/tests/test_lineal.py`):
+
+| Tramo | Largo | Se aparta de la recta |
+|---|---|---|
+| Cruzar la cinta en X | 24,0 cm | **27,3 mm** |
+| De un tacho al otro | 16,0 cm | 10,2 mm |
+| Bajada vertical en el centro | 6,0 cm | 0,0 mm |
+| Bajada vertical en una esquina | 6,0 cm | 1,2 mm |
+| Diagonal larga | 27,4 cm | **33,4 mm** |
+
+`JL` parte la recta en tramos de `movl_paso` y resuelve la cinemática en cada
+punto intermedio. Adentro de un tramo sigue siendo movJ, pero el error cae
+con el **cuadrado** del largo: 1 cm da 0,05 mm y 2 cm da 0,19 mm. Los tramos
+se encadenan sin frenar (`Stepper::redirigir`), así que el movimiento es uno
+solo y no una sucesión de arranques.
+
+**El paso y la velocidad están atados**, y esto es lo que hay que entender
+antes de tocarlos: `redirigir` no acepta un destino más cerca que la
+distancia de frenado, así que un tramo más corto que eso no se puede
+encadenar. Como no hay planificador con *look-ahead* que reparta la frenada
+entre varios tramos, la velocidad le pone un piso al paso — a 20 cm/s son
+0,6 cm, a 50 cm/s son 7 cm. Por eso el firmware **sube el paso solo** si hace
+falta, y por eso movL a toda velocidad no existe: sería movJ otra vez. El
+valor de fábrica, 1 cm a 20 cm/s, es donde las dos cosas cierran.
+
+`JL` puede fallar donde `JM` no falla: **la recta puede salirse del alcance
+aunque las dos puntas estén adentro** (el volumen de un delta no es convexo).
+El firmware recorre la recta entera resolviendo la inversa *antes* de mover
+un paso y contesta `err=ik` sin haberse movido.
+
+En `lfin`, `frenadas` es el número que explica un movimiento que se vio a los
+tirones: son los tramos en los que un eje tuvo que invertir el sentido y no
+se pudo encadenar. Con 0 el movimiento salió de un tirón solo.
 
 ### 6.4 Volumen de trabajo
 

@@ -322,6 +322,25 @@ static float TEACH_JOG_PCT = 15.0f;
 // tocar cualquier otra cosa.
 static float TEACH_ACEL = 40000.0f;
 
+// ============================================================
+//  MOVIMIENTO LINEAL (movL)
+// ============================================================
+// Largo de los tramos en los que se parte una recta, y velocidad de la
+// PUNTA mientras la recorre. Los dos numeros salen medidos (ver el header
+// de src/motion/Trajectory.h) y estan atados entre si:
+//
+//   - el paso decide cuanto se aparta de la recta: 1 cm son 0,05 mm,
+//     2 cm son 0,19 mm, 5 cm son 1,06 mm;
+//   - pero un tramo mas corto que la distancia de frenado no se puede
+//     encadenar, asi que la velocidad le pone un piso al paso. A 20 cm/s
+//     ese piso es de ~0,6 cm; a 50 cm/s ya es de 7 cm y movL deja de
+//     tener sentido.
+//
+// 1 cm a 20 cm/s es el punto donde las dos cosas cierran: recta a menos de
+// una decima de milimetro y sin frenadas intermedias.
+static float MOVL_PASO_CM = 1.0f;
+static float MOVL_VEL_CMS = 20.0f;
+
 // Radio de mezcla de las esquinas, en cm. 0 = apagado (se frena en cada
 // punto, que es como andaba antes).
 //
@@ -426,6 +445,10 @@ motor3(PUL3, DIR3, ENA, 2)
 
 void Robot::begin()
 {
+    // El movimiento lineal necesita los tres motores una sola vez; despues
+    // se maneja solo desde el loop.
+    lineal.begin(motor1, motor2, motor3);
+
     pneumatics.begin();
 
     motor1.begin();
@@ -1533,6 +1556,7 @@ void Robot::startHoming(bool conservarContexto)
     teachEsperando     = false;
     teachIrEtapa       = 0;
     teachStream        = false;
+    lineal.cancelar();
     jogVx = jogVy = jogVz = 0.0f;
 
     moveIssued = false;
@@ -2773,6 +2797,9 @@ void Robot::registrarParametros()
     params.registrar("t_mezcla",  &TEACH_MEZCLA_CM,   0.0f,    3.0f,      "cm",     NIVEL_PROCESO);
     params.registrar("t_esquina", &TEACH_ESQUINA_DEG, 0.0f,    90.0f,     "deg",    NIVEL_PROCESO, 'i');
 
+    params.registrar("movl_paso", &MOVL_PASO_CM, 0.2f, 5.0f,  "cm",   NIVEL_PROCESO);
+    params.registrar("movl_vel",  &MOVL_VEL_CMS, 1.0f, 60.0f, "cm/s", NIVEL_PROCESO);
+
     params.registrar("pick_tol",  &PICK_LATE_TOLERANCE_MS, 0.0f, 500.0f, "ms", NIVEL_PROCESO, 'i');
     params.registrar("pump_lead", &PUMP_LEAD_MS,           0.0f, 2000.0f, "ms", NIVEL_PROCESO, 'i');
     params.registrar("replan",    &MAX_REPLAN_ATTEMPTS,    0.0f, 5.0f,   "",   NIVEL_PROCESO, 'i');
@@ -3225,6 +3252,47 @@ void Robot::updateTeachIr()
 }
 
 // ------------------------------------------------------------------
+bool Robot::atenderLineal()
+{
+    const MovimientoLineal::Estado est = lineal.actualizar();
+
+    if (est == MovimientoLineal::Estado::EN_CURSO)
+    {
+        return false;
+    }
+
+    // Termine como termine, la posicion comandada de teach es el ultimo
+    // punto que se alcanzo a emitir: si se corto a mitad de camino, el jog
+    // tiene que seguir desde ahi y no desde el destino que no se cumplio.
+    const MovimientoLineal::Punto p = lineal.comandado();
+
+    teachX = p.x;
+    teachY = p.y;
+    teachZ = p.z;
+
+    if (est == MovimientoLineal::Estado::SIN_SOLUCION)
+    {
+        Serial.println("[TEACH] err=ik");
+        return true;
+    }
+
+    if (est == MovimientoLineal::Estado::TERMINADO)
+    {
+        // Las frenadas son el numero que explica un movimiento que se vio a
+        // los tirones: son los tramos en los que un eje invirtio el sentido
+        // y no se pudo encadenar.
+        Serial.print("[TEACH] lfin tramos=");
+        Serial.print(lineal.tramos());
+        Serial.print(" frenadas=");
+        Serial.print(lineal.frenadas());
+        Serial.print(" paso=");
+        Serial.println(lineal.pasoEfectivoCm(), 2);
+    }
+
+    return true;
+}
+
+// ------------------------------------------------------------------
 bool Robot::entrarTeach()
 {
     teachPedido = false;
@@ -3269,6 +3337,7 @@ bool Robot::entrarTeach()
     teachEsperando     = false;
     teachIrEtapa       = 0;
     teachIndice        = 0;
+    lineal.cancelar();
 
     teachOrigenX = teachX;
     teachOrigenY = teachY;
@@ -3285,6 +3354,8 @@ bool Robot::entrarTeach()
 
 void Robot::salirTeach()
 {
+    lineal.cancelar();
+
     teachReproduciendo = false;
     teachLanzado       = false;
     teachEsperando     = false;
@@ -3316,6 +3387,8 @@ void Robot::teachAbortar(const char *motivo)
     {
         return;
     }
+
+    lineal.cancelar();
 
     teachReproduciendo = false;
     teachLanzado       = false;
@@ -3351,6 +3424,12 @@ void Robot::updateTeach()
     if (teachReproduciendo)
     {
         updateTeachPlayback();
+        return;
+    }
+
+    if (lineal.enCurso())
+    {
+        atenderLineal();
         return;
     }
 
@@ -3665,6 +3744,7 @@ void Robot::teachInformar() const
 //    J?                      informar estado y volumen de trabajo
 //    JM<x>,<y>,<z>           mover la punta a un destino absoluto, en cm
 //    JI<x>,<y>,<z>           ir a un punto pasando por home, a maxima
+//    JL<x>,<y>,<z>           ir en LINEA RECTA hasta el punto (movL)
 //    JD<vx>,<vy>,<vz>        direccion de jog, cada una en [-1, 1]
 //    JP1 / JP0               bomba de vacio
 //    JC                      vaciar la ruta cargada
@@ -3939,6 +4019,59 @@ bool Robot::procesarComandoTeach(const char *cmd)
         return true;
     }
 
+    if (sub == 'L')
+    {
+        if (teachOcupado())
+        {
+            Serial.println("[TEACH] err=ocupado");
+            return true;
+        }
+
+        float v[3];
+
+        if (leerFloats(resto, v, 3) != 3)
+        {
+            Serial.println("[TEACH] err=formato");
+            return true;
+        }
+
+        teachRecortar(v[0], v[1], v[2]);
+
+        jogVx = jogVy = jogVz = 0.0f;
+        jogVigenteHasta_ms = 0;
+
+        MovimientoLineal::Config cfg;
+
+        cfg.pasoCm = MOVL_PASO_CM;
+        cfg.velCms = MOVL_VEL_CMS;
+        cfg.acel   = TEACH_ACEL;
+
+        // El origen es la posicion COMANDADA, no la medida: el firmware no
+        // tiene cinematica directa, y de todas formas la comandada es la
+        // buena -- el lazo es abierto y el encoder solo supervisa.
+        if (!lineal.comenzar({ teachX, teachY, teachZ },
+                             { v[0], v[1], v[2] }, cfg))
+        {
+            // Puede ser que la RECTA se salga del alcance aunque las dos
+            // puntas esten adentro: el volumen de un delta no es convexo.
+            Serial.println("[TEACH] err=ik");
+            return true;
+        }
+
+        Serial.print("[TEACH] l x=");
+        Serial.print(v[0], 2);
+        Serial.print(" y=");
+        Serial.print(v[1], 2);
+        Serial.print(" z=");
+        Serial.print(v[2], 2);
+        Serial.print(" paso=");
+        Serial.print(lineal.pasoEfectivoCm(), 2);
+        Serial.print(" vel=");
+        Serial.println(MOVL_VEL_CMS, 1);
+
+        return true;
+    }
+
     if (sub == 'I')
     {
         if (teachOcupado())
@@ -3992,7 +4125,7 @@ bool Robot::procesarComandoTeach(const char *cmd)
 
     Serial.print("[SERIAL] comando de teach invalido: '");
     Serial.print(cmd);
-    Serial.println("'. Validos: J1 J0 J? JM JI JD JP JC JA JR JX JG");
+    Serial.println("'. Validos: J1 J0 J? JM JI JL JD JP JC JA JR JX JG");
 
     return true;
 }
@@ -4022,6 +4155,7 @@ void Robot::emergencyStop()
     teachEsperando     = false;
     teachIrEtapa       = 0;
     teachStream        = false;
+    lineal.cancelar();
     jogVx = jogVy = jogVz = 0.0f;
 
     Serial.println("[EMERGENCIA] Parada manual. Presiona 'R' para rehomear.");

@@ -932,6 +932,21 @@ def cmd_teach_mover(x: float, y: float, z: float) -> str:
     return f"JM{x:.2f},{y:.2f},{z:.2f}\n"
 
 
+def cmd_teach_lineal(x: float, y: float, z: float) -> str:
+    """Va al punto en LÍNEA RECTA (movL), no por el camino de los motores.
+
+    `cmd_teach_mover` y `cmd_teach_ir` mueven los tres ejes en proporción, que
+    es una recta en el espacio de los ángulos y una curva en el de la punta:
+    de un tacho al otro el brazo pasa un centímetro fuera de la recta. Esto
+    parte el camino en tramos y lo recorre derecho.
+
+    Es más lento y puede fallar donde `JM` no falla (la recta puede salirse
+    del alcance aunque las dos puntas estén adentro). Ver PROTOCOLO.md §6.3.2.
+    """
+
+    return f"JL{x:.2f},{y:.2f},{z:.2f}\n"
+
+
 def cmd_teach_ir(x: float, y: float, z: float) -> str:
     """Va a un punto PASANDO POR HOME, a máxima velocidad y aceleración.
 

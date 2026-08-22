@@ -38,9 +38,8 @@ depurar un subsistema específico de forma aislada.
 
 Todo corre en un único loop de core del ESP32 (`src/main.cpp`) más ISRs de
 timer de hardware para la generación de pulsos de paso. Todavía no hay uso
-de RTOS tasks (`src/tasks/TaskManager.*` y `src/motion/Trajectory.*` existen
-como headers vacíos — placeholders para trabajo futuro, no conectados
-actualmente).
+de RTOS tasks (`src/tasks/TaskManager.*` existe como header vacío —
+placeholder para trabajo futuro, no conectado actualmente).
 
 **Máquina de estados del robot** (`src/robot/Robot.h/.cpp`) es el
 orquestador. Antes del `switch`, cada `update()` corre `supervisarColision()`
@@ -204,6 +203,31 @@ hasta qué porcentaje se verificaron (0 → 15 → 50 → 100). Un movimiento re
 grabado no se estrena a fondo: se reproduce al 15 %, la interfaz pregunta si
 salió bien, y sólo esa confirmación lo sube de escalón.
 
+**Movimiento lineal** (`src/motion/Trajectory.h/.cpp`, clase
+`MovimientoLineal`) es movL: la punta va **derecho** entre dos puntos, contra
+el movJ de `Motors::moveSynchronized`, que va derecho en el espacio de los
+ángulos y describe una curva en el de la punta. No es un detalle fino:
+medido con la cinemática de este robot, cruzar la cinta con movJ se aparta
+**27 mm** de la recta, y de un tacho al otro, 10 mm. Se implementa partiendo
+la recta en tramos de `movl_paso` y encadenándolos sin frenar con
+`Motors::redirigirSincronizado`; el error contra la recta cae con el
+**cuadrado** del largo del tramo (1 cm → 0,05 mm). Dos cosas que hay que
+saber antes de tocarlo, las dos explicadas largo en el header:
+
+- **El paso y la velocidad están atados.** `Stepper::redirigir` no acepta un
+  destino más cerca que la distancia de frenado y no hay planificador con
+  look-ahead, así que la velocidad le pone un piso al paso: a 20 cm/s son
+  0,6 cm y a 50 cm/s son 7 cm. `comenzar()` sube el paso solo cuando hace
+  falta, y por eso movL a toda velocidad no existe — sería movJ otra vez.
+- **La recta puede salirse del alcance con las dos puntas adentro** (el
+  volumen de un delta no es convexo: 342 de 60.000 rectas al azar). Por eso
+  se valida la recta entera antes de mover un paso.
+
+`pc/tests/test_lineal.py` es el espejo en Python: mide los desvíos y verifica
+la regla del paso. Los números escritos en los comentarios salen de ahí, así
+que si se vuelve a medir el robot, esa prueba falla — que es lo que se
+quiere.
+
 **Cinemática** (`src/kinematics/DeltaKinematics.h/.cpp`) es un namespace
 puramente matemático (sin I/O, sin llamadas a motores): `solveIK(x, y, z)`
 devuelve los ángulos de las articulaciones y los targets de pasos de motor
@@ -253,8 +277,14 @@ actualmente pero están vacíos.
 
 ## Estado WIP conocido
 
-- `src/vision/Vision.*`, `src/tasks/TaskManager.*`, `src/motion/Trajectory.*`
-  son archivos stub vacíos — todavía sin implementación.
+- `src/vision/Vision.*` y `src/tasks/TaskManager.*` son archivos stub
+  vacíos — todavía sin implementación.
+- `MovimientoLineal` (movL) está implementado y probado, pero **sólo
+  conectado al modo teach** (`JL`). Los tres lugares del ciclo normal donde
+  serviría —la bajada sobre la pieza, la entrada a una celda de la caja y la
+  reproducción de una secuencia grabada— están sin conectar a propósito:
+  cada uno cambia el tiempo de ciclo y hay que medirlo con el robot antes de
+  dejarlo puesto.
 - `ConveyorIntercept` está implementado pero todavía no llamado desde `Robot`.
 - Los ángulos de homing (`HOME_ANGLE_M1/2/3`, ahora en `Robot.cpp` y
   registrados como parámetros de nivel servicio) se ajustan a mano contra el

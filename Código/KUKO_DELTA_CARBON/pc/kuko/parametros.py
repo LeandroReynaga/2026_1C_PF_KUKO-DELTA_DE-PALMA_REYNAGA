@@ -209,6 +209,22 @@ FICHAS: dict[str, Ficha] = {
         "lo que convierte una sucesion de tramos en un movimiento solo. Mas "
         "grande es mas fluido y se aparta mas de lo ensenado; 0 lo apaga y "
         "vuelve a frenar en cada punto."),
+    "movl_paso": Ficha(
+        "Modo teach", "Paso del movimiento recto",
+        "En tramos de este largo se parte una recta para que la punta vaya "
+        "derecho de verdad (movL) y no por el camino mas rapido de los "
+        "motores (movJ). El error contra la recta cae con el CUADRADO del "
+        "paso: 1 cm da 0,05 mm, 2 cm da 0,19 mm y 5 cm ya da 1,06 mm. Bajarlo "
+        "de mas no sirve: el firmware no acepta un tramo mas corto que lo que "
+        "el eje necesita para frenar, asi que lo sube solo."),
+    "movl_vel": Ficha(
+        "Modo teach", "Velocidad del movimiento recto",
+        "Velocidad de la PUNTA mientras recorre una recta. No es un capricho "
+        "que sea baja: cuanto mas rapido va, mas largo tiene que ser cada "
+        "tramo para poder frenar, y mas se aparta de la recta. A 20 cm/s la "
+        "recta sale a menos de una decima de milimetro; a 50 cm/s los tramos "
+        "tendrian que medir 7 cm y movL se vuelve movJ."),
+
     "t_esquina": Ficha(
         "Modo teach", "Esquina maxima a redondear",
         "Hasta que angulo se redondea. Una esquina cerrada obliga a los ejes "
