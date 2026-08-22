@@ -49,27 +49,42 @@
  * lento y mas brusco que el movJ que se quiere mejorar.
  *
  * ------------------------------------------------------------------
- *  EL LIMITE QUE IMPONE ESTA ARQUITECTURA (leer antes de tocar el paso)
+ *  QUIEN COORDINA: LAS VELOCIDADES, NO LOS DESTINOS
  * ------------------------------------------------------------------
- * Stepper::redirigir solo acepta un destino que este a MAS de la distancia
- * de frenado desde la velocidad actual: si no, el eje llegaria andando y se
- * cortarian los pulsos. Como no hay un planificador con look-ahead que
- * reparta la frenada entre varios tramos, cada tramo tiene que ser mas
- * largo que la frenada. Con la aceleracion de teach (40.000 pasos/s2) y
- * ~90 pasos/cm eso da:
+ * A los motores se les da SIEMPRE el punto final de la recta como destino.
+ * Los puntos intermedios no son destinos: sirven para recalcular, tramo a
+ * tramo, EN QUE PROPORCION tiene que ir la velocidad de cada eje.
  *
- *     a 17 cm/s   frenada 0,4 cm      a 50 cm/s   frenada 3,8 cm
- *     a 33 cm/s   frenada 1,7 cm      a 100 cm/s  frenada 15 cm
+ * Es la diferencia con la primera version, que le daba a los motores el
+ * punto intermedio. Stepper planifica una rampa trapezoidal hasta el
+ * destino que recibe, asi que con el punto intermedio de destino cada tramo
+ * terminaba en una frenada planificada y encadenar era pelearle a esa
+ * frenada. De ahi salian los tres sintomas que se vieron en el robot:
  *
- * Por eso `comenzar` sube el paso pedido hasta esa cota si hace falta, y
- * por eso movL a toda velocidad no tiene sentido: a 100 cm/s los tramos
- * tendrian que medir 15 cm y el resultado seria movJ otra vez. El punto
- * dulce, y el valor de fabrica, es 1 cm de paso a 20 cm/s.
+ *   - el movimiento a los tirones;
+ *   - la regla de que el tramo tenia que medir mas que la distancia de
+ *     frenado (que ataba el paso a la velocidad);
+ *   - y que ir MAS RAPIDO se viera mejor -- porque el paso crecia con la
+ *     velocidad y habia menos frenadas.
  *
- * Consecuencia util del mismo mecanismo: la velocidad se autolimita en
- * v = sqrt(2 * a * mira), donde `mira` es lo que se adelanta el destino. Es
- * decir que pedir mas velocidad que esa no la acelera; lo que la sube es
- * agrandar el paso, y eso se paga en precision.
+ * Con el destino en el final hay UNA sola rampa para toda la recta: acelera
+ * al principio, frena al final, y en el medio no planifica ninguna parada.
+ * Lo que mantiene la punta sobre la recta es que las velocidades esten en
+ * la proporcion correcta, y eso se recalcula al cruzar cada punto
+ * intermedio. Un control industrial hace exactamente esto; la unica
+ * diferencia es que alla el reparto se recalcula a 1 kHz y aca una vez por
+ * tramo.
+ *
+ * Se recalcula cuando los TRES ejes cruzaron el punto intermedio, no cuando
+ * lo cruzo el que mas recorre: hacerlo con uno todavia atras es, por
+ * definicion, salirse de la recta.
+ *
+ * Y el reparto sale de LO QUE LE FALTA a cada eje para el punto intermedio,
+ * no de lo que ese tramo mide. Es lo que hace que la recta se corrija sola:
+ * el eje atrasado se lleva la velocidad mas alta y el adelantado queda al
+ * ralenti, asi que los tres cruzan el punto JUNTOS. Repartiendo por la
+ * geometria del tramo nadie corrige nada -- el desvio se arrastra y el
+ * movimiento se termina pareciendo un movJ, que es lo que se veia.
  *
  * ------------------------------------------------------------------
  *  LO QUE PUEDE SALIR MAL, Y COMO SE AVISA
@@ -86,12 +101,16 @@
  *   paso, y devuelve false sin haber movido nada. movJ no tiene este
  *   problema, y es de las pocas cosas en las que movL es peor.
  *
- * - **Un eje puede invertir el sentido en medio de la recta.** Ahi
- *   redirigirSincronizado se niega (y hace bien: invertir con el rotor
- *   girando no lo sigue ningun paso a paso). Se frena, se espera y se
- *   arranca el tramo siguiente de cero. Se cuentan esas frenadas y se
- *   informan al terminar: si un movimiento trae muchas, el brazo se va a
- *   ver a los tirones y la explicacion esta en ese numero.
+ * - **Un eje puede invertir el sentido en medio de la recta**, y no es un
+ *   caso raro: yendo de home a (10, -9, -30) el eje 3 invierte a mitad de
+ *   camino. Invertir con el rotor girando no lo sigue ningun paso a paso,
+ *   asi que ese eje tiene que pasar por velocidad cero si o si.
+ *
+ *   Lo que NO tiene que pasar es que frenen los otros dos por acompanarlo:
+ *   eso se veia como dos frenadas secas en mitad del recorrido. Por eso el
+ *   encadenado usa Motors::redirigirLineal, que resuelve eje por eje en vez
+ *   de "los tres o ninguno" -- el que invierte esta en su punto de retorno,
+ *   o sea a velocidad casi cero, y dejarlo frenar solo no cuesta nada.
  */
 class MovimientoLineal
 {
@@ -111,9 +130,9 @@ public:
 
     struct Config
     {
-        float pasoCm = 1.0f;    // largo nominal de cada tramo
-        float velCms = 20.0f;   // velocidad de la PUNTA, no de los motores
-        float acel   = 40000.0f; // pasos/s2 del eje que mas recorre
+        float pasoCm = 0.01f;   // largo nominal; se sube solo si no alcanza
+        float velCms = 40.0f;   // velocidad de la PUNTA, no de los motores
+        float acel   = 97000.0f; // pasos/s2 del eje que mas recorre
     };
 
     // Se llama una sola vez, con los motores del robot. Guardar punteros y
@@ -169,6 +188,10 @@ private:
     // velocidad pedida en cm/s a la velocidad de los motores.
     long ultSteps[3] = { 0, 0, 0 };
 
+    // Limites con los que salio el tramo en curso. Los necesita el empujon
+    // a los ejes que se quedaron parados a mitad de camino.
+    Motors::MotionLimits ultLimites;
+
     // Pasos del eje dominante que tiene el tramo en curso. Es contra esto
     // que se decide cuando adelantar el destino al tramo siguiente.
     long pasosTramo = 0;
@@ -184,5 +207,4 @@ private:
     bool emitir(uint16_t k, bool encadenar);
 
     bool llegaron() const;
-    long restanteDominante() const;
 };

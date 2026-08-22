@@ -588,12 +588,12 @@ def test_ir_a_una_coordenada_manda_el_pedido_una_sola_vez():
     _correr_en_pagina(prueba)
 
 
-def test_movl_va_primero_arriba_y_despues_derecho():
-    """El botón movL son dos comandos encadenados, no uno.
+def test_movl_va_derecho_y_movj_pasa_por_home():
+    """Cada botón manda UN comando, y no el mismo.
 
-    Primero `JI` al centro-arriba del volumen (que pasa por home) y recién
-    cuando el firmware avisa que llegó, el `JL` que hace la recta. Mandarlos
-    juntos daría err=ocupado, y encadenarlos por tiempo sería adivinar.
+    movL va derecho desde donde esté: no necesita el rodeo por home porque
+    el cajón de teach es convexo y la recta entre dos puntos de adentro se
+    queda adentro. movJ sí lo necesita: su curva no se puede prever.
     """
 
     def prueba(banco: Banco):
@@ -606,17 +606,9 @@ def test_movl_va_primero_arriba_y_despues_derecho():
 
         interfaz._teach_ir(True)
 
-        # El techo del volumen que declaró el firmware en el volcado de `J?`.
-        assert banco.ultimas("JI") == ["JI0.00,0.00,-26.60"], banco.lineas
-        assert banco.ultimas("JL") == [], "salió la recta antes de estar arriba"
-
-        banco.estado.teach_evento = pr.parsear("[TEACH] irfin")
-        banco.estado.teach_evento_n += 1
-        interfaz._teach_eventos()
-
         assert banco.ultimas("JL") == ["JL2.00,3.00,-29.00"], banco.lineas
+        assert banco.ultimas("JI") == [], "el movL dio un rodeo por home"
 
-        # Y el movJ sigue siendo un solo comando hasta el punto.
         banco.limpiar()
         banco.estado.teach_evento = pr.parsear("[TEACH] lfin tramos=9 frenadas=0 paso=1.00")
         banco.estado.teach_evento_n += 1

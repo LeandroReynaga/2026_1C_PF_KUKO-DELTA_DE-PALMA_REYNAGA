@@ -20,9 +20,103 @@ void aplicarLimites()
     SOFT_LIMITS    = {VEL_MAX, ACC_SUAVE};
 }
 
+bool redirigirLineal(Stepper &m1, Stepper &m2, Stepper &m3,
+                     long target1, long target2, long target3,
+                     const MotionLimits &limits)
+{
+    Stepper *eje[3]    = { &m1, &m2, &m3 };
+    const long meta[3] = { target1, target2, target3 };
+
+    long d[3];
+    long maxDist = 0;
+
+    for (uint8_t i = 0; i < 3; i++)
+    {
+        d[i] = labs(meta[i] - eje[i]->getPosition());
+
+        if (d[i] > maxDist) maxDist = d[i];
+    }
+
+    if (maxDist == 0)
+    {
+        return false;
+    }
+
+    bool alguno = false;
+
+    for (uint8_t i = 0; i < 3; i++)
+    {
+        // Proporcional y sin piso: ver el header. La k se cancela entre la
+        // distancia de frenado del eje y lo que tiene para recorrer.
+        const float k = (float)d[i] / (float)maxDist;
+
+        const float acel = limits.maxAcceleration * k;
+        const float vel  = limits.maxSpeed * k;
+
+        if (eje[i]->puedeRedirigir(meta[i], acel))
+        {
+            eje[i]->redirigir(meta[i], vel, acel);
+            alguno = true;
+        }
+        else if (!eje[i]->isMoving())
+        {
+            // Parado: arrancar de cero es seguro y no interrumpe nada.
+            eje[i]->setSpeed(vel);
+            eje[i]->setAcceleration(acel);
+            eje[i]->moveTo(meta[i]);
+            alguno = true;
+        }
+        // Andando y sin poder redirigir: se lo deja llegar. Es el eje que
+        // esta invirtiendo el sentido, y tiene que pasar por cero igual.
+    }
+
+    return alguno;
+}
+
+void empujarDetenidos(Stepper &m1, Stepper &m2, Stepper &m3,
+                      long target1, long target2, long target3,
+                      const MotionLimits &limits)
+{
+    Stepper *eje[3]    = { &m1, &m2, &m3 };
+    const long meta[3] = { target1, target2, target3 };
+
+    long d[3];
+    long maxDist = 0;
+
+    for (uint8_t i = 0; i < 3; i++)
+    {
+        d[i] = labs(meta[i] - eje[i]->getPosition());
+
+        if (d[i] > maxDist) maxDist = d[i];
+    }
+
+    if (maxDist == 0)
+    {
+        return;
+    }
+
+    for (uint8_t i = 0; i < 3; i++)
+    {
+        if (d[i] == 0 || eje[i]->isMoving())
+        {
+            continue;
+        }
+
+        // Reparto proporcional a lo que le FALTA. Se probo sacarlo a la
+        // velocidad del tramo entero para que se pusiera a la par mas
+        // rapido, y en el robot se sintio peor: un eje que arranca a fondo
+        // para dar unos pocos pasos es un tiron, y son varios por recta.
+        const float k = (float)d[i] / (float)maxDist;
+
+        eje[i]->setSpeed(limits.maxSpeed * k);
+        eje[i]->setAcceleration(limits.maxAcceleration * k);
+        eje[i]->moveTo(meta[i]);
+    }
+}
+
 bool redirigirSincronizado(Stepper &m1, Stepper &m2, Stepper &m3,
                             long target1, long target2, long target3,
-                            const MotionLimits &limits, float pisoEscala)
+                            const MotionLimits &limits)
 {
     const long d1 = labs(target1 - m1.getPosition());
     const long d2 = labs(target2 - m2.getPosition());
@@ -35,18 +129,9 @@ bool redirigirSincronizado(Stepper &m1, Stepper &m2, Stepper &m3,
 
     // Mismo reparto que moveSynchronized: velocidad y aceleracion en
     // proporcion al recorrido de cada eje, para que los tres lleguen juntos.
-    float k1 = (float)d1 / (float)maxDist;
-    float k2 = (float)d2 / (float)maxDist;
-    float k3 = (float)d3 / (float)maxDist;
-
-    // Piso del reparto (ver el header). Solo sube, y al eje dominante --
-    // que siempre vale 1 -- no lo toca nunca.
-    if (pisoEscala > 0.0f)
-    {
-        if (k1 < pisoEscala) k1 = pisoEscala;
-        if (k2 < pisoEscala) k2 = pisoEscala;
-        if (k3 < pisoEscala) k3 = pisoEscala;
-    }
+    const float k1 = (float)d1 / (float)maxDist;
+    const float k2 = (float)d2 / (float)maxDist;
+    const float k3 = (float)d3 / (float)maxDist;
 
     // Un eje que no se mueve en el tramo nuevo tendria velocidad cero y no se
     // puede encadenar: hay que frenarlo de verdad.

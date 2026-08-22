@@ -217,6 +217,15 @@ FICHAS: dict[str, Ficha] = {
         "paso: 1 cm da 0,05 mm, 2 cm da 0,19 mm y 5 cm ya da 1,06 mm. Bajarlo "
         "de mas no sirve: el firmware no acepta un tramo mas corto que lo que "
         "el eje necesita para frenar, asi que lo sube solo."),
+    "movl_acel": Ficha(
+        "Modo teach", "Aceleracion del movimiento recto",
+        "EL numero para que una recta salga derecha yendo rapido, y no es "
+        "obvio por que: el tramo no puede ser mas corto que la distancia de "
+        "frenado, que vale v2/(2a). O sea que a velocidad fija, MAS "
+        "ACELERACION ES MENOS TRAMO, y menos tramo es corregir el rumbo mas "
+        "seguido. A 40 cm/s, con 40.000 el tramo minimo son 5,4 cm (1,3 mm "
+        "de desvio) y con 97.000 baja a 2,2 cm (0,23 mm). Viene en 97.000, "
+        "la misma con la que el robot mueve cada pieza."),
     "movl_vel": Ficha(
         "Modo teach", "Velocidad del movimiento recto",
         "Velocidad de la PUNTA mientras recorre una recta. No es un capricho "

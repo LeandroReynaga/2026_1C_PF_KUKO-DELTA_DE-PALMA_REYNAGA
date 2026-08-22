@@ -108,21 +108,71 @@ void moveSynchronized(Stepper &m1, Stepper &m2, Stepper &m3,
  * alcanza para frenar desde la velocidad que trae). Ahi quien llama tiene
  * que hacer lo de siempre: esperar a que lleguen y despues moveSynchronized.
  */
-// `pisoEscala` es el minimo que puede recibir un eje del reparto, en vez de
-// lo estrictamente proporcional. Existe por movL: partiendo una recta en
-// tramos cortos, el eje que menos recorre se lleva a veces el 1 % de la
-// aceleracion (medido: 455 pas/s2 de 40.000), y con esa aceleracion su
-// distancia de frenado se dispara y puedeRedirigir() se niega. Con el
-// reparto estricto eso pasa en la MITAD de los tramos de una diagonal, y
-// cada negativa es una frenada: es exactamente el "va a los tirones".
-//
-// Un eje con el piso puesto llega antes que los otros, no despues, y lo que
-// se aparta de la recta por eso esta acotado por lo poco que ese eje
-// recorria en el tramo -- que es chico por definicion, porque es justamente
-// el eje que casi no se mueve. 0 = reparto estricto (el de siempre).
+/**
+ * Encadenado para una RECTA (movL), donde los tramos son colineales.
+ *
+ * Se diferencia de redirigirSincronizado en una sola cosa, y es toda la
+ * diferencia: aca NO es "los tres o ninguno". Cada eje se resuelve solo.
+ *
+ * POR QUE. En un vertice de una trayectoria ensenada los tres ejes cambian
+ * de direccion a la vez, y ahi frenar a los tres juntos es lo correcto. En
+ * una recta cartesiana, en cambio, un eje puede invertir el sentido EN
+ * MEDIO del tramo mientras los otros dos siguen derecho -- pasa siempre, y
+ * es geometria, no un caso raro: yendo de home a (10, -9, -30) el eje 3
+ * invierte a mitad de camino. Ese eje esta en su punto de retorno, o sea a
+ * velocidad casi cero, asi que dejarlo frenar no cuesta nada; frenar a los
+ * otros dos por acompanarlo es lo que se siente como un tiron.
+ *
+ * Tres caminos por eje:
+ *   - se puede redirigir  -> se redirige, sin soltar la velocidad;
+ *   - no se puede y esta andando -> se lo deja terminar el tramo que tiene
+ *     (esta llegando a su punto de retorno, que es justo donde queria ir);
+ *   - no se puede y esta parado -> moveTo, que en un eje detenido es seguro.
+ *
+ * Lo que se paga es que los ejes dejan de llegar exactamente juntos, y por
+ * eso esto NO sirve para un vertice: el desfasaje esta acotado por lo que
+ * ese eje recorre en UN tramo, que es chico justamente porque el eje que se
+ * queda atras es el que casi no se mueve.
+ *
+ * El reparto es ESTRICTAMENTE proporcional, y eso no es un detalle: con
+ * velocidad y aceleracion en proporcion a k, la distancia de frenado de un
+ * eje vale k * v^2/(2a) y lo que ese eje tiene para recorrer en el tramo
+ * vale k * (pasos del eje dominante). La k se cancela, o sea que si el
+ * tramo le alcanza al eje que mas recorre, le alcanza a los tres.
+ *
+ * Darle un piso al reparto rompe justamente eso: le sube la velocidad al
+ * eje flaco sin darle mas distancia. Hubo una version con piso y es lo que
+ * dejaba trabado un movimiento con un eje al 20 % del recorrido de otro
+ * (por ejemplo ir a Y = -9, donde un eje recorre 51 grados y otro 11).
+ *
+ * Devuelve false solo si no habia nada que hacer.
+ */
+bool redirigirLineal(Stepper &m1, Stepper &m2, Stepper &m3,
+                     long target1, long target2, long target3,
+                     const MotionLimits &limits);
+
+/**
+ * Vuelve a poner en marcha a los ejes que estan DETENIDOS y todavia no
+ * llegaron al destino. A los que estan andando no los toca.
+ *
+ * Es el complemento de redirigirLineal: ahi un eje que no se puede
+ * encadenar se deja llegar, y queda parado hasta el tramo siguiente. Un
+ * tramo de espera no se nota, pero varios seguidos si -- el eje que
+ * invierte el sentido en medio de una recta se atrasa un poco en cada uno,
+ * el atraso se acumula, y la punta se va yendo de la recta cada vez mas.
+ * Eso es el zigzag del tramo final.
+ *
+ * Llamandola en cada vuelta del loop, ningun eje se queda quieto mientras
+ * los otros avanzan: en cuanto frena, arranca de nuevo hacia el destino
+ * vigente. Como recibe velocidad proporcional a lo que le FALTA, el que
+ * viene atrasado se lleva mas y se pone a la par solo.
+ */
+void empujarDetenidos(Stepper &m1, Stepper &m2, Stepper &m3,
+                      long target1, long target2, long target3,
+                      const MotionLimits &limits);
+
 bool redirigirSincronizado(Stepper &m1, Stepper &m2, Stepper &m3,
                             long target1, long target2, long target3,
-                            const MotionLimits &limits = DEFAULT_LIMITS,
-                            float pisoEscala = 0.0f);
+                            const MotionLimits &limits = DEFAULT_LIMITS);
 
 }

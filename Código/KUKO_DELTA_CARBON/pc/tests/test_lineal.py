@@ -167,13 +167,14 @@ def test_un_paso_de_un_centimetro_es_invisible_en_todos_los_casos():
 #  La regla que ata el paso con la velocidad
 # ==================================================================
 def paso_efectivo_cm(p0, p1, paso_pedido: float, vel_cms: float,
-                     acel: float, margen: float = 2.0) -> float:
+                     acel: float, margen: float = 3.0) -> float:
     """Espejo de MovimientoLineal::comenzar (src/motion/Trajectory.cpp).
 
-    Stepper::redirigir no acepta un destino más cerca que la distancia de
-    frenado, así que el tramo no puede ser más corto que eso: si lo fuera,
-    cada tramo terminaría en una frenada y el movimiento saldría peor que
-    el movJ que se quería mejorar.
+    El tramo tiene que medir `margen` veces la distancia de frenado. No es
+    holgura: con el tramo justo, el eje acelera hasta que frenar le cuesta el
+    tramo entero, y ahí redirigir pide 1,1 veces eso más 4 pasos -- más de lo
+    que hay -- y se niega. El equilibrio se estabiliza JUSTO en el borde en
+    que falla, y eso es el movimiento a los tirones que se vio en el robot.
     """
 
     k = pasos_por_cm(p0, p1)

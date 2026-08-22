@@ -336,10 +336,27 @@ static float TEACH_ACEL = 40000.0f;
 //     ese piso es de ~0,6 cm; a 50 cm/s ya es de 7 cm y movL deja de
 //     tener sentido.
 //
-// 1 cm a 20 cm/s es el punto donde las dos cosas cierran: recta a menos de
-// una decima de milimetro y sin frenadas intermedias.
-static float MOVL_PASO_CM = 1.0f;
-static float MOVL_VEL_CMS = 20.0f;
+// Los valores de fabrica salieron de probar en el robot: 40 cm/s se ve
+// fluido, y el paso se deja en el minimo a proposito -- pedir menos de lo
+// que la frenada permite no rompe nada, el firmware lo sube solo hasta ahi.
+// Asi el tramo siempre queda en el mas corto POSIBLE para la velocidad y la
+// aceleracion que haya, que es lo mas recto que este esquema puede dar, sin
+// tener que recalcularlo a mano cada vez que se toca uno de los otros dos.
+static float MOVL_PASO_CM = 0.01f;
+static float MOVL_VEL_CMS = 40.0f;
+
+// Aceleracion propia del movimiento recto, aparte de la del resto de teach.
+//
+// Es EL numero para que una recta salga derecha a velocidad alta, y la
+// razon esta en la formula de la distancia de frenado: v^2/(2a). El tramo
+// no puede ser mas corto que esa distancia, asi que a velocidad fija, MAS
+// ACELERACION ES MENOS TRAMO, o sea mas puntos donde se corrige el rumbo.
+//
+// A 40 cm/s: con 40.000 el tramo minimo son 5,4 cm (se aparta ~1,3 mm de la
+// recta); con 97.000 baja a 2,2 cm (~0,23 mm). Por eso arranca en 97.000,
+// que es la misma aceleracion con la que el robot mueve cada pieza en el
+// ciclo normal -- o sea, ya probada en este brazo.
+static float MOVL_ACEL = 97000.0f;
 
 // Radio de mezcla de las esquinas, en cm. 0 = apagado (se frena en cada
 // punto, que es como andaba antes).
@@ -2797,8 +2814,10 @@ void Robot::registrarParametros()
     params.registrar("t_mezcla",  &TEACH_MEZCLA_CM,   0.0f,    3.0f,      "cm",     NIVEL_PROCESO);
     params.registrar("t_esquina", &TEACH_ESQUINA_DEG, 0.0f,    90.0f,     "deg",    NIVEL_PROCESO, 'i');
 
-    params.registrar("movl_paso", &MOVL_PASO_CM, 0.2f, 5.0f,  "cm",   NIVEL_PROCESO);
-    params.registrar("movl_vel",  &MOVL_VEL_CMS, 1.0f, 60.0f, "cm/s", NIVEL_PROCESO);
+    params.registrar("movl_paso", &MOVL_PASO_CM, 0.01f, 5.0f, "cm",   NIVEL_PROCESO);
+    params.registrar("movl_acel", &MOVL_ACEL, 5000.0f, 150000.0f, "pas/s2",
+                     NIVEL_PROCESO, 'i');
+    params.registrar("movl_vel",  &MOVL_VEL_CMS, 1.0f, 100.0f, "cm/s", NIVEL_PROCESO);
 
     params.registrar("pick_tol",  &PICK_LATE_TOLERANCE_MS, 0.0f, 500.0f, "ms", NIVEL_PROCESO, 'i');
     params.registrar("pump_lead", &PUMP_LEAD_MS,           0.0f, 2000.0f, "ms", NIVEL_PROCESO, 'i');
@@ -4044,7 +4063,7 @@ bool Robot::procesarComandoTeach(const char *cmd)
 
         cfg.pasoCm = MOVL_PASO_CM;
         cfg.velCms = MOVL_VEL_CMS;
-        cfg.acel   = TEACH_ACEL;
+        cfg.acel   = MOVL_ACEL;
 
         // El origen es la posicion COMANDADA, no la medida: el firmware no
         // tiene cinematica directa, y de todas formas la comandada es la

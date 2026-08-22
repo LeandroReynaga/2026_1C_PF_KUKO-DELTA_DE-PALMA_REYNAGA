@@ -1922,21 +1922,20 @@ class Interfaz:
     def _teach_ir(self, lineal: bool = False) -> None:
         """Manda el brazo a la coordenada de los tres campos.
 
-        `lineal` elige el camino del último tramo. Los dos empiezan yendo a
-        home, que es lo que garantiza que la bajada no raspe nada:
+        `lineal` elige el camino:
 
-            movJ   `JI` hasta el punto: los tres ejes en proporción, o sea
-                   derecho en el espacio de los ángulos y curvo en el de la
-                   punta (hasta 27 mm de panza cruzando la cinta).
-            movL   `JI` al centro-arriba del volumen y de ahí `JL`: la punta
-                   va derecho de verdad.
+            movJ   `JI`: pasa por home y de ahí al punto. El rodeo hace
+                   falta porque movJ describe una curva que nadie ve venir
+                   (hasta 27 mm de panza cruzando la cinta), y desde home
+                   -- lo más alto que llega el brazo -- no puede raspar nada.
+            movL   `JL`: derecho desde donde esté hasta el punto, sin rodeo.
 
-        El rodeo del movL pasa por (0, 0, techo) y no por home a secas porque
-        `JL` sale de la posición comandada, y home en cartesiano no lo sabe
-        nadie: el firmware no tiene cinemática directa. El centro-arriba del
-        volumen sí es un punto conocido -- es el mismo al que el firmware
-        manda el brazo al entrar a teach -- y queda justo debajo de home, así
-        que el rodeo sigue siendo por arriba.
+        movL no necesita el rodeo, y es por la forma del volumen: el cajón de
+        teach es CONVEXO, así que la recta entre dos puntos de adentro se
+        queda adentro. Nunca baja del piso (`grab_z`, la altura a la que se
+        agarra una pieza apoyada), que es justo el límite que el rodeo estaba
+        protegiendo. Y lo que se gana no es sólo tiempo: subir para después
+        bajar no se parece a lo que el operador pidió.
 
         El camino (por home si hace falta) y el recorte al volumen los
         resuelve el firmware, que es el que no puede equivocarse. Lo que se
@@ -1983,16 +1982,10 @@ class Interfaz:
             return
 
         if lineal:
-            zmax = limites["z"][1]
-
-            if not self.enviar(pr.cmd_teach_ir(0.0, 0.0, zmax)):
+            if not self.enviar(pr.cmd_teach_lineal(x, y, z)):
                 ui.notify("sin enlace con el robot", color="negative")
                 return
 
-            # El tramo recto sale recién cuando el firmware avisa que llegó
-            # al punto de partida (`irfin`): mandarlo ahora lo rechazaría con
-            # err=ocupado, y encadenarlo por tiempo sería adivinar.
-            self._movl_pendiente = (x, y, z)
             self.teach_yendo_hasta = time.monotonic() + ESPERA_IR_CONFIRMA_S
             return
 
@@ -2149,14 +2142,6 @@ class Interfaz:
             self.teach_yendo_hasta = time.monotonic() + ESPERA_IR_S
 
         elif evento.evento == "irfin":
-            if self._movl_pendiente is not None:
-                x, y, z = self._movl_pendiente
-                self._movl_pendiente = None
-
-                if self.enviar(pr.cmd_teach_lineal(x, y, z)):
-                    self.teach_yendo_hasta = time.monotonic() + ESPERA_IR_CONFIRMA_S
-                    return
-
             self.teach_yendo_hasta = 0.0
 
         elif evento.evento == "l":
