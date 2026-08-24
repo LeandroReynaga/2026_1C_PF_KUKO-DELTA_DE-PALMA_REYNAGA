@@ -165,8 +165,38 @@ LINE_DIRECTION = "LEFT_TO_RIGHT"
 MIN_CONTOUR_AREA = 3600
 MAX_CONTOUR_AREA = 43000
 
-# Tamaño del filtro morfológico.
-MORPH_KERNEL_SIZE = 7
+# Tamaño del filtro morfológico (apertura y después cierre).
+#
+# El CIERRE es el que importa acá, y tiene un efecto que no es obvio:
+# tapa los huecos DENTRO de una pieza, pero también el hueco ENTRE dos
+# piezas que se están tocando. Cuanto más grande el kernel, más
+# gruesa queda soldada la unión, más difícil le resulta al watershed
+# encontrar el cuello por donde cortar, y más seguido dos piezas
+# salen como una sola mancha.
+#
+# Bajado de 7 a 5 (agosto 2026). Medido sobre una escena con tres
+# pares de piezas del mismo color tocándose ligeramente (hexágono +
+# cuadrado rojos, cuadrado + hexágono azules, dos círculos verdes),
+# 40 fotogramas, contando cuántas veces se encuentran MENOS piezas de
+# las que hay:
+#
+#     kernel   fallos de separación   control piezas sueltas
+#        3            16                     60/60
+#        4            14                     60/60
+#        5            13                     60/60   <- este
+#        6            16                     60/60
+#        7            20                     60/60
+#        9            45                     60/60
+#
+# Hay un mínimo claro en 5, y no es monótono: bajar más tampoco
+# ayuda, porque un kernel chico deja la máscara sucia y el watershed
+# empieza a partir piezas sanas.
+#
+# El control de la derecha es importante: sobre piezas SUELTAS este
+# número no cambia nada (60/60 con cualquier kernel, y el área varía
+# un 0,1 %). O sea que se gana en el caso difícil sin pagar en el
+# fácil.
+MORPH_KERNEL_SIZE = 5  # antes 7
 
 # Suaviza el ruido fino de borde (pixeles sueltos justo al filo
 # del umbral HSV, típico en superficies texturadas/matte).
@@ -205,10 +235,78 @@ SQUARE_ASPECT_RATIO_MAX = 1.25
 
 # Circularidad mínima para considerar un objeto como círculo.
 #
-# OJO: un hexágono regular tiene circularidad 0.91, o sea que este
-# umbral NO alcanza para separarlo de un círculo. Por eso el
-# hexágono se prueba antes, contando vértices.
-CIRCLE_CIRCULARITY_MIN = 0.80
+# Es la ÚLTIMA prueba de classify_shape(), o sea el cajón donde cae
+# todo lo que no clasificó antes. Por eso importa que sea exigente:
+# con 0.80 no era un umbral, era un colador.
+#
+# EL BUG QUE ARREGLA (agosto 2026). Se veían hexágonos yendo al tacho
+# de los círculos. La sospecha era el techo del hexágono (0.90) y
+# resultó ser exactamente al revés. Medido con tandas de 5 piezas de
+# forma CONOCIDA, dos pasadas cada una, 1993 detecciones:
+#
+#   Los 27 hexágonos mal clasificados fallaban TODOS por el PISO del
+#   llenado, no por el techo: caían entre 0.41 y 0.727 contra el
+#   mínimo de 0.73. Ninguno pasó de 0.90.
+#
+# Un hexágono con la máscara comida --dos piezas del mismo color muy
+# juntas que el watershed parte desparejo, o una pieza tocando el
+# borde-- pierde llenado, se cae de la ventana del hexágono, y acá
+# lo levantaba el 0.80 y lo llamaba círculo. La forma no estaba mal
+# medida: estaba mal la red de contención.
+#
+# El umbral sale del hueco real entre las dos poblaciones:
+#
+#     hexágonos reales   circularidad máxima  0.9625  (p99 0.9600)
+#     círculos reales    mediana 0.9919, p5 0.8321
+#
+# 0.965 queda por encima del hexágono más redondo que se midió.
+# Barrido completo, contando los dos errores por separado:
+#
+#                    al tacho equivocado   sin clasificar
+#   circ 0.80 (antes)         85                 63
+#   circ 0.92                 41                116
+#   circ 0.965 (este)         41                117
+#   circ 0.98                 41                126
+#
+# Hay meseta entre 0.92 y 0.965, así que el número no es delicado.
+# Por forma, las que iban al tacho equivocado: hexágonos 31 -> 4,
+# cuadrados 18 -> 1, círculos 36 -> 36.
+#
+# LO QUE SE PAGA, y por qué conviene igual: los errores no se
+# eliminan, se CONVIERTEN. Una pieza que antes salía con otra forma
+# ahora no clasifica y sigue de largo por la cinta. Eso es mucho
+# mejor que meterla en el tacho equivocado sin que nadie se entere,
+# porque la caja mal armada no se nota hasta el final. Los círculos
+# bien clasificados bajan de 90.9 % a 89.3 %.
+#
+# NO subirlo más: a 0.98 se empiezan a perder círculos buenos (el
+# 8.7 % de las detecciones de círculo tiene circularidad < 0.965, y
+# arriba de eso la proporción crece rápido).
+#
+# BAJADO DE 0.965 A 0.92, y el motivo es el otro caso difícil. Cuando
+# el watershed separa dos piezas pegadas, el corte deja un borde
+# RECTO donde la pieza real es curva, así que el pedazo legítimo sale
+# con la circularidad castigada. Un umbral muy alto lo rechaza y la
+# pieza se pierde -- justo en la situación en la que ya cuesta
+# detectarla. Medido sobre la escena de piezas pegadas (120 casos):
+#
+#     circularidad   fallos con piezas pegadas   piezas al tacho
+#                     (kernel morfológico 5)      equivocado
+#        0.80                  9                       85
+#        0.85                 11                       ~
+#        0.92                 13                       41   <- este
+#        0.965                19                       41
+#
+# 0.92 y 0.965 dan EXACTAMENTE lo mismo contra los hexágonos (41 en
+# los dos), pero 0.92 recupera 6 detecciones de piezas pegadas. O sea
+# que no es un punto medio de compromiso: 0.965 era peor en un caso e
+# igual en el otro.
+#
+# El margen sigue estando: el hexágono más redondo de los que se
+# caían de la ventana de llenado --que son los que llegan a esta
+# prueba-- medía 0.903. Los hexágonos bien formados llegan a 0.9625,
+# pero esos pasan por la ventana y nunca llegan hasta acá.
+CIRCLE_CIRCULARITY_MIN = 0.92  # antes 0.80, después 0.965
 
 # Condición principal del hexágono: qué fracción del círculo que la
 # envuelve llena la figura. Separa mucho mejor que la circularidad,
@@ -225,15 +323,75 @@ CIRCLE_CIRCULARITY_MIN = 0.80
 #   CIRCULO azul    fill 0.880 - 0.948
 #   CIRCULO rojo    fill 0.958 - 0.973
 #
-# La ventana de abajo entra justo en el hueco, con margen para los
-# dos lados. Si aparecen hexágonos clasificados como círculos,
-# subir el máximo; si un círculo pasa por hexágono, bajarlo.
+# VERIFICADO CON HEXÁGONOS REALES (agosto 2026), y la ventana quedó
+# como estaba. Tandas de 5 piezas de forma conocida, dos pasadas,
+# 674 detecciones de hexágono:
 #
-# PENDIENTE DE VERIFICAR CON UN HEXÁGONO REAL: los límites salen de
-# piezas cuadradas y redondas más el valor teórico, porque todavía
-# no hay una pieza hexagonal impresa para medir.
+#     hexágono real   llenado  p5 0.651   mediana 0.863   máx 0.899
+#     cuadrado real   llenado  p5 0.656   mediana 0.687   máx 0.720
+#     círculo real    llenado  p5 0.835   mediana 0.953   máx 0.978
+#
+# O sea que la ventana 0.73-0.90 estaba bien elegida: el techo no
+# corta ni un hexágono (el más lleno dio 0.899) y el piso lo separa
+# del cuadrado.
+#
+# OJO con la tentación de bajar el piso. Los hexágonos con la
+# máscara comida caen por debajo de 0.73, así que bajar el piso para
+# recuperarlos parece lo obvio -- pero el cuadrado llega a 0.720 con
+# su p5 en 0.656, o sea que están pegados, y lo que se gana de un
+# lado se pierde del otro. Medido, ya con la circularidad en 0.965 y
+# contando las piezas que van al tacho equivocado:
+#
+#     piso    total   cuadrados  hexágonos  círculos
+#     0.73      41        1          4         36     <- este
+#     0.66      49        6          4         39
+#     0.62      55       11          4         40
+#
+# Los hexágonos ya no mejoran (quedan en 4 con cualquier piso) y los
+# cuadrados empeoran parejo. El que resuelve ese caso es
+# CIRCLE_CIRCULARITY_MIN, que no toca esta separación.
+#
+# Si aparecen hexágonos clasificados como círculos, mirar PRIMERO la
+# circularidad y no esta ventana: fue el error de diagnóstico que se
+# cometió la primera vez.
 HEXAGON_FILL_RATIO_MIN = 0.73
 HEXAGON_FILL_RATIO_MAX = 0.90# antes 0.86
+
+# Circularidad MÁXIMA de un hexágono. 1.0 desactiva la prueba y deja el
+# comportamiento anterior.
+#
+# Es la condición que le faltaba a la ventana de llenado, y resuelve el
+# caso que ninguna otra podía: un CÍRCULO MORDIDO. Cuando dos piezas se
+# tocan y hay que cortarlas, al círculo le queda un pedazo menos y su
+# llenado cae justo adentro de la ventana del hexágono. Medido sobre una
+# escena con las tres formas pegadas, etiquetando cada pieza por su
+# posición (así se sabe qué es cada una de verdad):
+#
+#                    llenado          circularidad
+#     hexágono     0.817 - 0.848      0.927 - 0.940
+#     círculo      0.812 - 0.934      0.965 - 0.992
+#
+# El llenado se solapa POR COMPLETO: con esa prueba sola, un círculo
+# mordido y un hexágono son indistinguibles, y no es cuestión de mover el
+# umbral. La circularidad, en cambio, deja un hueco limpio -- morderle un
+# pedazo a un círculo le baja el área pero no lo vuelve menos redondo en
+# el resto del borde.
+#
+# El valor sale del hueco entre las dos poblaciones, teniendo en cuenta
+# también los hexágonos ENTEROS de la medición anterior, que llegaban a
+# 0.9625. Barrido sobre dos escenas de piezas pegadas (240 casos):
+#
+#     techo    aciertos
+#     0.945     132/240   <- empieza a rechazar hexágonos buenos
+#     0.955     194/240
+#     0.962     194/240   <- este, en el medio de la meseta
+#     0.964     194/240
+#     0.970     156/240   <- los círculos mordidos vuelven a colarse
+#
+# Contra 148/240 sin esta prueba. La meseta 0.955-0.964 es angosta pero
+# real, y 0.962 es el único punto que además respeta el 0.9625 de los
+# hexágonos enteros.
+HEXAGON_CIRCULARITY_MAX = 0.962
 
 # ----------------------------
 # Rangos HSV por color
@@ -285,56 +443,91 @@ COLOR_HSV_RANGES = {
     "AZUL": (
         ((98, 95, 100), (112, 255, 255)),
     ),
-    # Verde. Calibrado sobre la pieza CLARA, que es la problemática:
-    # es tan brillante que se sobreexpone y llega a V=255 en toda su
-    # superficie. Aun así conserva color (S≈99), así que se detecta
-    # bien; lo que la hacía fallar no era el color sino el BORDE.
+    # Verde. Recalibrado para el filamento verde PURO (agosto 2026).
+    # El rango anterior estaba hecho sobre la pieza verde CHILLÓN, la
+    # que se sobreexponía; con el filamento nuevo ese rango no da una
+    # detección peor, da CERO: 0/120 círculos, medido.
     #
-    # Medido con la cinta quieta, 30 fotogramas por zona:
+    # Medido con la cinta detenida, 60 fotogramas, dos círculos por
+    # fotograma, sobre el núcleo erosionado de cada pieza y no sobre
+    # el borde (el borde es una franja mezclada con la cinta, y da un
+    # valor que no es ni de la pieza ni del fondo):
     #
     #                    H (p5-p95)   S (p5-p95)   V (p5-p95)
-    #     pieza verde       74-77       78-109      255-255
-    #     cinta gris        82-95       31-56       138-174
+    #     pieza verde       63-69        82-98      176-193
+    #     cinta gris        84-99        17-50      122-161
     #
-    # El problema estaba en el piso de V. Con V bajo entraba en la
-    # máscara el halo de píxeles de CINTA que rodea la pieza, y ese
-    # halo le comía el contorno: el círculo dejaba de llenar el 90%
-    # de su círculo envolvente y classify_shape lo leía HEXÁGONO
-    # (ver HEXAGON_FILL_RATIO_MAX). O sea que el síntoma no era
-    # "no la detecta" sino "la detecta con la forma equivocada".
+    # Contra el verde viejo cambian dos cosas, y la segunda da vuelta
+    # el criterio entero:
     #
-    # Barrido sobre 60 fotogramas, midiendo lo mismo que se midió
-    # para elegir el rango del azul (calidad de forma, no cantidad
-    # de píxeles capturados):
+    #   H bajó de 74-77 a 63-69. Eso es "más puro": más cerca del
+    #       verde primario (60).
+    #   V bajó de 255 a ~180, o sea que la pieza YA NO SATURA. Y ahí
+    #       se cae la regla vieja. V era EL número porque la cinta
+    #       llegaba a 174 y la pieza estaba clavada en 255; hoy la
+    #       cinta pica hasta V=220 en los bordes claros del recorte y
+    #       la pieza está en 180. V YA NO SEPARA NADA: queda sólo
+    #       como piso contra la sombra profunda.
     #
-    #                            círculo OK   llenado (mín)   falsas
-    #   (40,60,60)-(85,255,255)     50/60       0.896 (0.50)     0
-    #   (40,50,80)-(85,255,255)     25/60       0.761 (0.62)     5
-    #   (55,55,200)-(85,255,255)    60/60       0.974 (0.97)     0
-    #   (55,60,200)-(85,255,255)    60/60       0.974 (0.97)     0  <- este
-    #   (60,60,190)-(85,255,255)    60/60       0.972 (0.97)     0
+    # Separan H y S, y cada una alcanza SOLA. Medido en píxeles de
+    # cinta que entran a la máscara, que es el margen que la columna
+    # "falsas" no muestra: una falsa recién aparece cuando la fuga
+    # junta los 3600 px² de MIN_CONTOUR_AREA, así que un rango puede
+    # estar a un pelo de fallar y mostrar igual "falsas 0".
+    #
+    #   H≤74 sola        ->     0 px de cinta, incluso con S≥34
+    #   S≥50 sola        ->     0 px de media (pico de 2), con H≤86
+    #   S≥40 con H≤100   -> 25.000 px por fotograma (así se ve fugar)
+    #
+    # Barrido sobre los mismos 60 fotogramas --los mismos, no una
+    # captura nueva por candidato: entre dos rangos parecidos, la
+    # diferencia sería ruido de luz-- midiendo calidad de forma y no
+    # cantidad de píxeles capturados. Es la misma lección que el
+    # azul: ensanchar siempre sube los píxeles, mete el halo del
+    # borde, ablanda el contorno y el círculo termina HEXÁGONO.
+    #
+    #                             círculo OK   llenado (mín)  falsas
+    #   (55,60,200)-(85,255,255)     0/120      0.000 (0.00)    0  <- el viejo
+    #   (50,65,180)-(80,255,255)    48/120      0.602 (0.53)    0
+    #   (50,68,100)-(74,255,255)   120/120      0.939 (0.72)    0
+    #   (50,52,100)-(74,255,255)   120/120      0.940 (0.92)    0
+    #   (50,56,100)-(74,255,255)   120/120      0.939 (0.92)    0  <- este
+    #   (50,60,100)-(74,255,255)   120/120      0.939 (0.91)    0
+    #   (50,56,100)-(76,255,255)   120/120      0.942 (0.92)    0
     #
     # Los tres umbrales del mínimo, y por qué cada uno:
     #
-    #   V=200  es EL número. La cinta llega a V=174, así que 200 la
-    #       deja afuera con margen. Y hay acantilado: con V=170 se
-    #       cae a 12/25 círculos. La pieza está clavada en 255, así
-    #       que subir hasta 200 no le cuesta nada.
-    #   S=60   segunda barrera, apenas por encima del techo de la
-    #       cinta (56). No se puede subir mucho más: la pieza tiene
-    #       zonas de S≈78 y se empezaría a agujerear.
-    #   H=55-85 tercera barrera. La pieza está en 74-77, bien
-    #       centrada, y el techo 85 queda por debajo del piso de Hue
-    #       de la cinta (82-95). No subirlo.
+    #   H=50-74 es la barrera principal. La pieza está en 63-69 y la
+    #       cinta empieza en 84. El techo 74 además recorta el halo
+    #       del borde, y es lo que sube el llenado; de 78 para arriba
+    #       el llenado deja de mejorar y empieza a caer, y con el
+    #       piso de S un poco más alto aparece el primer HEXÁGONO. El
+    #       piso 50 es plano de 36 a 60 (no hay nada más en esa
+    #       franja de Hue) y queda 10 por debajo del mínimo de la
+    #       pieza.
+    #   S=56  segunda barrera, independiente de la primera. La fuga
+    #       de cinta se corta sola entre S=45 (7 px por fotograma) y
+    #       S=50 (0), y la pieza no baja de S=61, así que 56 cae en
+    #       el medio del hueco. No subirlo: de 68 para arriba empieza
+    #       a agujerear la pieza y el llenado mínimo se desploma a
+    #       0,72.
+    #   V=100 ya no separa nada, es sólo un piso contra la sombra
+    #       profunda. Está deliberadamente LEJOS de la pieza (176):
+    #       el rango viejo murió justo por tener el piso de V pegado
+    #       al valor de la pieza, y ese modo de falla es silencioso y
+    #       total --no detecta peor, no detecta nada.
     #
-    # Cuando lleguen las piezas de verde OSCURO Y PURO hay que
-    # rehacer esto: van a tener S alta y V media, o sea que el piso
-    # de V va a tener que BAJAR bastante (200 las dejaría afuera) y
-    # el de S va a poder subir. El procedimiento es este mismo:
-    # hsv_calibrator.py para los números, y después mirar cuántos
-    # círculos de 60 salen bien, que es lo único que importa.
+    # Todo el vecindario del elegido da 120/120 con llenado ~0.94: es
+    # una meseta y no una punta, que es justo lo que le faltaba al
+    # rango anterior. Si alguna vez hay que moverlo, ese es el
+    # chequeo: que los vecinos también den bien.
+    #
+    # (El pronóstico que estaba escrito acá salió mitad y mitad: el
+    # piso de V efectivamente tuvo que bajar, pero el de S no pudo
+    # subir. La saturación del verde puro resultó igual a la del
+    # chillón, 82-98 contra 78-109.)
     "VERDE": (
-        ((55, 60, 200), (85, 255, 255)),
+        ((50, 56, 100), (74, 255, 255)),
     ),
 }
 
@@ -372,6 +565,54 @@ WATERSHED_MIN_PEAK_DISTANCE = 18
 # Distancia mínima al borde (en píxeles) para que un pico cuente
 # como centro real. Filtra ruido cerca del borde de la máscara.
 WATERSHED_MIN_PEAK_HEIGHT = 5
+
+# Limpieza de cada pedazo DESPUÉS de cortar. 0 lo desactiva.
+#
+# El watershed corta bien, pero deja en cada pedazo una PÚA fina
+# apuntando al otro, sobre la línea del corte. Esa púa no se ve casi
+# en la máscara y arruina la clasificación, porque classify_shape()
+# trabaja sobre el CASCO CONVEXO: el casco se traga la púa, el
+# círculo envolvente crece para cubrirla, y el llenado se desploma.
+#
+# Medido sobre dos círculos verdes pegados:
+#
+#     sin limpieza    llenado 0.744 y 0.764  ->  los dos HEXÁGONO
+#     limpieza 13     llenado 0.825 y 0.853  ->  los dos CÍRCULO
+#
+# O sea que el síntoma no era "no separa las piezas" --las separaba
+# bien-- sino "las separa y las clasifica mal". Una pieza contada
+# pero con la forma equivocada va al tacho equivocado igual.
+#
+# Una apertura morfológica es justo la herramienta: borra lo que sea
+# más fino que el kernel (la púa) y deja intacto lo que es más ancho
+# (el disco). El costo es un 1 % de área.
+SPLIT_CLEANUP_KERNEL_SIZE = 13
+
+# ----------------------------
+# Diagnóstico temporal de formas
+# ----------------------------
+
+# TEMPORAL (agosto 2026) — PONER EN False Y BORRAR AL TERMINAR.
+#
+# Con esto en True, cada contorno que pasa el filtro de área deja una línea
+# en un CSV con los tres números que mira classify_shape(): cuántos vértices
+# sobrevivieron a approxPolyDP, qué fracción del círculo envolvente llena la
+# figura, y la circularidad.
+#
+# Existe porque falta EL dato desde siempre: la ventana del hexágono
+# (HEXAGON_FILL_RATIO_MIN/MAX) se eligió con piezas cuadradas y redondas más
+# el valor teórico de un hexágono regular, sin ninguna pieza hexagonal real
+# medida. Ajustarla a ciegas no es gratis: los círculos verdes tienen
+# llenado 0,918 y el techo del hexágono está en 0,90, o sea 0,018 de margen.
+# Subir el techo para agarrar hexágonos empieza a comerse los círculos.
+#
+# Se mide con la cinta ANDANDO, a propósito: el error aparece en producción,
+# y una pieza quieta no tiene el desenfoque de movimiento que ablanda el
+# borde de la máscara, que es lo que sospechamos que corre estos números.
+LOG_FORMAS = False
+
+# Dónde se escribe, relativo a la raíz del repositorio.
+LOG_FORMAS_ARCHIVO = "formas_medidas.csv"
 
 # ----------------------------
 # Visualización

@@ -82,12 +82,20 @@ class Modo(IntEnum):
 
     COLOR = 0
     FORMA = 1
-    ALFAJORES = 2
+    BOX = 2
 
 
 # Letra que viaja por serie <-> modo. Es el mismo comando para pedirlo
 # ('C', 'F', 'A') que el que informa el firmware en `md`/`mp`.
-LETRA_A_MODO = {"C": Modo.COLOR, "F": Modo.FORMA, "A": Modo.ALFAJORES}
+#
+# La 'A' del modo Box es histórica: el modo se llamaba ALFAJORES y se
+# renombró, pero la letra quedó. NO se cambió a 'B' a propósito, porque en
+# este mismo protocolo 'B' ya significa AZUL en la disposición de la caja
+# (`XBRGRBG`) y en los contadores por color; darle un segundo significado
+# sería peor que la letra heredada. Si algún día se cambia, hay que mover
+# firmware, este diccionario y PROTOCOLO.md a la vez, y subir
+# VERSION_PROTOCOLO para que un par desparejo se note.
+LETRA_A_MODO = {"C": Modo.COLOR, "F": Modo.FORMA, "A": Modo.BOX}
 MODO_A_LETRA = {v: k for k, v in LETRA_A_MODO.items()}
 
 COLORES = {"R": "ROJO", "G": "VERDE", "B": "AZUL"}
@@ -208,8 +216,8 @@ class Proceso(Mensaje):
     cinta: Optional[bool] = None
     cinta_pwm: Optional[int] = None
 
-    # Caja de alfajores. `layout` son los 6 colores objetivo y `llenas` las
-    # celdas ya ocupadas; ambos vacíos fuera del modo alfajores.
+    # Caja del modo Box. `layout` son los 6 colores objetivo y `llenas` las
+    # celdas ya ocupadas; ambos vacíos fuera del modo Box.
     layout: str = ""
     llenas: list[bool] = field(default_factory=list)
     celda_reservada: Optional[int] = None
@@ -841,7 +849,7 @@ def cmd_alternar_traza() -> str:
 
 
 def cmd_layout_caja(colores: str) -> str:
-    """Disposición de la caja de alfajores: 6 colores, de la celda 1 a la 6.
+    """Disposición de la caja del modo Box: 6 colores, de la celda 1 a la 6.
 
     Se valida acá lo mismo que valida el firmware (6 celdas, colores R/G/B,
     máximo 3 de cada uno) para poder deshabilitar el botón antes de mandar

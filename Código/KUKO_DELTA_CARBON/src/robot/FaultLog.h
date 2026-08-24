@@ -31,7 +31,7 @@
  *   enmano  1 si ya la tenia agarrada cuando fallo
  *   py, px  donde estaba esa pieza sobre la cinta, en cm
  *   tacho   a donde iba: el compartimento (1-3), o la celda de la caja
- *           (1-6) en modo alfajores. 0 si todavia no aplicaba
+ *           (1-6) en modo Box. 0 si todavia no aplicaba
  */
 
 enum TipoFallo : uint8_t

@@ -28,7 +28,7 @@
  *
  * O sea: yendo de un tacho al otro, el brazo pasa un centimetro mas abajo
  * (o mas arriba) de lo que uno cree. Al aire libre no importa y movJ es mas
- * rapido; metiendo un alfajor entre las paredes de una celda, o bajando
+ * rapido; metiendo una pieza entre las paredes de una celda, o bajando
  * sobre una pieza, si importa.
  *
  * ------------------------------------------------------------------

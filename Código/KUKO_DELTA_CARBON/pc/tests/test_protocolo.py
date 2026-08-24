@@ -292,7 +292,7 @@ def test_estado_futuro_no_rompe_el_parseo():
 def test_comandos():
     assert pr.cmd_pieza(3.5, "B", "S") == "3.50,B,S\n"
     assert pr.cmd_pieza(3.5, "AZUL", "CUADRADO") == "3.50,B,S\n"
-    assert pr.cmd_modo(pr.Modo.ALFAJORES) == "A\n"
+    assert pr.cmd_modo(pr.Modo.BOX) == "A\n"
     assert pr.cmd_paro() == "R\n"
     assert pr.cmd_layout_caja("brgrbg") == "XBRGRBG\n"
     assert pr.cmd_parametro("vis_lat", 0.18) == "Pvis_lat=0.1800\n"

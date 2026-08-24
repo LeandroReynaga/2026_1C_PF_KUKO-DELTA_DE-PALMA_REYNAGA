@@ -125,7 +125,7 @@ def test_una_bajada_vertical_en_el_centro_ya_es_recta():
     assert desvio_mm(p0, p1) < 0.01
 
     # Pero la misma bajada en una esquina ya se corre un milímetro, que es
-    # del orden del juego que tiene una celda de la caja de alfajores.
+    # del orden del juego que tiene una celda de la caja del modo Box.
     p0, p1, _ = CASOS["bajada vertical en una esquina"]
 
     assert desvio_mm(p0, p1) > 0.5

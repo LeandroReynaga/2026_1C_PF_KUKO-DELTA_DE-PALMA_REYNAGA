@@ -23,3 +23,8 @@ pc/config/local.json
 # se renombran, y esas si van al repositorio, en movimientos.json. El reparto
 # lo hace sola la aplicacion al guardar (kuko/teach.py, es_local).
 pc/config/movimientos_locales.json
+
+# Medicion temporal de formas (LOG_FORMAS en vision_python/config.py).
+# Se borra junto con esa bandera.
+formas_medidas.csv
+formas_medidas_produccion.csv

@@ -39,10 +39,10 @@ public:
         GO_BIN,          // tramo 4: accel MAX hasta el tacho que corresponde
         BIN_SETTLE,      // 0,2 s quieto para que la pieza caiga vertical
         RELEASE_WAIT,    // bomba apagada, esperando que la pieza se despegue
-        BOX_TRANSIT,     // alfajores: accel MAX, cruza por encima de la caja
-        BOX_APPROACH,    // alfajores: accel MAX, baja hasta 3 cm sobre la celda
-        BOX_DESCEND,     // alfajores: accel MIN, apoya el alfajor en la celda
-        BOX_LIFT,        // alfajores: accel MAX, sale de la caja hacia arriba
+        BOX_TRANSIT,     // modo Box: accel MAX, cruza por encima de la caja
+        BOX_APPROACH,    // modo Box: accel MAX, baja hasta 1 cm sobre la celda
+        BOX_DESCEND,     // modo Box: accel MIN, apoya la pieza en la celda
+        BOX_LIFT,        // modo Box: accel MAX, sale de la caja hacia arriba
         COLLISION_STOP,  // colision detectada: frenado y quieto antes de recalibrar
         ERROR,
 
@@ -61,7 +61,7 @@ public:
     {
         SORT_BY_COLOR = 0, // tacho 1 rojo, 2 verde, 3 azul
         SORT_BY_SHAPE = 1, // tacho 1 cuadrado, 2 hexagono, 3 circulo
-        SORT_ALFAJORES = 2 // llena una caja de 6 con circulos; el resto pasa
+        SORT_BOX      = 2  // llena una caja de 6 con circulos; el resto pasa
     };
 
     Robot();
@@ -151,21 +151,21 @@ private:
     //
     // OJO: el robot NO pregunta nada al encender (no hay contra que
     // comparar todavia), asi que la tapa de la caja tiene que estar puesta
-    // ANTES de darle energia si esto queda en SORT_ALFAJORES -- y sacada si
+    // ANTES de darle energia si esto queda en SORT_BOX -- y sacada si
     // queda en color o forma.
     //
     // Un cambio de modo que llega a mitad de una maniobra NO se aplica en
     // el momento: se guarda como pendiente y se aplica recien cuando el
     // robot no tiene ninguna pieza en la mano, para no cambiarle el destino
     // a una pieza que ya esta en vuelo.
-    SortMode sortMode        = SORT_ALFAJORES;
-    SortMode pendingSortMode = SORT_ALFAJORES;
+    SortMode sortMode        = SORT_BOX;
+    SortMode pendingSortMode = SORT_BOX;
     bool     sortModePending = false;
 
     void aplicarModoPendiente();
     const char *nombreModo(SortMode m) const;
 
-    static bool esAlfajores(SortMode m) { return m == SORT_ALFAJORES; }
+    static bool esBox(SortMode m) { return m == SORT_BOX; }
 
     // El modo al que el robot va a quedar: el pendiente si hay uno, el
     // activo si no. Es contra este que se compara un pedido nuevo.
@@ -174,7 +174,7 @@ private:
     // ------------------------------------------------------------------
     //  Confirmacion de la tapa
     // ------------------------------------------------------------------
-    // Entrar o salir del modo alfajores implica poner o sacar la tapa con
+    // Entrar o salir del modo Box implica poner o sacar la tapa con
     // forma de caja que va sobre los tachos. El firmware no tiene forma de
     // ver si esta puesta, y arrancar el modo equivocado significa tirar
     // piezas contra la tapa (o dentro de tachos tapados), asi que cualquier
@@ -193,12 +193,12 @@ private:
     void vencerConfirmacion();
 
     // ------------------------------------------------------------------
-    //  Caja de alfajores (modo SORT_ALFAJORES)
+    //  Caja del modo Box (SORT_BOX)
     // ------------------------------------------------------------------
     // Grilla de 2 filas x 3 columnas. Las celdas se numeran 1 a 6 desde la
     // fila mas cercana a la cinta; en el codigo van indexadas 0 a 5.
     //
-    // boxLayout dice de que color tiene que ser el alfajor de cada celda, y
+    // boxLayout dice de que color tiene que ser la pieza de cada celda, y
     // boxFilled cuales ya estan puestas. Un circulo que llega sirve solo si
     // queda alguna celda vacia de su color; todo lo demas (cuadrados,
     // hexagonos, colores que ya no faltan) se deja pasar por la cinta.
@@ -221,7 +221,7 @@ private:
     void    imprimirCaja() const;
     uint8_t celdasLlenas() const;
 
-    // Una caja de 6 no se puede llenar con mas de 3 alfajores del mismo
+    // Una caja de 6 no se puede llenar con mas de 3 piezas del mismo
     // color (con 4 rojos y 2 verdes, o con 6 verdes, el robot esperaria
     // para siempre una pieza que nunca va a poder ubicar).
     static bool layoutValido(const char *layout);

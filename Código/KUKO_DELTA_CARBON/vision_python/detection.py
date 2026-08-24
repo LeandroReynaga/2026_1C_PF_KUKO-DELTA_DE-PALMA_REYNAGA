@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import time                       # TEMPORAL: solo para LOG_FORMAS
 from dataclasses import dataclass
 from math import pi
+from pathlib import Path          # TEMPORAL: solo para LOG_FORMAS
 
 import cv2
 import numpy as np
@@ -9,8 +11,11 @@ import numpy as np
 from config import (
     CIRCLE_CIRCULARITY_MIN,
     COLOR_HSV_RANGES,
+    HEXAGON_CIRCULARITY_MAX,
     HEXAGON_FILL_RATIO_MAX,
     HEXAGON_FILL_RATIO_MIN,
+    LOG_FORMAS,
+    LOG_FORMAS_ARCHIVO,
     MASK_SMOOTHING_KERNEL_SIZE,
     MAX_CONTOUR_AREA,
     MIN_CONTOUR_AREA,
@@ -19,6 +24,7 @@ from config import (
     SMOOTH_MASK_EDGES,
     SQUARE_ASPECT_RATIO_MAX,
     SQUARE_ASPECT_RATIO_MIN,
+    SPLIT_CLEANUP_KERNEL_SIZE,
     WATERSHED_MIN_PEAK_DISTANCE,
     WATERSHED_MIN_PEAK_HEIGHT,
 )
@@ -182,11 +188,22 @@ def classify_shape(
 
     # Se aceptan 5 y 7 vértices además de 6: con el borde de la
     # máscara sucio, una esquina del hexágono se puede perder o
-    # partir en dos. Lo que evita que un círculo se cuele por acá no
-    # es el conteo sino la segunda condición, la fracción del
-    # círculo envolvente que llena la figura: el hexágono llena
-    # ~0.78 y el círculo ~0.90.
-    if vertices in (5, 6, 7):
+    # partir en dos.
+    #
+    # Son TRES condiciones y cada una ataja algo distinto:
+    #
+    #   vértices   descarta el cuadrado y el ruido grueso.
+    #   llenado    separa el hexágono del cuadrado (0.69) por abajo.
+    #   circularidad  separa el hexágono del CÍRCULO MORDIDO por arriba,
+    #       y es la única que puede. Un círculo al que hubo que cortarle
+    #       un pedazo --porque estaba pegado a otra pieza-- pierde área y
+    #       su llenado cae justo adentro de esta ventana: medido, círculos
+    #       mordidos entre 0.812 y 0.934 contra hexágonos entre 0.817 y
+    #       0.848, o sea solapamiento total. En circularidad, en cambio,
+    #       quedan separados (0.965-0.992 contra 0.927-0.940): morderle un
+    #       pedazo a un círculo le baja el área, pero no lo vuelve menos
+    #       redondo en el resto del borde.
+    if vertices in (5, 6, 7) and circularity <= HEXAGON_CIRCULARITY_MAX:
         _, enclosing_radius = cv2.minEnclosingCircle(hull)
 
         if enclosing_radius > 0:
@@ -209,6 +226,68 @@ def classify_shape(
         return "CIRCULO", circularity
 
     return None, circularity
+
+
+# ======================================================================
+#  DIAGNOSTICO TEMPORAL DE FORMAS  --  BORRAR JUNTO CON LOG_FORMAS
+# ======================================================================
+
+_registro = {"archivo": None, "sin_volcar": 0}
+
+
+def _registrar_forma(color, contour, shape) -> None:
+    """Deja en un CSV los números con los que se decidió esta forma.
+
+    Rehace la cuenta de classify_shape() en vez de que classify_shape la
+    devuelva: es código temporal y no vale la pena cambiarle la firma a una
+    función que anda. Se borra junto con LOG_FORMAS, así que no hay riesgo
+    de que las dos cuentas se separen con el tiempo.
+    """
+
+    hull = cv2.convexHull(contour)
+
+    area = cv2.contourArea(hull)
+    perimeter = cv2.arcLength(hull, True)
+
+    if perimeter <= 0:
+        return
+
+    circularity = (4.0 * pi * area) / (perimeter * perimeter)
+
+    vertices = len(cv2.approxPolyDP(
+        hull, SHAPE_APPROX_EPSILON_RATIO * perimeter, True))
+
+    _, enclosing_radius = cv2.minEnclosingCircle(hull)
+    fill_ratio = (area / (pi * enclosing_radius * enclosing_radius)
+                  if enclosing_radius > 0 else 0.0)
+
+    if _registro["archivo"] is None:
+        ruta = Path(__file__).resolve().parents[1] / LOG_FORMAS_ARCHIVO
+        nuevo = not ruta.exists()
+
+        _registro["archivo"] = open(ruta, "a", encoding="utf-8")
+
+        if nuevo:
+            _registro["archivo"].write(
+                "hora,color,forma,vertices,llenado,circularidad,area\n")
+
+        print(f"[FORMAS] midiendo en {ruta}")
+
+    _registro["archivo"].write(
+        f"{time.time():.3f},{color},{shape or 'NINGUNA'},{vertices},"
+        f"{fill_ratio:.4f},{circularity:.4f},{area:.0f}\n")
+
+    # Volcado cada tanto y no en cada linea: son ~90 detecciones por segundo
+    # con tres piezas en el cuadro. Cada 50 se pierde medio segundo si
+    # alguien mata el programa, que no importa para esto.
+    _registro["sin_volcar"] += 1
+
+    if _registro["sin_volcar"] >= 50:
+        _registro["archivo"].flush()
+        _registro["sin_volcar"] = 0
+
+
+# ======================================================================
 
 
 def split_touching_blob(
@@ -301,27 +380,66 @@ def split_touching_blob(
     if num_markers <= 2:
         return [contour]
 
-    markers = markers + 1
+    # Cada pixel de la mancha va al pico MAS CERCANO.
+    #
+    # Antes esto lo hacia cv2.watershed() sobre blob_mask, y ahi habia un
+    # problema de fondo: watershed inunda siguiendo el RELIEVE de la imagen,
+    # y blob_mask es binaria, o sea completamente plana por dentro. Sin
+    # relieve no hay cresta que seguir y el resultado que da es justamente
+    # este reparto por cercania -- pero pagando dos costos que no hacen
+    # falta:
+    #
+    #   - marca los pixeles de frontera con -1 y esos quedan afuera de las
+    #     dos piezas, o sea una linea de pixeles perdidos en cada corte;
+    #   - deja sobre la linea del corte una PUA fina apuntando a la otra
+    #     pieza, y classify_shape() mira el CASCO CONVEXO: el casco se traga
+    #     la pua, el circulo envolvente crece para cubrirla y el llenado se
+    #     derrumba. Dos circulos pegados salian con llenado 0.74 y se
+    #     clasificaban HEXAGONO los dos.
+    #
+    # Medido sobre dos escenas de piezas pegadas, este reparto explicito da
+    # 52/120 contra 48/120 del watershed, y con el techo de circularidad del
+    # hexagono la diferencia se agranda (92/120 contra 54/120).
+    #
+    # OJO que las dos cosas van juntas: este reparto SIN
+    # HEXAGON_CIRCULARITY_MAX da peor que el watershed en una de las dos
+    # escenas (85/120 contra 100/120). Revertir una sola deja el sistema en
+    # un punto peor que cualquiera de los dos completos.
+    ys, xs = np.nonzero(blob_mask)
 
-    unknown = cv2.subtract(blob_mask, sure_foreground)
-    markers[unknown == 255] = 0
+    semillas = []
 
-    blob_mask_bgr = cv2.cvtColor(
-        blob_mask,
-        cv2.COLOR_GRAY2BGR,
-    )
+    for label in range(1, num_markers):
+        py, px = np.nonzero(markers == label)
+        semillas.append((px.mean(), py.mean()))
 
-    cv2.watershed(blob_mask_bgr, markers)
+    distancias = np.stack([
+        np.hypot(xs - sx, ys - sy) for sx, sy in semillas
+    ])
+
+    dueno = np.argmin(distancias, axis=0)
 
     separated_contours: list[np.ndarray] = []
 
-    for label in range(2, num_markers + 1):
+    for indice in range(len(semillas)):
         piece_mask = np.zeros(
             blob_mask.shape,
             dtype=np.uint8,
         )
 
-        piece_mask[markers == label] = 255
+        piece_mask[ys[dueno == indice], xs[dueno == indice]] = 255
+
+        # Limpieza del corte: borra lo que quede mas fino que el kernel sin
+        # tocar la pieza, que es mas ancha. Ver SPLIT_CLEANUP_KERNEL_SIZE.
+        if SPLIT_CLEANUP_KERNEL_SIZE > 0:
+            piece_mask = cv2.morphologyEx(
+                piece_mask,
+                cv2.MORPH_OPEN,
+                np.ones(
+                    (SPLIT_CLEANUP_KERNEL_SIZE, SPLIT_CLEANUP_KERNEL_SIZE),
+                    dtype=np.uint8,
+                ),
+            )
 
         piece_contours, _ = cv2.findContours(
             piece_mask,
@@ -395,6 +513,12 @@ def detect_objects(
                 continue
 
             shape, circularity = classify_shape(contour)
+
+            # TEMPORAL (ver LOG_FORMAS en config.py). Va ANTES del descarte
+            # a proposito: la pieza que no clasifica es justamente la que
+            # hay que medir.
+            if LOG_FORMAS:
+                _registrar_forma(color, contour, shape)
 
             if shape is None:
                 continue

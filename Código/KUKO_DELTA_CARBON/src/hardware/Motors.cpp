@@ -6,18 +6,21 @@ namespace Motors {
 // Valores de fabrica. La tabla de parametros los toma como referencia al
 // registrarlos, asi que 'P0' vuelve exactamente aca.
 float VEL_MAX    = 12000.0f;
-float ACC_SUAVE  = 17000.0f;
-float ACC_RAPIDA = 97000.0f;
+float ACC_AGARRE = 180000.0f; // antes 17000 (una sola "suave") y 110000
+float ACC_CAJA   = 17000.0f;
+float ACC_RAPIDA = 95000.0f;  // antes 97000
 
 MotionLimits DEFAULT_LIMITS = {VEL_MAX, ACC_RAPIDA};
 MotionLimits FAST_LIMITS    = {VEL_MAX, ACC_RAPIDA};
-MotionLimits SOFT_LIMITS    = {VEL_MAX, ACC_SUAVE};
+MotionLimits AGARRE_LIMITS  = {VEL_MAX, ACC_AGARRE};
+MotionLimits CAJA_LIMITS    = {VEL_MAX, ACC_CAJA};
 
 void aplicarLimites()
 {
     DEFAULT_LIMITS = {VEL_MAX, ACC_RAPIDA};
     FAST_LIMITS    = {VEL_MAX, ACC_RAPIDA};
-    SOFT_LIMITS    = {VEL_MAX, ACC_SUAVE};
+    AGARRE_LIMITS  = {VEL_MAX, ACC_AGARRE};
+    CAJA_LIMITS    = {VEL_MAX, ACC_CAJA};
 }
 
 bool redirigirLineal(Stepper &m1, Stepper &m2, Stepper &m3,

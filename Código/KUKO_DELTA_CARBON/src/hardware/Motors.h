@@ -62,8 +62,36 @@ struct MotionLimits {
 //  media tarde de trabajo. Los limita el rango declarado en la tabla de
 //  parametros, no el tipo.
 extern float VEL_MAX;    // pasos/seg
-extern float ACC_SUAVE;  // pasos/seg^2 -- tramo que toca la pieza
+extern float ACC_AGARRE; // pasos/seg^2 -- bajada sobre la pieza en la cinta
+extern float ACC_CAJA;   // pasos/seg^2 -- apoyo de la pieza en la celda
 extern float ACC_RAPIDA; // pasos/seg^2 -- todo lo demas
+
+// ============================================================
+//  POR QUE EL AGARRE Y LA CAJA TIENEN ACELERACIONES DISTINTAS
+// ============================================================
+//  Eran una sola ("ACC_SUAVE", 17.000) y se separaron porque los dos tramos
+//  quieren cosas OPUESTAS, aunque los dos "toquen" una pieza:
+//
+//  AGARRE (PICK_DESCEND). La pieza va montada en la cinta a 7,1 cm/s y el
+//      gripper la tiene que alcanzar EN MOVIMIENTO: el contacto pasa a
+//      mitad del tramo y tiene que ocurrir a la misma velocidad que la
+//      cinta (ver ConveyorIntercept.h). Ir despacio no lo hace mas suave,
+//      lo hace PEOR -- con 17.000 el gripper tocaba a 1,86 cm/s y la pieza
+//      se le deslizaba por debajo a 5,2 cm/s. Aca alto es mejor.
+//
+//  CAJA (BOX_DESCEND). La celda esta quieta y la pieza se APOYA en el piso.
+//      No hay nada que alcanzar, y toda velocidad de llegada es un golpe.
+//      Aca bajo es mejor, y por eso se queda en los 17.000 de siempre.
+//
+//  Subir ACC_AGARRE por encima de los 100.000 que aceptaba la tabla es
+//  seguro porque el tramo es CORTO. Lo que puede perder pasos, y que esta
+//  explicado arriba en VEL_MAX, es el frenado de un tramo LARGO y rapido.
+//  Medido: la bajada de agarre son 368 pasos con apr_dx = -2 cm y 526 con
+//  -5 cm, contra los v^2/a = 1.309 pasos que harian falta para siquiera
+//  llegar a VEL_MAX con 110.000. O sea que el perfil sigue siendo
+//  TRIANGULAR y el tramo de crucero de Stepper::computeNextInterval() --el
+//  que tenia los dos errores de frenado-- no se ejecuta nunca aca.
+// ============================================================
 
 // Los tres juegos de limites que usan los puntos de llamada. NO son const:
 // aplicarLimites() los rearma cuando cambia alguno de los tres numeros de
@@ -74,9 +102,13 @@ extern MotionLimits DEFAULT_LIMITS;
 // Movimientos normales (traslados, levantar la pieza, ir al tacho).
 extern MotionLimits FAST_LIMITS;
 
-// Unico tramo donde el gripper toca la pieza: se baja la aceleracion para
-// que el encuentro sea suave y no la desplace ni la haga rebotar.
-extern MotionLimits SOFT_LIMITS;
+// Bajada sobre la pieza que viene por la cinta (PICK_DESCEND). Ver arriba:
+// aca la aceleracion es ALTA, para llegar a la velocidad de la cinta.
+extern MotionLimits AGARRE_LIMITS;
+
+// Apoyo de la pieza en la celda de la caja (BOX_DESCEND). Aca la
+// aceleracion es baja, que es lo que hace suave un apoyo contra algo quieto.
+extern MotionLimits CAJA_LIMITS;
 
 // Rearma los tres juegos a partir de VEL_MAX/ACC_*. La llama Robot cuando
 // cambia la generacion de la tabla de parametros; sin esto, cambiar un

@@ -356,7 +356,7 @@ constexpr uint16_t RAW_MAX_FIABLE = 3950; // ~331 grados
 // taparlo con esto seria enmascarar el problema.
 //
 // En caliente se cambia con 'L70' por Serial.
-constexpr uint32_t RETARDO_ENCODER_MS = 0;
+constexpr uint32_t RETARDO_ENCODER_MS = 22;
 
 // Sentido de cuenta de cada encoder respecto del eje que mide.
 //   +1 -> el encoder sube cuando el brazo va hacia angulos positivos

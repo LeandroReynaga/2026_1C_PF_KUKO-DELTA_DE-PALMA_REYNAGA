@@ -524,8 +524,8 @@ class Interfaz:
                         self.contadores_forma = ui.html().classes("w-full")
 
                     with ui.column().classes("panel p-3 gap-2").style("flex:0 0 236px"):
-                        self.botones_modo[pr.Modo.ALFAJORES] = self._boton_titulo(
-                            "Box", pr.Modo.ALFAJORES)
+                        self.botones_modo[pr.Modo.BOX] = self._boton_titulo(
+                            "Box", pr.Modo.BOX)
 
                         self.celdas = []
 
@@ -1167,15 +1167,15 @@ class Interfaz:
         # Entrar o salir del modo box implica poner o sacar la tapa. El
         # firmware ya pide el comando dos veces; el dialogo es esa segunda
         # vez, con el motivo escrito.
-        if (modo is pr.Modo.ALFAJORES) == (actual is pr.Modo.ALFAJORES):
+        if (modo is pr.Modo.BOX) == (actual is pr.Modo.BOX):
             self.enviar(pr.cmd_modo(modo))
             return
 
-        poner = modo is pr.Modo.ALFAJORES
+        poner = modo is pr.Modo.BOX
 
         with ui.dialog() as dialogo, ui.card().style(f"background:{PANEL};color:{TEXTO}"):
             ui.label(f"Hay que {'COLOCAR' if poner else 'RETIRAR'} la tapa").classes("text-lg")
-            ui.label("Sin la tapa puesta, los alfajores se apoyan en el aire."
+            ui.label("Sin la tapa puesta, las piezas se apoyan en el aire."
                      if poner else
                      "Con la tapa puesta, las piezas rebotan contra ella.") \
                 .style(f"color:{APAGADO};max-width:380px")
@@ -1218,8 +1218,18 @@ class Interfaz:
 
     def _caja_nueva(self, dialogo) -> None:
         self.enviar(pr.cmd_caja_nueva())
-        self.caja_avisada = False
         dialogo.close()
+
+        # OJO: acá NO se rearma caja_avisada. Hacerlo en el click era lo que
+        # sacaba el cartel DOS VECES por caja: este refresco corre a 2 Hz y
+        # la línea [E], que es la que trae el estado de las celdas, llega a
+        # 1 Hz. O sea que la vuelta siguiente todavía veía la caja llena
+        # --con el aviso ya rearmado por el click-- y volvía a abrirlo.
+        #
+        # El rearme lo hace _avisar_caja_completa() cuando el FIRMWARE
+        # informa las celdas vacías, que es el único que sabe de verdad si
+        # la caja se reinició. Y siempre llega: 'N' no puede fallar, porque
+        # reiniciarCaja() es incondicional.
 
     # ------------------------------------------------------------------
     #  Refresco
@@ -1366,7 +1376,7 @@ class Interfaz:
 
         self._pintar_caja()
 
-        en_box = modo is pr.Modo.ALFAJORES
+        en_box = modo is pr.Modo.BOX
 
         self.boton_confirmar.set_enabled(est.enlace_vivo() and bool(self.layout_editado))
         self.boton_confirmar.style(
@@ -1379,7 +1389,7 @@ class Interfaz:
 
         # Fuera del modo box la grilla se muestra en gris: sigue siendo
         # editable, pero no esta rigiendo nada en este momento.
-        en_box = bool(e and e.modo is pr.Modo.ALFAJORES)
+        en_box = bool(e and e.modo is pr.Modo.BOX)
 
         for i, celda in enumerate(self.celdas):
             codigo = self.layout_editado[i] if i < len(self.layout_editado) else None
@@ -1398,7 +1408,7 @@ class Interfaz:
     def _avisar_caja_completa(self) -> None:
         e = self.estado.e
 
-        if not e or e.modo is not pr.Modo.ALFAJORES or not e.llenas:
+        if not e or e.modo is not pr.Modo.BOX or not e.llenas:
             return
 
         completa = len(e.llenas) == 6 and all(e.llenas)

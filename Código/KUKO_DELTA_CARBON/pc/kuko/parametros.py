@@ -45,7 +45,7 @@ ORDEN_GRUPOS = [
     # --- servicio ---
     "Cinta y agarre",
     "Tachos",
-    "Caja de alfajores",
+    "Modo Box",
     "Homing",
     "Limites de movimiento",
     "Volumen del modo teach",
@@ -74,7 +74,9 @@ FICHAS: dict[str, Ficha] = {
     "apr_dx": Ficha(
         "Agarre", "Aproximacion: adelanto",
         "Donde espera el brazo respecto de la pieza. Negativo = mas atras, "
-        "asi baja a favor de la cinta y no en contra."),
+        "asi baja a favor de la cinta y no en contra. Es la carrera que tiene "
+        "para acelerar hasta la velocidad de la cinta, asi que va atado a "
+        "«Aceleracion de agarre»: mas aceleracion pide menos carrera."),
     "apr_dz": Ficha(
         "Agarre", "Aproximacion: altura",
         "A que altura sobre la pieza espera antes de bajar. Mas alto es mas "
@@ -101,11 +103,17 @@ FICHAS: dict[str, Ficha] = {
         "Traslados, despegue y vuelta a home. Es EL numero del ciclo: subirlo "
         "acorta el tiempo por pieza y sube la vibracion (y con ella los "
         "falsos positivos del guard)."),
-    "acc_suave": Ficha(
-        "Movimiento", "Aceleracion suave",
-        "Unico tramo donde el gripper toca la pieza (bajada al agarre y "
-        "apoyo en la caja). Bajo a proposito: el encuentro tiene que ser "
-        "suave para no correr la pieza."),
+    "acc_agarre": Ficha(
+        "Movimiento", "Aceleracion de agarre",
+        "Bajada sobre la pieza que viene por la cinta. Va ALTA a proposito: "
+        "el gripper tiene que alcanzarla en movimiento, y si baja despacio la "
+        "pieza se le desliza por debajo mientras la toca. Va de la mano con "
+        "«Aproximacion en X»: si se cambia una, hay que rehacer la otra."),
+    "acc_caja": Ficha(
+        "Movimiento", "Aceleracion de apoyo en la caja",
+        "Ultimo tramo al dejar la pieza en una celda, en modo Box. Al reves "
+        "que la de agarre: la celda esta quieta, no hay nada que alcanzar y "
+        "toda velocidad de llegada es un golpe. Va baja."),
     "pick_tol": Ficha(
         "Movimiento", "Tolerancia de atraso",
         "Cuanto puede llegar tarde el brazo al punto de aproximacion antes "
@@ -287,24 +295,25 @@ FICHAS: dict[str, Ficha] = {
                    "Altura a la que se suelta la pieza. Mas bajo hace menos "
                    "ruido; demasiado bajo la apoya contra las que ya estan."),
 
-    "box_z": Ficha("Caja de alfajores", "Piso de la caja (Z)",
-                   "Altura a la que se apoya el alfajor. Se mide con la caja "
+    "box_z": Ficha("Modo Box", "Piso de la caja (Z)",
+                   "Altura a la que se apoya la pieza. Se mide con la caja "
                    "puesta, no calculada."),
-    "box_apr": Ficha("Caja de alfajores", "Aproximacion a la celda",
-                     "Cuanto por encima del piso frena antes de bajar despacio."),
-    "box_tr": Ficha("Caja de alfajores", "Altura de cruce",
+    "box_apr": Ficha("Modo Box", "Aproximacion a la celda",
+                     "Cuanto por encima del piso frena antes de bajar despacio. Cuanto "
+                     "mas chico, mas tramo hace rapido y menos tarda el ciclo."),
+    "box_tr": Ficha("Modo Box", "Altura de cruce",
                     "Con cuanta altura viaja entre la cinta y la celda. Tiene "
-                    "que librar la pared de la caja Y los alfajores ya "
-                    "puestos, contando que el camino se hunde en el medio."),
-    "box_rel": Ficha("Caja de alfajores", "Espera al soltar en la caja",
+                    "que librar la pared de la caja Y las piezas ya "
+                    "puestas, contando que el camino se hunde en el medio."),
+    "box_rel": Ficha("Modo Box", "Espera al soltar en la caja",
                      "Mas larga que en el tacho a proposito: aca el brazo "
                      "tiene que salir de adentro de la caja y no puede "
                      "arrastrar la pieza."),
-    "box_dx": Ficha("Caja de alfajores", "Corrimiento de la caja: X",
+    "box_dx": Ficha("Modo Box", "Corrimiento de la caja: X",
                     "Mueve las 6 celdas juntas. La grilla de 6 cm es la "
                     "geometria de la caja y no se toca; esto es para "
                     "centrarla donde quedo apoyada."),
-    "box_dy": Ficha("Caja de alfajores", "Corrimiento de la caja: Y",
+    "box_dy": Ficha("Modo Box", "Corrimiento de la caja: Y",
                     "Idem, en el otro eje."),
 
     "home_a1": Ficha("Homing", "Angulo de home: eje 1",

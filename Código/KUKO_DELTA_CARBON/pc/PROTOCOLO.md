@@ -68,7 +68,7 @@ una letra aunque compartan letra (`C` de color vs. `C` de círculo).
 |-----|--------|
 | `C` | Modo clasificación por color |
 | `F` | Modo clasificación por forma |
-| `A` | Modo alfajores (pide confirmación de tapa, ver §3.4) |
+| `A` | Modo Box (pide confirmación de tapa, ver §3.4). La letra es histórica: el modo se llamaba ALFAJORES. No se cambió a `B` porque acá `B` ya significa AZUL |
 | `N` | Caja nueva: borra el mapa de celdas llenas |
 | `R` | Paro manual. Desde `ERROR`, rehomea |
 | `D` | Vuelca el historial de fallos |
@@ -78,7 +78,7 @@ una letra aunque compartan letra (`C` de color vs. `C` de círculo).
 
 Los comandos del modo teach empiezan todos con `J` y van en §6.
 
-### 1.3 Caja de alfajores
+### 1.3 Caja del modo Box
 
     X<c1><c2><c3><c4><c5><c6>    ej: XBRGRBG
 
@@ -190,7 +190,7 @@ la visualización más útil del tablero de diagnóstico.
 | `ob` | Guard en modo observador (mide y avisa pero no frena), 0/1 |
 | `sup` | Paradas por colisión habilitadas, 0/1 |
 | `cv` / `cvp` | Cinta en marcha (0/1) y su PWM en % |
-| `bx` | Disposición de la caja, 6 colores; `-` fuera del modo alfajores |
+| `bx` | Disposición de la caja, 6 colores; `-` fuera del modo Box |
 | `bf` | Celdas llenas, 6 dígitos 0/1 |
 | `bc` | Celda reservada por la pieza en la mano (0 = ninguna) |
 | `pc` `pf` `py` `pb` | Pieza en curso: color, forma, Y en cm, tacho destino (0 = ninguno) |
@@ -318,7 +318,7 @@ apéndice al final, aunque quede feo, antes que correr la numeración.
 
 ### 3.4 Confirmación de tapa
 
-Entrar o salir del modo alfajores requiere poner o sacar la tapa con forma de
+Entrar o salir del modo Box requiere poner o sacar la tapa con forma de
 caja. El firmware no puede verla, y arrancar con el modo equivocado significa
 tirar piezas contra la tapa. Por eso el cambio se pide **dos veces**: el
 primer `A` deja el pedido esperando (`cf=1`, `cr` cuenta atrás desde 10 s) y
