@@ -31,17 +31,25 @@ Acá van las imágenes y videos que referencia el [README principal](../README.m
 
 ## Archivos esperados
 
-| # | Archivo | Qué debe mostrar | Sección del README |
+**Referenciados hoy en el README principal** — al subirlos, la imagen aparece sola:
+
+| # | Archivo | Qué debe mostrar | Dónde va |
 | :-: | :--- | :--- | :--- |
 | 1 | `01-robot-completo.jpg` | El robot completo de frente, con cinta, tachos y gabinete | Portada |
-| 2 | `02-celda-en-marcha.gif` | 5–8 s en bucle del agarre sobre la cinta en movimiento | Demo rápida |
-| 3 | `03-vision-deteccion.png` | Ventana de visión con piezas detectadas y línea de cruce | § 3.3 Visión |
-| 4 | `04-interfaz-operacion.png` | Pestaña Operación completa, con los 6 puntos en verde | § 3.8 Interfaz |
-| 5 | `05-interfaz-teach.png` | Pestaña Teach con el brazo dibujado y una secuencia grabada | § 3.7 Teach |
-| 6 | `06-interfaz-rendimiento.png` | Pestaña Rendimiento tras una corrida real | § 3.9 Indicadores |
-| 7 | `07-modo-box.jpg` | La caja de 6 celdas llena, vista desde arriba | § 3.2 Modos |
-| 8 | `08-electronica-gabinete.jpg` | Gabinete abierto: drivers, ESP32, fuente y cableado | § 7 Componentes |
-| 9 | `09-video-demo.mp4` | Ciclo completo de clasificación, con la interfaz visible | Demo rápida |
+| 2 | `02-celda-en-marcha.gif` | 5–8 s en bucle del agarre sobre la cinta en movimiento | § 2 Brief |
+| 9 | `09-video-demo.mp4` | Ciclo completo de clasificación, con la interfaz visible | § 2 Brief |
+
+**Opcionales** — no hay ningún bloque esperándolos en el README, pero sirven para el informe
+y para la defensa. Si se suben, hay que agregar la referencia a mano:
+
+| # | Archivo | Qué debe mostrar |
+| :-: | :--- | :--- |
+| 3 | `03-vision-deteccion.png` | Ventana de visión con piezas detectadas y línea de cruce |
+| 4 | `04-interfaz-operacion.png` | Pestaña Operación completa, con los 6 puntos en verde |
+| 5 | `05-interfaz-teach.png` | Pestaña Teach con el brazo dibujado y una secuencia grabada |
+| 6 | `06-interfaz-rendimiento.png` | Pestaña Rendimiento tras una corrida real |
+| 7 | `07-modo-box.jpg` | La caja de 6 celdas llena, vista desde arriba |
+| 8 | `08-electronica-gabinete.jpg` | Gabinete abierto: drivers, ESP32, fuente y cableado |
 
 ## Tamaños y formatos
 

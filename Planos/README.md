@@ -23,7 +23,7 @@ la imagen rota sin ningún aviso.
 
 ## Dato
 
-El **pinout completo** ya está escrito en tabla en el README principal (§ 8) y su
-única fuente de verdad en el código es
-[`include/Pinout.h`](../C%C3%B3digo/KUKO_DELTA_CARBON/include/Pinout.h).
-Si se recablea algo, hay que tocar los tres lugares.
+La única fuente de verdad del **pinout** en el código es
+[`include/Pinout.h`](../C%C3%B3digo/KUKO_DELTA_CARBON/include/Pinout.h): ahí se definen todos los
+números de GPIO y ningún otro archivo debería hardcodearlos. Si se recablea algo, hay que tocar
+ese header **y** el diagrama de Fritzing, o los dos empiezan a decir cosas distintas.

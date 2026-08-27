@@ -63,22 +63,14 @@
 
 ## 📑 Índice
 
-|  #  | Sección                                              | Contenido                                 |
-| :-: | :--------------------------------------------------- | :---------------------------------------- |
-|  1  | [Introducción y objetivos](#introduccion)             | Contexto, problema y objetivos            |
-|  2  | [Brief](#brief)                                       | Pitch, solución, alcance y estado         |
-|  3  | [Descripción técnica](#descripcion-tecnica)           | Cómo funciona por dentro                  |
-|  4  | [Arquitectura del sistema](#arquitectura)             | Diagramas, protocolo y flujo de datos     |
-|  5  | [Instrucciones de uso](#uso)                          | Puesta en marcha reproducible             |
-|  6  | [Tecnologías utilizadas](#tecnologias)                | Stack de firmware, visión e interfaz      |
-|  7  | [Listado de componentes](#componentes)                | BOM con cantidades y modelos              |
-|  8  | [Esquemáticos y planos](#planos)                      | Diagrama de conexión y pinout             |
-|  9  | [Fotos y videos](#multimedia)                         | Material de la demostración               |
-| 10  | [Desarrollo del proyecto](#desarrollo)                | Hitos y metodología de trabajo            |
-| 11  | [Verificación y pruebas](#pruebas)                    | Estrategia de testeo                      |
-| 12  | [Estado actual y trabajo futuro](#roadmap)            | Qué anda hoy y qué falta                  |
-| 13  | [Estructura del repositorio](#estructura)             | Mapa de carpetas                          |
-| 14  | [Autores](#autores)                                   | Contacto                                  |
+|  #  | Sección                                      | Contenido                              |
+| :-: | :------------------------------------------- | :------------------------------------- |
+|  1  | [Introducción y objetivos](#introduccion)     | Contexto, problema y objetivos         |
+|  2  | [Brief](#brief)                               | Pitch, solución, alcance y estado      |
+|  3  | [Descripción técnica](#descripcion-tecnica)   | Cómo funciona por dentro               |
+|  4  | [Instrucciones de uso](#uso)                  | Puesta en marcha reproducible          |
+|  5  | [Desarrollo del proyecto](#desarrollo)        | Cronología e hitos                     |
+|  6  | [Autores](#autores)                           | Contacto                               |
 
 ---
 
@@ -87,7 +79,6 @@
 ## 1 · Introducción y objetivos
 
 ### Contexto
-
 
 **KUKO Delta Carbon** es una celda de clasificación, de escala didáctica pero con criterios
 industriales, construida íntegramente por los autores: mecánica, electrónica, firmware, visión
@@ -100,7 +91,6 @@ corresponde, sin detener la cinta, es un problema de sincronización. Resolverlo
 de visión, predecir la posición futura de la pieza y planificar la intercepción, todo con hardware
 de bajo costo y sobre motores paso a paso.
 
-
 ### Objetivo general
 
 > Diseñar, construir y poner en marcha una celda robótica de clasificación automática basada en un
@@ -108,17 +98,14 @@ de bajo costo y sobre motores paso a paso.
 > visión artificial, interceptarlas sobre una cinta en movimiento y depositarlas en su destino,
 > supervisada desde una interfaz de operación propia.
 
-
 ---
 
 <a id="brief"></a>
 
 ## 2 · Brief
 
-
 > **KUKO Delta Carbon** es una celda robótica *pick & place* que clasifica piezas por color y forma
 > sobre una cinta en movimiento, pensada para tareas de selección repetitivas.
-
 
 Este proyecto **KUKO Delta Carbon** (Proyecto Final, **2026 · 1.er Cuatrimestre**) resuelve la
 **clasificación manual de piezas en línea de producción** mediante un **robot delta de 3 GDL con
@@ -130,8 +117,6 @@ estado de cada componente, la producción acumulada y la disponibilidad de la ce
 Se implementa con **ESP32 + C++ (PlatformIO)** para el control en tiempo real y **Python + OpenCV +
 NiceGUI** para la visión y la operación, y se valida con **98 pruebas automáticas** que verifican
 tanto el protocolo de comunicación como la matemática del movimiento.
-
-
 
 <table>
 <tr><td width="52%" valign="top">
@@ -149,7 +134,6 @@ tanto el protocolo de comunicación como la matemática del movimiento.
 
 </td><td width="48%" valign="top">
 
-
 ```
       Cámara USB 720p
              ↓  OpenCV (HSV + contornos)
@@ -163,7 +147,6 @@ tanto el protocolo de comunicación como la matemática del movimiento.
              ↑
   3 × AS5600 → supervisión de colisión
 ```
-
 
 </td></tr>
 </table>
@@ -189,7 +172,6 @@ tanto el protocolo de comunicación como la matemática del movimiento.
 
 </td><td valign="top">
 
-
 - Paro de emergencia certificado (hoy: corte de alimentación de drivers)
 -  Vacuostato (confirmación **física** del vacío)
 - Comunicación con PLC / SCADA de planta
@@ -210,7 +192,6 @@ tanto el protocolo de comunicación como la matemática del movimiento.
 | **Seguridad**        | ✅ Supervisión de colisión activa, con recuperación automática                             |
 | **Interfaz**         | ✅ 5 pestañas operativas (Operación, Teach, Rendimiento, Proceso, Servicio)                 |
 
-
 > 🎬 **`VIDEO PENDIENTE`** · `Multimedia/09-video-demo.mp4`<br>
 > **Qué mostrar:** un ciclo completo de clasificación por color, en tiempo real, con la interfaz visible.<br>
 > <sub>Si el archivo es pesado, subirlo a YouTube/Drive y dejar acá el enlace.</sub>
@@ -218,7 +199,6 @@ tanto el protocolo de comunicación como la matemática del movimiento.
 > 🖼️ **`GIF PENDIENTE`** · `Multimedia/02-celda-en-marcha.gif`<br>
 > **Qué mostrar:** 5–8 segundos en bucle del brazo tomando una pieza de la cinta en movimiento.
 > Es la imagen que resume el proyecto entero.
-
 
 ---
 
@@ -231,8 +211,6 @@ lo que **no puede esperar** (generar pasos, leer encoders, decidir cuándo bajar
 lo que **necesita memoria y potencia** (procesar imagen, dibujar, recordar sucesos).
 
 ### 3.1 · Ciclo de clasificación
-
-
 
 ```mermaid
 stateDiagram-v2
@@ -259,7 +237,6 @@ stateDiagram-v2
     TEACH --> WAIT_PIECE
 ```
 
-
 ### 3.2 · Modos de clasificación
 
 | Modo | Comando | Qué hace |
@@ -268,20 +245,14 @@ stateDiagram-v2
 | **Forma** | `F` | Tacho 1 cuadrado · Tacho 2 hexágono · Tacho 3 círculo |
 | **Box** | `A` | Llena una caja de 6 celdas (2 filas × 3 columnas) con una disposición de colores configurable; máximo 3 piezas por color. El resto de las piezas siguen de largo |
 
-
-
 ### 3.3 · Visión artificial
 
 La detección corre en la PC sobre **OpenCV**, con procesamiento clásico (sin redes neuronales): es
 determinístico, se calibra a mano.
 
-
-
-
 **La `X` de la pieza no viaja por el enlace.** Como el aviso se emite exactamente en el cruce de la
  línea de detección, la `X` es siempre la misma y es conocida por las dos partes. Solo viajan
  `Y`, color y forma — tres campos, dos comas, una línea.
-
 
 ### 3.4 · Cinemática
 
@@ -289,22 +260,14 @@ determinístico, se calibra a mano.
 motores— que resuelve la **cinemática inversa** del delta. La **cinemática directa** vive del lado de
 Python (`cinematica.py`), y la necesita para dibujar el brazo en pantalla.
 
-
- 
-
-
 ### 3.5 · Generación de pasos y perfiles de movimiento
 
 Cada eje se maneja con un **timer de hardware dedicado** del ESP32 y una rampa trapezoidal calculada
 con el **algoritmo de Austin (2004)**.
 
-
-
 **Coordinación multi-eje.** `Motors::moveSynchronized` escala velocidad y aceleración de cada eje en
 proporción a su recorrido, de modo que los tres motores **arrancan y llegan juntos** aunque recorran
 distancias distintas.
-
-
 
 ### 3.6 · Supervisión de colisiones
 
@@ -319,7 +282,6 @@ distancias distintas.
 umbral_efectivo = UMBRAL_DEG + MARGEN_VELOCIDAD_MS × velocidad
 ```
 
-
 **Reacción ante colisión:** frena los 3 ejes → suelta la pieza → espera 3 s → rehomea conservando la
 cola de piezas. Tras 3 colisiones seguidas, pasa a `ERROR`.
 
@@ -333,16 +295,13 @@ secuencias y las reproduce. Incluye verificación por etapas.
 Aplicación web local hecha con **NiceGUI**, en un solo proceso y tres hilos: visión, enlace serie y
 servidor web. Sirve para controlar el proceso, modificar variables, enterarse de errores y verificar componentes. 
 
-
 ---
-
-
 
 <a id="uso"></a>
 
-## 5 · Instrucciones de uso
+## 4 · Instrucciones de uso
 
-### 5.1 · Requisitos previos
+### 4.1 · Requisitos previos
 
 | Categoría | Requisito |
 | :--- | :--- |
@@ -352,7 +311,7 @@ servidor web. Sirve para controlar el proceso, modificar variables, enterarse de
 | **Driver USB** | CP2102 — incluido en [`Código/Driver USB CP2102/`](C%C3%B3digo/Driver%20USB%20CP2102/) |
 | **Hardware** | Robot Kuko Delta Carbon |
 
-### 5.2 · Instalación
+### 4.2 · Instalación
 
 **a) Clonar el repositorio**
 
@@ -379,7 +338,6 @@ pio device monitor             # monitor serie a 115200 baudios
 
 <br>
 
-
 Las carpetas `pruebas/` y `otros_codigos/` guardan sketches históricos (`.bak`) de motores, encoders y
 cinemática. No forman parte del build, pero sirven de referencia al depurar un subsistema por separado.
 
@@ -404,7 +362,7 @@ Ese archivo **no va al repositorio**: cada PC tiene el suyo.
 }
 ```
 
-### 5.3 · Puesta en marcha
+### 4.3 · Puesta en marcha
 
 ```bash
 pc\.venv\Scripts\python pc/kuko_app.py
@@ -420,13 +378,14 @@ pc\.venv\Scripts\python pc/kuko_app.py --sin-navegador    # no abrir el navegado
 
 La interfaz queda en **`http://localhost:8080`**.
 
-
-
-
 ---
 
 <a id="desarrollo"></a>
 
+## 5 · Desarrollo del proyecto
+
+El proyecto se construyó **de abajo hacia arriba**: primero cada subsistema por separado y verificado
+en aislamiento, después la integración. Cada capa nueva se apoyó en una que ya estaba medida.
 
 ### Hitos
 
@@ -440,19 +399,11 @@ timeline
     Agosto : Visión artificial e integración con el robot : Detector de colisiones : Modo Box : Interfaz NiceGUI : Modo Teach : Movimiento lineal (movL)
 ```
 
-
-
-
-
-</details>
-
-
-
 ---
 
 <a id="autores"></a>
 
-## 14 · Autores
+## 6 · Autores
 
 <table>
 <tr><td width="50%" align="center">
@@ -478,13 +429,13 @@ Ingeniería Mecatrónica — FI-UNLZ
 </td></tr>
 </table>
 
+---
+
 <div align="center">
-
-
 
 **KUKO DELTA CARBON**
 
 **Facultad de Ingeniería — Universidad Nacional de Lomas de Zamora**<br>
 Proyecto Final · 2026 · 1.er Cuatrimestre
 
----
+</div>

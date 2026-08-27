@@ -18,7 +18,7 @@ Documentación formal del proyecto: informes, cronogramas y manuales.
 | Propuesta Inicial | [`../Propuesta Inicial/`](../Propuesta%20Inicial/) |
 | Propuesta Final | [`../Propuesta Final/`](../Propuesta%20Final/) |
 
-Si se decide unificar todo acá, mover esos PDF a esta carpeta y actualizar la sección
-*Estructura del repositorio* del [README principal](../README.md).
+Si se decide unificar todo acá, mover esos PDF a esta carpeta y revisar que el
+[README principal](../README.md) no quede apuntando a las rutas viejas.
 
 Nombres de archivo sin espacios, sin acentos y en minúscula.
