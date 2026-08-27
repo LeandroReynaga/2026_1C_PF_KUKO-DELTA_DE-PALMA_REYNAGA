@@ -101,6 +101,12 @@ MODO_A_LETRA = {v: k for k, v in LETRA_A_MODO.items()}
 COLORES = {"R": "ROJO", "G": "VERDE", "B": "AZUL"}
 FORMAS = {"S": "CUADRADO", "H": "HEXAGONO", "C": "CIRCULO"}
 
+# Tipos de fallo, en el ORDEN del `enum TipoFallo` de src/robot/FaultLog.h.
+# El orden importa: es el que usa `[FALLOS]` para volcar los contadores por
+# tipo, y el que la interfaz respeta al dibujarlos para que la barra de cada
+# tipo no cambie de lugar entre una corrida y la siguiente.
+TIPOS_FALLO = ("COLISION", "ENCODER", "HOMING", "MANUAL", "DESCALIBRACION")
+
 # Nombres de la visión -> códigos de un carácter que valida el firmware.
 COLOR_A_CODIGO = {v: k for k, v in COLORES.items()}
 FORMA_A_CODIGO = {v: k for k, v in FORMAS.items()}
@@ -456,6 +462,12 @@ class Fallo(Mensaje):
     cmd_delta: Optional[float] = None
     enc_delta: Optional[float] = None
     estado: Optional[EstadoRobot] = None
+
+    # El campo tal cual vino. Se conserva porque `estado` es None ante un
+    # estado que este modulo todavia no conoce, y en ese caso el nombre
+    # crudo sigue diciendo en que parte del ciclo fallo el robot.
+    estado_nombre: str = ""
+
     con_pieza: bool = False
     en_mano: bool = False
     color: str = ""
@@ -463,6 +475,63 @@ class Fallo(Mensaje):
     pieza_y: Optional[float] = None
     pieza_x: Optional[float] = None
     tacho: Optional[int] = None
+
+    @property
+    def brazo_frenado(self) -> Optional[bool]:
+        """En una COLISION: ¿el brazo se trabó, o el encoder está midiendo mal?
+
+        Es la pregunta que decide qué se va a arreglar, y la contesta el par
+        `dcmd`/`denc` (ver FaultLog.h): los micropasos dicen cuánto se le
+        ordenó girar al eje y el encoder cuánto giró de verdad. Si el eje
+        casi no se movió teniendo orden de moverse, hay algo que lo frena;
+        si se movió lo que se le pidió, el que se equivocó fue el sensor —o
+        el umbral es demasiado angosto— y la mecánica está bien.
+
+        None cuando la pregunta no aplica: los otros tipos de fallo no
+        traen un movimiento contra el cual comparar.
+        """
+
+        if self.tipo != "COLISION":
+            return None
+
+        if self.cmd_delta is None or self.enc_delta is None:
+            return None
+
+        # Con una orden de giro chica el cociente es puro ruido: un eje al
+        # que se le pidieron 0,5 grados no permite distinguir nada.
+        if abs(self.cmd_delta) < self.CMD_MINIMO_DEG:
+            return None
+
+        return abs(self.enc_delta) < self.FRACCION_TRABADO * abs(self.cmd_delta)
+
+    #: Por debajo de esta orden de giro el cociente denc/dcmd no distingue
+    #: nada (grados).
+    CMD_MINIMO_DEG = 2.0
+
+    #: Fracción del giro ordenado por debajo de la cual se considera que el
+    #: eje directamente no se movió. Deliberadamente holgada: un brazo
+    #: trabado da denc ~ 0, no un 30 % prolijo.
+    FRACCION_TRABADO = 0.35
+
+
+@dataclass
+class ResumenFallos(Mensaje):
+    """[FALLOS]: el encabezado del volcado de 'D' y su línea de cierre.
+
+    El firmware ya lo imprimía; lo que no había era quien lo leyera, así que
+    los contadores POR TIPO —que el firmware lleva desde el encendido y que
+    sobreviven a que el buffer de 16 dé la vuelta— se iban a la consola
+    como texto. Son el único lugar donde está el total histórico de cada
+    tipo de fallo: el registro guarda los últimos 16 y nada más.
+
+        [FALLOS] total=7 COLISION=5 ENCODER=1 HOMING=0 MANUAL=1 DESCALIBRACION=0 guardados=7
+        [FALLOS] fin
+    """
+
+    total: Optional[int] = None
+    guardados: Optional[int] = None
+    fin: bool = False
+    por_tipo: dict[str, int] = field(default_factory=dict)
 
 
 # ==================================================================
@@ -569,6 +638,33 @@ def _estado(valor: Optional[int]) -> Optional[EstadoRobot]:
     try:
         return EstadoRobot(valor)
     except ValueError:
+        return None
+
+
+def _estado_o_nombre(texto: str) -> Optional[EstadoRobot]:
+    """El campo `estado` de [FALLO], que puede venir como nombre o como índice.
+
+    El firmware manda el NOMBRE: `FaultLog` guarda el literal que devuelve
+    `Robot::nombreEstado()` y lo imprime tal cual. El parser, en cambio,
+    leía un índice —el ejemplo de PROTOCOLO.md mostraba `estado=6`—, así que
+    el campo valía None en todos los fallos reales y la columna que dice en
+    qué parte del ciclo falló el robot venía siempre vacía.
+
+    Se aceptan las dos formas en vez de elegir una: cuesta cuatro líneas y
+    deja de importar con qué firmware esté flasheada la placa.
+    """
+
+    if not texto:
+        return None
+
+    try:
+        return EstadoRobot[texto]
+    except KeyError:
+        pass
+
+    try:
+        return EstadoRobot(int(texto))
+    except (ValueError, KeyError):
         return None
 
 
@@ -717,6 +813,17 @@ def parsear(linea: str) -> Mensaje:
             limite_z=rango("zmin", "zmax"),
         )
 
+    if etiqueta == "FALLOS":
+        palabras = cuerpo.split()
+
+        return ResumenFallos(
+            crudo=linea,
+            total=_i(p, "total"),
+            guardados=_i(p, "guardados"),
+            fin="fin" in palabras,
+            por_tipo={t: _i(p, t) for t in TIPOS_FALLO if _i(p, t) is not None},
+        )
+
     if etiqueta == "FALLO":
         return Fallo(
             crudo=linea,
@@ -727,7 +834,8 @@ def parsear(linea: str) -> Mensaje:
             error_deg=_f(p, "err"),
             cmd_delta=_f(p, "dcmd"),
             enc_delta=_f(p, "denc"),
-            estado=_estado(_i(p, "estado")),
+            estado=_estado_o_nombre(p.get("estado", "")),
+            estado_nombre=p.get("estado", ""),
             con_pieza=bool(_b(p, "pieza")),
             en_mano=bool(_b(p, "enmano")),
             color=p.get("color", ""),

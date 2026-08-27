@@ -13,10 +13,16 @@ en el que se apartó del documento, no en el otro.
   descrita acá consume ~1,8 kB/s (16 %). El resto queda libre para eventos
   y para los volcados largos (`D`, `P?`).
 
+**Sin cambio de versión** (§2.6): la interfaz pasó a parsear `[FALLOS]` y a
+aceptar el `estado` de `[FALLO]` por nombre. El firmware **no cambia** —las
+dos líneas son las que viene imprimiendo desde siempre—, así que la versión
+no sube: subirla marcaría como incompatible a una placa que habla exactamente
+el mismo protocolo.
+
 **Cambios de la versión 3** (§6.3.1 y §6.3.2): `JI`, ir a una coordenada
 escrita pasando por home, con sus eventos `[TEACH] ir` / `irfin`; y `JL`,
 movimiento lineal, con `[TEACH] l` / `lfin`. También sube el tope de
-`vis_lat` a 0,50 s. Nada de lo anterior cambió, pero la versión sube
+`vis_lat`, hoy en 1,00 s. Nada de lo anterior cambió, pero la versión sube
 igual, y esta vez con un caso real que lo justifica: con el firmware viejo en
 la placa, el módulo de coordenadas de la interfaz se dibujaba, aceptaba los
 números, decía que estaba yendo y el brazo no se movía — el ESP32 tiraba un
@@ -126,11 +132,11 @@ Toda línea de máquina empieza con una etiqueta entre corchetes y sigue con
 pares `clave=valor` separados por un espacio. Los valores nunca llevan
 espacios; sí pueden llevar comas.
 
-La interfaz **parsea** `[T]`, `[E]`, `[H]`, `[P]`, `[FALLO]`, `[PIEZA]`,
-`[TEACH]` y `[BOOT]`. Todo lo demás (`[GUARD]`, `[MODO]`, `[CAJA]`,
-`[SERIAL]`, `[EMERGENCIA]`, `[TAPA]`, `[COLA]`, `[TRAZA]`…) se muestra tal
-cual en la consola de la interfaz. Una etiqueta desconocida **nunca** es un
-error: se trata como texto.
+La interfaz **parsea** `[T]`, `[E]`, `[H]`, `[P]`, `[FALLO]`, `[FALLOS]`,
+`[PIEZA]`, `[TEACH]` y `[BOOT]`. Todo lo demás (`[GUARD]`, `[MODO]`,
+`[CAJA]`, `[SERIAL]`, `[EMERGENCIA]`, `[TAPA]`, `[COLA]`, `[TRAZA]`…) se
+muestra tal cual en la consola de la interfaz. Una etiqueta desconocida
+**nunca** es un error: se trata como texto.
 
 ### 2.1 `[BOOT]` — al arrancar el firmware
 
@@ -264,13 +270,47 @@ Los nombres bonitos y la ayuda de cada parámetro sí viven en Python
 (`kuko/etiquetas.py`): el firmware no puede imprimir acentos y no tiene
 sentido gastarle flash en textos.
 
-### 2.6 `[PIEZA]` y `[FALLO]` — sin cambios
-
-Ya venían en `clave=valor` y se parsean tal cual están hoy.
+### 2.6 `[PIEZA]`, `[FALLO]` y `[FALLOS]` — el registro de fallos
 
     [PIEZA] Y=4.20 color=B forma=C  en cola: 3
     [FALLO] n=2 t=125430 tipo=COLISION eje=1 err=13.20 dcmd=45.10 denc=31.90
-            estado=6 pieza=1 enmano=1 color=B forma=C py=4.20 px=-1.30 tacho=3
+            estado=GO_BIN pieza=1 enmano=1 color=B forma=C py=4.20 px=-1.30 tacho=3
+
+`estado` viaja como **nombre**, no como índice: `FaultLog` guarda el literal
+que devuelve `Robot::nombreEstado()`. Este documento mostró durante mucho
+tiempo un `estado=6` que el firmware nunca emitió, y el parser de Python
+estaba escrito contra el ejemplo, así que el campo valía `None` en todos los
+fallos reales. Python acepta hoy **las dos formas** —cuatro líneas— para que
+deje de importar con qué firmware esté flasheada la placa.
+
+`dcmd` y `denc` no son decorativos: son los grados que se le ordenaron al eje
+y los que giró de verdad, y su cociente es lo único que separa *el brazo se
+trabó* (`denc ≈ 0`) de *el encoder midió mal* (`denc ≈ dcmd`). La interfaz lo
+muestra como una columna de diagnóstico y como el gráfico de dispersión de la
+pestaña de Rendimiento.
+
+El comando `D` vuelca el registro entero, encerrado entre un encabezado y un
+cierre con la misma etiqueta:
+
+    [FALLOS] total=41 COLISION=38 ENCODER=2 HOMING=0 MANUAL=1 DESCALIBRACION=0 guardados=16
+    [FALLO] ...                         (los guardados, del más viejo al más nuevo)
+    [FALLOS] fin
+
+| Clave | Significado |
+|-------|-------------|
+| `total` | Fallos desde el encendido. **No** se pierde aunque el buffer dé la vuelta |
+| `<TIPO>` | Un contador por cada tipo de §3.3, en el orden del `enum TipoFallo` |
+| `guardados` | Cuántos quedan en el registro (tope 16) |
+
+Los contadores por tipo son el **único** lugar donde está el histórico
+completo: el registro guarda los últimos 16 fallos y nada más. La interfaz
+pide `D` sola al conectarse, así que la pestaña de Rendimiento arranca con lo
+que el robot ya tenía guardado en vez de vacía — que es justo lo que uno
+necesita cuando abre la interfaz *después* de que algo anduvo mal.
+
+Los `[FALLO]` de ese volcado son los mismos que ya se vieron en vivo. La
+interfaz **deduplica por `n`**, así que ni se cuentan dos veces ni se repiten
+en la consola.
 
 ---
 
@@ -348,12 +388,17 @@ nuevo: **el firmware no cambia**, sólo se ve mejor.
 
 ---
 
-## 5. Los cinco chequeos de componentes
+## 5. Los seis chequeos de componentes
 
 Son los puntitos verde/rojo del panel de la pestaña de operación. La lógica
-vive en Python (`kuko/chequeos.py`); acá se documenta **con qué dato se
-decide cada uno**, porque un chequeo que no puede fallar es decoración y hay
-que saber cuáles son cuáles.
+vive en Python (`kuko/estado.py`); acá se documenta **con qué dato se decide
+cada uno**, porque un chequeo que no puede fallar es decoración y hay que
+saber cuáles son cuáles.
+
+Cinco se deciden con la telemetría del ESP32 y se apagan a gris cuando no
+hay enlace. El de la **cámara** no: cuelga del USB de la PC y no del robot,
+así que se caen por separado y tiene que poder decir algo cuando el otro no
+está.
 
 | Componente | Se decide con | ¿Es una verificación real? |
 |---|---|---|
@@ -362,11 +407,32 @@ que saber cuáles son cuáles.
 | **Motores** | `[T]`: `eN` contra `uN`; `[H]`: `fugN` creciendo siempre para el mismo lado | **Sí.** Es el lazo cerrado de seguridad que ya existe: mide si el brazo está donde los pasos dicen |
 | **Cinta** | `[E]`: `cv`/`cvp`, contra la **velocidad medida por la visión** | **Sí**, y es el más valioso: el tracker ya sigue las piezas fotograma a fotograma, así que se puede medir cuántos cm/s avanzan de verdad y compararlos con `cinta_cms`. Verifica de paso la constante de la que depende toda la intercepción |
 | **Neumática** | `[E]`/`[T]`: `pm`, más los fallos con `enmano=1` | **No del todo.** Sin un vacuostato, el firmware sabe si *mandó* prender la bomba, no si hay vacío. El punto refleja el estado comandado y se pone en ámbar —no verde— si se acumulan piezas perdidas con la pieza en la mano |
+| **Cámara** | Cuánto hace que llegó el último fotograma (`CAMARA_TIMEOUT_S`), no lo que diga `VideoCapture` | **Sí.** Rojo si hace más de 2 s que no entra imagen, o si no se puede abrir el dispositivo; ámbar si anda pero ya se reenganchó alguna vez, que casi siempre es el cable |
 
-La distinción importa para la defensa: cuatro de los cinco puntos son
-mediciones, el quinto es una intención. Un vacuostato de $5 en la línea de
-vacío lo convertiría en el quinto chequeo real, y es la mejora de hardware
-más barata que tiene el proyecto pendiente.
+La distinción importa para la defensa: cinco de los seis puntos son
+mediciones, el sexto es una intención. Un vacuostato de $5 en la línea de
+vacío convertiría a la neumática en el sexto chequeo real, y es la mejora de
+hardware más barata que tiene el proyecto pendiente.
+
+### 5.1 Por qué la cámara se mide por el reloj y no preguntándole
+
+Una cámara USB desconectada **no da error**. `VideoCapture.read()` devuelve
+`False` para siempre y `isOpened()` sigue diciendo que sí: preguntarle al
+objeto es preguntarle al que no se enteró. El único dato que sirve es
+**cuánto hace que no llega un fotograma**, y por eso el chequeo se decide
+contra el reloj.
+
+Importa más de lo que parece. Sin cámara, el firmware no recibe una sola
+pieza y el robot se queda en `WAIT_PIECE`: o sea con 100 % de
+disponibilidad, sin un solo fallo y sin producir nada. Es la falla que mejor
+se disfraza de "hoy no vinieron piezas", y ningún otro indicador la delata
+—por eso encabeza el veredicto de la pestaña de Rendimiento—.
+
+Recuperarse **exige volver a abrir el dispositivo**: el `VideoCapture` de un
+USB que se desenchufó queda muerto y no revive solo, así que sin reabrirlo
+volver a enchufar la cámara no arreglaría nada. El hilo de visión reintenta,
+espaciando cada vez más si sigue sin aparecer, y cuenta las reconexiones —
+varias en un turno son un cable flojo, y eso no se ve en ningún otro lado.
 
 ---
 

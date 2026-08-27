@@ -19,3 +19,12 @@ pyserial>=3.5
 # pedirlos aparte: el servidor de la interfaz y el que sirve el video son el
 # mismo, y por eso alcanza con un solo proceso.
 nicegui>=2.0
+
+# Pruebas. NO hace falta para correr el robot -- la aplicacion arranca igual
+# sin esto --, pero si para correr pc/tests, que es la unica forma de tocar
+# el protocolo, la rampa o la cinematica sin el robot delante. Va en el mismo
+# archivo y no en un requirements-dev.txt aparte porque aca hay un solo
+# entorno virtual y separarlos solo agregaria un paso que alguien se olvida:
+#
+#     pc\.venv\Scripts\python -m pytest pc/tests
+pytest>=8.0

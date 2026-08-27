@@ -76,6 +76,11 @@ class Enlace:
 
             self._leer()
 
+            # El tramo abierto de la cronologia se cierra aca: sin esto, el
+            # ultimo estado conocido se estiraria por todo el rato que el
+            # robot estuvo desconectado.
+            self.estado.rendimiento.enlace_caido()
+
             with self._lock:
                 if self._ser:
                     try:
@@ -127,6 +132,12 @@ class Enlace:
         self.enviar(pr.cmd_teach_estado())
         self.enviar(pr.cmd_telemetria(True))
 
+        # El registro de fallos que el firmware ya tenia guardado. Sin este
+        # pedido, la pestana de Rendimiento arrancaria vacia cada vez que se
+        # abre la interfaz, que es justo lo que uno hace DESPUES de que algo
+        # anduvo mal: los ultimos 16 fallos son los que interesan.
+        self.enviar(pr.cmd_historial_fallos())
+
         return True
 
     def _leer(self) -> None:
@@ -152,12 +163,15 @@ class Enlace:
             est.t = m
             est.ultimo_t = time.monotonic()
             est.suavizar()
+            est.rendimiento.observar_telemetria(m)
 
         elif isinstance(m, pr.Proceso):
             est.e = m
+            est.rendimiento.observar_proceso(m)
 
         elif isinstance(m, pr.Salud):
             est.h = m
+            est.rendimiento.observar_salud(m)
 
         elif isinstance(m, pr.Parametro):
             est.parametros[m.nombre] = m
@@ -177,6 +191,7 @@ class Enlace:
             est.teach_pos = None
             est.teach_bomba = None
             est.parametros.clear()
+            est.rendimiento.observar_boot(m)
             self._consola(f"el firmware arranco (proto={m.proto} fw={m.fw})")
 
             if not m.compatible:
@@ -186,6 +201,7 @@ class Enlace:
             self.enviar(pr.cmd_listar_parametros())
             self.enviar(pr.cmd_teach_estado())
             self.enviar(pr.cmd_telemetria(True))
+            self.enviar(pr.cmd_historial_fallos())
 
         elif isinstance(m, pr.Teach):
             if m.evento == "p":
@@ -216,9 +232,15 @@ class Enlace:
                     self._consola(f"teach: {m.error}")
 
         elif isinstance(m, pr.Fallo):
-            est.fallos.append(m)
-            est.fallos[:] = est.fallos[-32:]
-            self._consola(f"FALLO {m.tipo} eje {m.eje} err={m.error_deg}")
+            # A la consola solo los fallos NUEVOS. La misma linea llega dos
+            # veces por diseno -- en vivo cuando ocurre, y de nuevo en el
+            # volcado de 'D' -- y sin este filtro conectarse escupiria
+            # dieciseis avisos de cosas que pasaron hace media hora.
+            if est.rendimiento.observar_fallo(m):
+                self._consola(f"FALLO {m.tipo} eje {m.eje} err={m.error_deg}")
+
+        elif isinstance(m, pr.ResumenFallos):
+            est.rendimiento.observar_resumen(m)
 
         elif isinstance(m, pr.Texto):
             if m.crudo:

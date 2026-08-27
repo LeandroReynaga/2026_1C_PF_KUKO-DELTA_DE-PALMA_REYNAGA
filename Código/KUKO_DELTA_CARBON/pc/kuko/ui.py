@@ -23,6 +23,7 @@ from nicegui import app, ui
 from . import cinematica as cin
 from . import parametros as par
 from . import protocolo as pr
+from . import rendimiento as rnd
 from . import teach as tch
 from .estado import AMBAR, GRIS, ROJO, VERDE, EstadoSistema
 
@@ -49,6 +50,12 @@ PASO_RECORTE = 4
 ZOOM = 1.1
 
 DIAL_MIN, DIAL_MAX = -70.0, 30.0
+
+# Cada cuanto se redibuja la pestana de rendimiento. Un segundo alcanza --
+# nada de lo que muestra cambia mas rapido, y la serie se guarda justamente
+# a 1 Hz -- y ademas solo corre con la pestana a la vista: son siete
+# graficos que viajan enteros por websocket en cada refresco.
+PERIODO_RENDIMIENTO_S = 1.0
 
 # Cada cuanto corre el lazo del modo teach: manda la direccion del jog y, si
 # se esta grabando, toma una muestra. 20 Hz es lo mismo a lo que el firmware
@@ -216,9 +223,646 @@ def _archivo_portada() -> str:
     return "/assets/portada.png"
 
 
+# ------------------------------------------------------------------
+#  Pestana de rendimiento
+# ------------------------------------------------------------------
+# Colores del reparto del tiempo. El celeste es el mismo del resto de la
+# interfaz -- es "el robot haciendo lo suyo" -- y el rojo es el mismo del
+# STOP. Esperar pieza va en un gris azulado apagado a proposito: es tiempo
+# que no es productivo pero TAMPOCO es una falla, y pintarlo de amarillo
+# haria que una cinta vacia pareciera un problema del robot.
+COLOR_CAJON = {
+    rnd.TRABAJANDO: CELESTE,
+    rnd.ESPERANDO: "#3C4A5E",
+    rnd.RECUPERANDO: ROJO_STOP,
+    rnd.ARRANQUE: "#6B7684",
+    rnd.TEACH: "#A78BFA",
+    rnd.SIN_ENLACE: "#242A33",
+}
+
+NOMBRE_CAJON = {
+    rnd.TRABAJANDO: "Trabajando",
+    rnd.ESPERANDO: "Esperando pieza",
+    rnd.RECUPERANDO: "Parado por falla",
+    rnd.ARRANQUE: "Arranque y homing",
+    rnd.TEACH: "Modo teach",
+    rnd.SIN_ENLACE: "Sin enlace",
+}
+
+COLOR_TIPO_FALLO = {
+    "COLISION": "#FF5C5C",
+    "ENCODER": "#F5B942",
+    "HOMING": "#38BDF8",
+    "MANUAL": "#8A94A6",
+    "DESCALIBRACION": "#A78BFA",
+}
+
+# Lienzo de la cronologia. Se dibuja en coordenadas fijas y el SVG se estira
+# al ancho del panel, asi que estos numeros son proporciones, no pixeles.
+ANCHO_CRONO, ALTO_CRONO = 1000.0, 88.0
+
+# Tope de puntos que se mandan a un grafico. La serie se guarda a 1 Hz y una
+# corrida larga son miles de muestras; mandarlas todas por websocket en cada
+# refresco es ancho de banda tirado para dibujar varios puntos por pixel.
+MAX_PUNTOS = 320
+
+
+def _hora(t: float) -> str:
+    return time.strftime("%H:%M:%S", time.localtime(t))
+
+
+def _duracion(s: Optional[float]) -> str:
+    """Segundos a algo legible de un vistazo: 45 s, 12 min, 2 h 05."""
+
+    if s is None:
+        return "-"
+
+    if s < 90.0:
+        return f"{s:.0f} s"
+
+    if s < 5400.0:
+        return f"{s / 60.0:.0f} min"
+
+    return f"{int(s // 3600)} h {int((s % 3600) // 60):02d}"
+
+
+def _decimar(puntos: list, maximo: int = MAX_PUNTOS) -> list:
+    """Deja como mucho `maximo` puntos, repartidos parejo.
+
+    Siempre conserva el ultimo: es el que el operador esta mirando, y que la
+    punta del grafico se quede diez segundos atras se nota.
+    """
+
+    if len(puntos) <= maximo:
+        return puntos
+
+    paso = len(puntos) / maximo
+    reducidos = [puntos[int(i * paso)] for i in range(maximo)]
+
+    if reducidos[-1] is not puntos[-1]:
+        reducidos.append(puntos[-1])
+
+    return reducidos
+
+
+def _svg_arco(fraccion: Optional[float], color: str) -> str:
+    """Arco de 3/4 de vuelta con el porcentaje adentro: el dial de disponibilidad."""
+
+    cx = cy = 50.0
+    r = 38.0
+    barrido = 270.0
+    inicio = 135.0
+
+    def punto(grados: float) -> tuple[float, float]:
+        rad = math.radians(grados)
+        return cx + r * math.cos(rad), cy + r * math.sin(rad)
+
+    def arco(desde: float, hasta: float, trazo: str, ancho: float) -> str:
+        if hasta - desde <= 0.01:
+            return ""
+
+        x1, y1 = punto(desde)
+        x2, y2 = punto(hasta)
+        grande = 1 if (hasta - desde) > 180.0 else 0
+
+        return (f'<path d="M {x1:.2f} {y1:.2f} A {r} {r} 0 {grande} 1 {x2:.2f} {y2:.2f}" '
+                f'fill="none" stroke="{trazo}" stroke-width="{ancho}" '
+                'stroke-linecap="round"/>')
+
+    partes = [arco(inicio, inicio + barrido, INACTIVO, 9)]
+
+    if fraccion is not None:
+        frac = max(0.0, min(1.0, fraccion))
+        partes.append(arco(inicio, inicio + barrido * frac, color, 9))
+        texto = f"{frac * 100:.1f}"
+    else:
+        texto = "-"
+
+    partes.append(
+        f'<text x="{cx}" y="{cy + 4}" text-anchor="middle" fill="{TEXTO}" '
+        f'font-size="23" font-weight="700">{texto}</text>')
+
+    if fraccion is not None:
+        partes.append(f'<text x="{cx}" y="{cy + 21}" text-anchor="middle" '
+                      f'fill="{APAGADO}" font-size="11">por ciento</text>')
+
+    return (f'<svg viewBox="0 0 100 100" style="width:100%;height:100%;'
+            f'display:block">{"".join(partes)}</svg>')
+
+
+def _juntar_tramos(tramos: list) -> list:
+    """Funde los tramos seguidos del mismo cajon en un solo rectangulo.
+
+    La banda pinta por CAJON, no por estado, asi que los cinco estados de una
+    maniobra salen del mismo celeste y dibujarlos por separado da cinco
+    rectangulos pegados indistinguibles de uno solo. Juntarlos no cambia nada
+    de lo que se ve y divide por cinco lo que viaja por el websocket en cada
+    refresco -- que con una corrida larga es la diferencia entre una pagina
+    fluida y una que se arrastra.
+
+    El nombre del estado se conserva mientras el tramo sea uno solo. Cuando
+    se funden varios, la etiqueta pasa a ser la del cajon: "Parado por falla,
+    13 s" dice mas que "COLLISION_STOP, 4 s" seguido de "HOMING, 9 s", que es
+    la misma parada contada en dos pedazos.
+    """
+
+    juntados: list[tuple[str, float, float, list]] = []
+
+    for tramo in tramos:
+        # `is not None` y no un `if` a secas: IDLE vale 0 y un enum que vale
+        # cero es falso, asi que el estado de reposo se perderia y saldria
+        # dibujado como si el tramo no tuviera estado.
+        estado = tramo.estado.name if tramo.estado is not None else ""
+
+        if juntados and juntados[-1][0] == tramo.cajon:
+            cajon, inicio, _, estados = juntados[-1]
+
+            if estado and estado not in estados:
+                estados.append(estado)
+
+            juntados[-1] = (cajon, inicio, tramo.fin, estados)
+        else:
+            juntados.append((tramo.cajon, tramo.inicio, tramo.fin,
+                             [estado] if estado else [NOMBRE_CAJON[tramo.cajon]]))
+
+    return juntados
+
+
+def _svg_cronologia(tramos: list, marcas: list, ahora: float) -> str:
+    """La linea de tiempo: una banda de colores con las marcas de fallo debajo.
+
+    Se dibuja a mano y no como un grafico de barras apiladas porque lo que hay
+    que ver de un vistazo es DONDE estan los tramos rojos, no cuanto miden:
+    tres paradas cortas repartidas en una hora son un problema distinto de una
+    sola de quince minutos, y las dos dan exactamente la misma torta.
+
+    Cada tramo lleva su `<title>`, asi que el navegador dice que estado era y
+    cuanto duro al pasarle el mouse por encima, sin una linea de JavaScript.
+    """
+
+    if not tramos:
+        return (f'<div style="color:{APAGADO};font-size:12px;padding:22px 4px">'
+                'Todavia no llego telemetria. La cronologia se dibuja sola en '
+                'cuanto el robot empiece a informar su estado.</div>')
+
+    t0 = tramos[0].inicio
+    t1 = max(ahora, tramos[-1].fin)
+    lapso = max(1.0, t1 - t0)
+
+    alto_banda = 36.0
+    y_banda = 6.0
+
+    def x(t: float) -> float:
+        return (t - t0) / lapso * ANCHO_CRONO
+
+    partes = [f'<rect x="0" y="{y_banda}" width="{ANCHO_CRONO}" height="{alto_banda}" '
+              f'rx="4" fill="{INACTIVO}"/>']
+
+    for cajon, inicio, fin, estados in _juntar_tramos(tramos):
+        x0 = x(inicio)
+        # Un tramo cortisimo igual tiene que verse: una parada de un segundo
+        # en una corrida de media hora mide 0,5 px y es justo la que hay que
+        # encontrar.
+        ancho = max(0.7, x(fin) - x0)
+        etiqueta = estados[0] if len(estados) == 1 else NOMBRE_CAJON[cajon]
+
+        partes.append(
+            f'<rect x="{x0:.2f}" y="{y_banda}" width="{ancho:.2f}" height="{alto_banda}" '
+            f'fill="{COLOR_CAJON[cajon]}">'
+            f'<title>{etiqueta} - {fin - inicio:.1f} s - {_hora(inicio)}</title>'
+            '</rect>')
+
+    # Marcas de fallo: un triangulito bajo la banda, en el instante exacto.
+    for cuando, etiqueta, color in marcas:
+        px = max(4.0, min(ANCHO_CRONO - 4.0, x(cuando)))
+        base = y_banda + alto_banda + 3.0
+
+        partes.append(
+            f'<path d="M {px:.2f} {base} l -5 9 l 10 0 z" fill="{color}">'
+            f'<title>{etiqueta} - {_hora(cuando)}</title></path>')
+
+    # Reglilla de tiempos: seis marcas, la primera y la ultima pegadas a los
+    # bordes para que se lea el rango que abarca todo el dibujo.
+    y_texto = y_banda + alto_banda + 28.0
+
+    for i in range(6):
+        t = t0 + lapso * i / 5.0
+        px = x(t)
+        anclaje = "start" if i == 0 else ("end" if i == 5 else "middle")
+
+        partes.append(f'<line x1="{px:.2f}" y1="{y_banda + alto_banda}" x2="{px:.2f}" '
+                      f'y2="{y_banda + alto_banda + 4}" stroke="{BORDE}" stroke-width="1"/>')
+        partes.append(f'<text x="{px:.2f}" y="{y_texto}" text-anchor="{anclaje}" '
+                      f'fill="{APAGADO}" font-size="13">{_hora(t)}</text>')
+
+    # Escala pareja en los dos ejes (sin `preserveAspectRatio="none"`): con
+    # escalado libre el SVG se estira al ancho del panel y las horas de la
+    # reglilla salen deformadas, angostas o anchas segun el tamano de la
+    # ventana. El alto sale del ancho, que es lo que hace `height:auto`.
+    return (f'<svg viewBox="0 0 {ANCHO_CRONO} {ALTO_CRONO}" '
+            f'style="width:100%;height:auto;display:block">'
+            f'{"".join(partes)}</svg>')
+
+
 def _punto(estado: str) -> str:
     return (f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
             f'background:{COLOR_ESTADO[estado]};margin-right:9px"></span>')
+
+
+# ------------------------------------------------------------------
+#  Graficos de la pestana de rendimiento
+# ------------------------------------------------------------------
+#  Se arman como diccionarios de opciones de ECharts, que NiceGUI trae
+#  adentro (no sale a buscar nada a internet: la PC de la celda puede no
+#  tener red). Son funciones sueltas y no metodos porque no tocan nada de la
+#  interfaz -- entran datos, sale un diccionario -- y asi se pueden mirar de
+#  a una sin arrancar el servidor.
+
+_TOOLTIP = {"backgroundColor": PANEL, "borderColor": BORDE,
+            "textStyle": {"color": TEXTO, "fontSize": 12}}
+
+_LEYENDA = {"textStyle": {"color": APAGADO, "fontSize": 11}, "itemHeight": 8,
+            "itemWidth": 12, "top": 0}
+
+
+def _eje(nombre: str = "", tipo: str = "value") -> dict:
+    return {
+        "type": tipo,
+        "name": nombre,
+        "nameTextStyle": {"color": APAGADO, "fontSize": 10},
+        "axisLine": {"lineStyle": {"color": BORDE}},
+        "axisTick": {"show": False},
+        "axisLabel": {"color": APAGADO, "fontSize": 10, "hideOverlap": True},
+        "splitLine": {"lineStyle": {"color": BORDE, "type": "dashed", "opacity": 0.55}},
+    }
+
+
+def _grafico_vacio() -> dict:
+    return {"series": []}
+
+
+def _sin_datos(texto: str) -> dict:
+    return {"title": {"text": texto, "left": "center", "top": "middle",
+                      "textStyle": {"color": APAGADO, "fontSize": 12,
+                                    "fontWeight": "normal"}},
+            "series": []}
+
+
+def _pintar(grafico, opciones: dict) -> None:
+    grafico.options.clear()
+    grafico.options.update(opciones)
+    grafico.update()
+
+
+def _ms(t: float) -> int:
+    """Instante a milisegundos, que es como ECharts quiere un eje de tiempo."""
+
+    return int(t * 1000)
+
+
+def _grafico_reparto(r) -> dict:
+    """Torta del reparto del tiempo. Es el 'a donde se fue el turno'."""
+
+    datos = [{"value": round(r.tiempos.get(c, 0.0), 1),
+              "name": NOMBRE_CAJON[c],
+              "itemStyle": {"color": COLOR_CAJON[c],
+                            "borderColor": PANEL, "borderWidth": 2}}
+             for c in rnd.CAJONES if r.tiempos.get(c, 0.0) > 0.5]
+
+    if not datos:
+        return _sin_datos("todavia no hay tiempo medido")
+
+    return {
+        "tooltip": dict(_TOOLTIP, trigger="item", formatter="{b}: {d} %"),
+        "legend": dict(_LEYENDA, orient="vertical", left=0, top="middle"),
+        "series": [{
+            "type": "pie",
+            "radius": ["48%", "76%"],
+            "center": ["68%", "50%"],
+            "avoidLabelOverlap": True,
+            "label": {"show": False},
+            "labelLine": {"show": False},
+            "data": datos,
+        }],
+    }
+
+
+def _grafico_tipos(r) -> dict:
+    """Fallos por tipo. Orden fijo: el del enum del firmware.
+
+    Fijo a proposito, aunque sobren barras en cero: si se ordenara por
+    cantidad, cada fallo nuevo reacomodaria las barras y no se podria
+    comparar de un vistazo contra la corrida anterior.
+    """
+
+    tipos = list(pr.TIPOS_FALLO)
+    valores = [r.por_tipo.get(t, 0) for t in tipos]
+
+    if not any(valores):
+        return _sin_datos("ningun fallo registrado")
+
+    return {
+        "tooltip": dict(_TOOLTIP, trigger="item"),
+        "grid": {"left": 4, "right": 22, "top": 6, "bottom": 2,
+                 "containLabel": True},
+        "xAxis": _eje(),
+        "yAxis": dict(_eje(tipo="category"),
+                      data=list(reversed([t.capitalize() for t in tipos])),
+                      splitLine={"show": False}),
+        "series": [{
+            "type": "bar",
+            "barWidth": "58%",
+            "data": [{"value": v,
+                      "itemStyle": {"color": COLOR_TIPO_FALLO.get(t, CELESTE),
+                                    "borderRadius": [0, 3, 3, 0]}}
+                     for t, v in reversed(list(zip(tipos, valores)))],
+            "label": {"show": True, "position": "right",
+                      "color": APAGADO, "fontSize": 11},
+        }],
+    }
+
+
+def _grafico_etapas(r) -> dict:
+    """En que estado del ciclo se rompio. Contesta 'donde se traba'."""
+
+    if not r.por_estado:
+        return _sin_datos("ningun fallo registrado")
+
+    orden = sorted(r.por_estado.items(), key=lambda kv: kv[1])[-7:]
+
+    return {
+        "tooltip": dict(_TOOLTIP, trigger="item"),
+        "grid": {"left": 4, "right": 22, "top": 6, "bottom": 2,
+                 "containLabel": True},
+        "xAxis": _eje(),
+        "yAxis": dict(_eje(tipo="category"), data=[k for k, _ in orden],
+                      axisLabel={"color": APAGADO, "fontSize": 10},
+                      splitLine={"show": False}),
+        "series": [{
+            "type": "bar",
+            "barWidth": "58%",
+            "itemStyle": {"color": ROJO_STOP, "borderRadius": [0, 3, 3, 0]},
+            "data": [v for _, v in orden],
+            "label": {"show": True, "position": "right",
+                      "color": APAGADO, "fontSize": 11},
+        }],
+    }
+
+
+def _grafico_produccion(serie: list) -> dict:
+    """Las tres curvas acumuladas. La distancia entre ellas es lo que se pierde."""
+
+    if len(serie) < 2:
+        return _sin_datos("juntando datos")
+
+    puntos = _decimar(serie)
+
+    def curva(nombre: str, campo: str, color: str, relleno: bool) -> dict:
+        trazo = {
+            "name": nombre,
+            "type": "line",
+            "showSymbol": False,
+            "smooth": False,
+            "lineStyle": {"width": 2, "color": color},
+            "itemStyle": {"color": color},
+            "data": [[_ms(m.t), getattr(m, campo)] for m in puntos],
+        }
+
+        if relleno:
+            trazo["areaStyle"] = {"color": color, "opacity": 0.12}
+
+        return trazo
+
+    return {
+        "tooltip": dict(_TOOLTIP, trigger="axis"),
+        "legend": dict(_LEYENDA, data=["Detectadas", "Depositadas", "Sin agarrar"]),
+        "grid": {"left": 4, "right": 12, "top": 26, "bottom": 2,
+                 "containLabel": True},
+        "xAxis": _eje(tipo="time"),
+        "yAxis": dict(_eje("piezas"), minInterval=1),
+        "series": [
+            curva("Detectadas", "detectadas", APAGADO, False),
+            curva("Depositadas", "depositadas", CELESTE, True),
+            curva("Sin agarrar", "descartadas", ROJO_STOP, True),
+        ],
+    }
+
+
+def _grafico_ritmo(ritmo: list, serie: list) -> dict:
+    """Piezas por minuto contra el largo de la cola.
+
+    Van juntos porque solos mienten: un ritmo bajo con la cola vacia es una
+    cinta sin piezas, y el mismo ritmo bajo con la cola llena es el robot que
+    no da abasto. Son dos problemas distintos con el mismo numero.
+    """
+
+    if len(ritmo) < 2:
+        return _sin_datos("hace falta al menos un minuto de corrida")
+
+    return {
+        "tooltip": dict(_TOOLTIP, trigger="axis"),
+        "legend": dict(_LEYENDA, data=["Piezas/min", "En cola"]),
+        "grid": {"left": 4, "right": 4, "top": 26, "bottom": 2,
+                 "containLabel": True},
+        "xAxis": _eje(tipo="time"),
+        "yAxis": [
+            dict(_eje("pzas/min")),
+            dict(_eje("cola"), minInterval=1, splitLine={"show": False}),
+        ],
+        "series": [
+            {
+                "name": "En cola",
+                "type": "line",
+                "yAxisIndex": 1,
+                "step": "end",
+                "showSymbol": False,
+                "lineStyle": {"width": 0},
+                "areaStyle": {"color": "#3C4A5E", "opacity": 0.5},
+                "itemStyle": {"color": "#3C4A5E"},
+                "data": [[_ms(m.t), m.cola] for m in _decimar(serie)],
+            },
+            {
+                "name": "Piezas/min",
+                "type": "line",
+                "smooth": True,
+                "showSymbol": False,
+                "lineStyle": {"width": 2, "color": CELESTE},
+                "itemStyle": {"color": CELESTE},
+                "data": [[_ms(t), round(v, 2)] for t, v in _decimar(ritmo)],
+            },
+        ],
+    }
+
+
+def _grafico_maniobras(maniobras: list, r) -> dict:
+    """Cada maniobra, un punto. La nube plana es un robot sano.
+
+    Es el grafico que delata un atasco aunque el guard no haya llegado a
+    declararlo: una maniobra normal esta en el orden de los segundos y una
+    trabada se va sola muy por encima de la mediana.
+    """
+
+    if not maniobras:
+        return _sin_datos("todavia no completo ninguna maniobra")
+
+    normales = [[_ms(m.fin), round(m.duracion, 2)]
+                for m in maniobras if not m.interrumpida]
+    cortadas = [[_ms(m.fin), round(m.duracion, 2)]
+                for m in maniobras if m.interrumpida]
+
+    marcas = []
+
+    if r.maniobra_mediana_s is not None:
+        marcas.append({"yAxis": round(r.maniobra_mediana_s, 2),
+                       "label": {"formatter": "mediana", "color": APAGADO,
+                                 "fontSize": 10, "position": "insideEndTop"}})
+
+    # La raya de "trabado" solo cuando hay algo cerca. ECharts estira el eje
+    # para que entren las marcas, asi que ponerla siempre dejaria el eje de
+    # 0 a 12 s con todos los puntos aplastados abajo justo en la corrida
+    # sana, que es cuando uno quiere ver la dispersion fina.
+    if (r.maniobra_peor_s or 0.0) > rnd.MANIOBRA_LARGA_S * 0.6:
+        marcas.append({"yAxis": rnd.MANIOBRA_LARGA_S,
+                       "lineStyle": {"color": ROJO_STOP},
+                       "label": {"formatter": "trabado", "color": ROJO_STOP,
+                                 "fontSize": 10, "position": "insideEndTop"}})
+
+    return {
+        "tooltip": dict(_TOOLTIP, trigger="item"),
+        "legend": dict(_LEYENDA, data=["Completadas", "Cortadas por un fallo"]),
+        "grid": {"left": 4, "right": 12, "top": 26, "bottom": 2,
+                 "containLabel": True},
+        "xAxis": _eje(tipo="time"),
+        "yAxis": dict(_eje("segundos"), min=0),
+        "series": [
+            {
+                "name": "Completadas",
+                "type": "scatter",
+                "symbolSize": 6,
+                "itemStyle": {"color": CELESTE, "opacity": 0.75},
+                "data": normales,
+                "markLine": {"silent": True, "symbol": "none",
+                             "lineStyle": {"type": "dashed", "color": BORDE},
+                             "data": marcas},
+            },
+            {
+                "name": "Cortadas por un fallo",
+                "type": "scatter",
+                "symbolSize": 9,
+                "symbol": "triangle",
+                "itemStyle": {"color": ROJO_STOP},
+                "data": cortadas,
+            },
+        ],
+    }
+
+
+def _grafico_fps(serie: list, r) -> dict:
+    """Fotogramas por segundo a lo largo de la corrida.
+
+    Se pinta el area y no solo la linea porque lo que hay que reconocer de
+    un vistazo son los MORDISCOS: un rato en cero es la camara desenchufada,
+    y una meseta baja es la camara andando mal, que se ve peor pero rompe
+    igual -- por debajo de `FPS_MINIMOS` el tracker deja de emparejar las
+    piezas entre fotogramas y se pierden agarres sin que falle nada.
+    """
+
+    if len(serie) < 2:
+        return _sin_datos("sin camara" if not r.camara_presente
+                          else "juntando fotogramas")
+
+    marcas = [{"yAxis": rnd.FPS_MINIMOS,
+               "lineStyle": {"color": COLOR_ESTADO[AMBAR], "type": "dashed"},
+               "label": {"formatter": "minimo util", "color": COLOR_ESTADO[AMBAR],
+                         "fontSize": 10, "position": "insideEndTop"}}]
+
+    if r.fps_5min is not None:
+        marcas.append({"yAxis": round(r.fps_5min, 1),
+                       "lineStyle": {"color": BORDE, "type": "dashed"},
+                       "label": {"formatter": "promedio 5 min", "color": APAGADO,
+                                 "fontSize": 10, "position": "insideEndTop"}})
+
+    return {
+        "tooltip": dict(_TOOLTIP, trigger="axis"),
+        "grid": {"left": 4, "right": 12, "top": 12, "bottom": 2,
+                 "containLabel": True},
+        "xAxis": _eje(tipo="time"),
+        "yAxis": dict(_eje("fps"), min=0),
+        "series": [{
+            "name": "fps",
+            "type": "line",
+            "showSymbol": False,
+            "lineStyle": {"width": 2, "color": CELESTE},
+            "itemStyle": {"color": CELESTE},
+            "areaStyle": {"color": CELESTE, "opacity": 0.16},
+            "data": [[_ms(t), round(v, 1)] for t, v in _decimar(serie)],
+            "markLine": {"silent": True, "symbol": "none", "data": marcas},
+        }],
+    }
+
+
+def _grafico_trabas(fallos: list) -> dict:
+    """Grados ordenados contra grados girados, una colision por punto.
+
+    Es la unica forma de contestar la pregunta que importa cuando el robot
+    para: si el brazo se trabo o si el que se equivoco fue el encoder. Un
+    punto sobre la diagonal es un eje que giro lo que se le pidio -- el
+    umbral salto por otra cosa --; uno pegado al piso es un eje que tenia
+    orden de moverse y no se movio, o sea algo que lo esta frenando.
+    """
+
+    puntos = [f for f in fallos
+              if f.tipo == "COLISION"
+              and f.cmd_delta is not None and f.enc_delta is not None]
+
+    if not puntos:
+        return _sin_datos("ninguna colision registrada")
+
+    tope = max(max(abs(f.cmd_delta), abs(f.enc_delta)) for f in puntos)
+    tope = max(5.0, tope * 1.15)
+
+    trabados = [[round(abs(f.cmd_delta), 1), round(abs(f.enc_delta), 1)]
+                for f in puntos if f.brazo_frenado]
+    resto = [[round(abs(f.cmd_delta), 1), round(abs(f.enc_delta), 1)]
+             for f in puntos if not f.brazo_frenado]
+
+    def referencia(nombre: str, pendiente: float, color: str, guion: str) -> dict:
+        return {
+            "name": nombre,
+            "type": "line",
+            "showSymbol": False,
+            "silent": True,
+            "lineStyle": {"color": color, "type": guion, "width": 1},
+            "itemStyle": {"color": color},
+            "data": [[0, 0], [round(tope, 1), round(tope * pendiente, 1)]],
+        }
+
+    return {
+        "tooltip": dict(_TOOLTIP, trigger="item"),
+        "legend": dict(_LEYENDA, data=["Brazo frenado", "El eje giro igual"]),
+        "grid": {"left": 4, "right": 12, "top": 26, "bottom": 2,
+                 "containLabel": True},
+        "xAxis": dict(_eje("ordenados, grados"), max=round(tope, 1)),
+        "yAxis": dict(_eje("girados, grados"), max=round(tope, 1)),
+        "series": [
+            referencia("giro completo", 1.0, BORDE, "solid"),
+            referencia("umbral de traba", pr.Fallo.FRACCION_TRABADO, ROJO_STOP, "dashed"),
+            {
+                "name": "El eje giro igual",
+                "type": "scatter",
+                "symbolSize": 11,
+                "itemStyle": {"color": COLOR_ESTADO[AMBAR]},
+                "data": resto,
+            },
+            {
+                "name": "Brazo frenado",
+                "type": "scatter",
+                "symbolSize": 13,
+                "itemStyle": {"color": ROJO_STOP},
+                "data": trabados,
+            },
+        ],
+    }
 
 
 class Interfaz:
@@ -342,8 +986,11 @@ class Interfaz:
                 "puerto": est.puerto,
                 "error": est.error_enlace,
                 "fps": round(est.fps_camara, 1),
+                "camara": est.camara_viva(),
+                "camara_error": est.camara_error,
+                "fotogramas": est.fotogramas,
                 "estado": est.e.estado_nombre if est.e else "",
-                "modo": est.e.modo.name if est.e and est.e.modo else "",
+                "modo": est.e.modo.name if est.e and est.e.modo is not None else "",
                 "cola": est.e.cola if est.e else None,
                 "parametros": len(est.parametros),
                 "cinta_medida": est.cinta_medida,
@@ -373,6 +1020,7 @@ class Interfaz:
             with ui.tabs().props("dense indicator-color=cyan-4") as tabs:
                 self.tab_operacion = ui.tab("Operacion")
                 self.tab_teach = ui.tab("Teach")
+                self.tab_rendimiento = ui.tab("Rendimiento")
                 self.tab_proceso = ui.tab("Proceso")
                 self.tab_servicio = ui.tab("Servicio")
 
@@ -386,6 +1034,9 @@ class Interfaz:
 
             with ui.tab_panel(self.tab_teach).classes("p-0").style("height:100%"):
                 self._teach()
+
+            with ui.tab_panel(self.tab_rendimiento).classes("p-0").style("height:100%"):
+                self._rendimiento()
 
             with ui.tab_panel(self.tab_proceso).classes("p-0").style("height:100%"):
                 self._ajustes(pr.NIVEL_PROCESO, self._panel_en_vivo)
@@ -404,6 +1055,7 @@ class Interfaz:
         ui.timer(0.1, self._refrescar_rapido)
         ui.timer(0.5, self._refrescar_lento)
         ui.timer(PERIODO_TEACH_S, self._teach_tick)
+        ui.timer(PERIODO_RENDIMIENTO_S, self._refrescar_rendimiento)
 
     # ------------------------------------------------------------------
     def _operacion(self) -> None:
@@ -458,7 +1110,8 @@ class Interfaz:
                         ui.label("Componentes").classes("titulo")
                         self.filas_chequeo = {}
 
-                        for clave in ("cinta", "encoders", "endstops", "motores", "neumatica"):
+                        for clave in ("camara", "cinta", "encoders", "endstops",
+                                      "motores", "neumatica"):
                             self.filas_chequeo[clave] = ui.html().classes("text-sm fila w-full")
 
                     with ui.column().classes("panel p-2 gap-1").style("flex:0 0 420px"):
@@ -1270,8 +1923,14 @@ class Interfaz:
             texto = (f"firmware desparejo (proto={est.boot.proto}, "
                      f"la interfaz habla {pr.VERSION_PROTOCOLO}): hay que reflashear")
         elif vivo:
-            senal, color = VERDE, COLOR_ESTADO[VERDE]
-            texto = f"{est.puerto} · {est.fps_camara:.0f} fps"
+            # El chip resume las DOS conexiones, y se pinta con la peor: la
+            # camara cuelga de otro USB y se cae por su cuenta, y sin ella el
+            # robot no ve una sola pieza. Un punto verde con la camara muerta
+            # seria exactamente el aviso que hace falta, dado al reves.
+            camara_mal = est.camara_presente and not est.camara_viva()
+            senal = ROJO if camara_mal else VERDE
+            color = COLOR_ESTADO[senal]
+            texto = f"{est.puerto} · {self._chip_camara()}"
         else:
             senal, color = ROJO, COLOR_ESTADO[ROJO]
             texto = est.error_enlace or "sin enlace"
@@ -1294,6 +1953,25 @@ class Interfaz:
         self._latencia()
         self._refrescar_ajustes()
         self._refrescar_paneles()
+
+    def _chip_camara(self) -> str:
+        """Lo que dice el chip de arriba sobre la camara.
+
+        Antes decia siempre `{fps} fps` con el ultimo valor bueno, asi que
+        una camara desenchufada se veia igual que una andando: los FPS se
+        congelaban en 24 y la imagen tambien. El numero solo se muestra
+        cuando de verdad esta llegando algo.
+        """
+
+        est = self.estado
+
+        if not est.camara_presente:
+            return "sin camara"
+
+        if est.camara_viva():
+            return f"{est.fps_camara:.0f} fps"
+
+        return "CAMARA CAIDA"
 
     def _guard_y_paro(self) -> None:
         est = self.estado
@@ -1738,6 +2416,11 @@ class Interfaz:
 
         if self.tab_activa == "Teach":
             self.enviar(pr.cmd_teach_estado())
+
+        # Sin esto la pestana de rendimiento aparece en blanco hasta el
+        # proximo tic, que es justo el segundo en que uno la esta mirando.
+        if self.tab_activa == "Rendimiento":
+            self._pintar_rendimiento()
 
     def _teach_tecla(self, evento) -> None:
         if self.tab_activa != "Teach":
@@ -2875,6 +3558,500 @@ class Interfaz:
         else:
             self.etiqueta_grabacion.text = f"{len(self.biblioteca.movimientos)} guardados"
 
+
+
+    # ==================================================================
+    #  RENDIMIENTO
+    # ==================================================================
+    #
+    #  La pregunta que contesta esta pestana es una sola: "¿el robot esta
+    #  cumpliendo, y si no, por que no?". Todo lo que se dibuja aca sale de
+    #  `kuko/rendimiento.py`, que es quien va guardando la historia -- el
+    #  firmware lleva contadores pero no lleva tiempos, y sin tiempos no hay
+    #  ni disponibilidad ni cronologia.
+    #
+    #  Es la unica pestana con scroll. Las de operacion y teach entran
+    #  enteras en la ventana a proposito, porque se miran de reojo con el
+    #  robot andando; esta es un informe que uno se sienta a leer, y
+    #  apretarla hasta que entre significaria dibujar todo demasiado chico
+    #  para que se entienda.
+
+    def _rendimiento(self) -> None:
+        with ui.row().classes("w-full gap-2 p-2 no-wrap").style("height:100%"):
+            with ui.column().classes("gap-2 no-wrap") \
+                    .style("flex:1 1 0;height:100%;min-height:0;overflow-y:auto;"
+                           "overscroll-behavior:contain;padding-right:4px"):
+                self._rend_encabezado()
+                self._rend_tarjetas()
+                self._rend_cronologia()
+                self._rend_graficos()
+                self._rend_fallos()
+
+            # La lista de eventos va en su propia columna, a la vista todo el
+            # tiempo: es lo que uno lee mientras mira los graficos, y tenerla
+            # al fondo de la pagina obligaria a scrollear para atras cada vez
+            # que un grafico muestra algo raro.
+            with ui.column().classes("panel p-3 gap-2 no-wrap") \
+                    .style("flex:0 0 322px;height:100%;min-height:0"):
+                with ui.row().classes("w-full items-center no-wrap"):
+                    ui.label("Cronologia de eventos").classes("titulo")
+                    ui.space()
+                    self.etiqueta_eventos = ui.label("").style(
+                        f"color:{APAGADO};font-size:11.5px")
+
+                self.html_eventos = ui.html().style(
+                    "flex:1 1 0;min-height:0;overflow-y:auto;width:100%")
+
+    # ------------------------------------------------------------------
+    def _rend_encabezado(self) -> None:
+        with ui.row().classes("panel px-3 py-2 gap-3 items-center no-wrap w-full") \
+                .style("flex:0 0 auto"):
+            self.html_veredicto = ui.html().style("flex:1 1 0;min-width:0")
+
+            self.etiqueta_medicion = ui.label("").style(
+                f"color:{APAGADO};font-size:11.5px;text-align:right;flex:0 0 auto")
+
+            ui.button("Pedir historial", on_click=self._rend_pedir_historial) \
+                .props("flat dense no-caps").style(f"color:{CELESTE};font-size:12px")
+            ui.button("Reiniciar medicion", on_click=self._rend_reiniciar) \
+                .props("flat dense no-caps").style(f"color:{APAGADO};font-size:12px")
+
+    def _rend_pedir_historial(self) -> None:
+        """Pide el volcado de fallos que el firmware tiene guardado ('D').
+
+        Ya se pide solo al conectarse; el boton es para el caso de haber
+        arrancado la interfaz con el robot a medio andar y querer traerse lo
+        que paso antes. Los repetidos no se cuentan dos veces: el historial
+        deduplica por numero de fallo.
+        """
+
+        if self.enviar(pr.cmd_historial_fallos()):
+            ui.notify("Pedido el historial de fallos al robot", color="info")
+        else:
+            ui.notify("Sin enlace con el robot", color="negative")
+
+    def _rend_reiniciar(self) -> None:
+        self.estado.rendimiento.reiniciar()
+        ui.notify("Medicion reiniciada. Los contadores del robot no se tocaron.",
+                  color="info")
+
+    # ------------------------------------------------------------------
+    def _rend_tarjetas(self) -> None:
+        """Los seis numeros que se miran primero."""
+
+        self.tarjetas = {}
+
+        with ui.row().classes("w-full gap-2 no-wrap items-stretch").style("flex:0 0 auto"):
+            # Disponibilidad, con su arco. Es la unica que lleva dibujo: es
+            # el numero que resume la pestana entera.
+            with ui.row().classes("panel p-2 gap-2 items-center no-wrap") \
+                    .style("flex:1.3 1 0"):
+                self.html_disponibilidad = ui.html().style(
+                    "flex:0 0 84px;height:84px")
+
+                with ui.column().classes("gap-0").style("flex:1 1 0;min-width:0"):
+                    ui.label("Disponibilidad").classes("titulo")
+                    self.tarjetas["disponibilidad"] = ui.html().classes("w-full")
+
+            for clave, titulo in (
+                    ("perdidas", "Piezas sin agarrar"),
+                    ("fallos", "Fallos"),
+                    ("ritmo", "Ritmo"),
+                    ("ciclo", "Tiempo de ciclo"),
+                    ("camara", "Camara")):
+                with ui.column().classes("panel p-2 gap-0 no-wrap").style("flex:1 1 0"):
+                    ui.label(titulo).classes("titulo")
+                    self.tarjetas[clave] = ui.html().classes("w-full")
+
+    # ------------------------------------------------------------------
+    def _rend_cronologia(self) -> None:
+        with ui.column().classes("panel p-3 gap-1 w-full").style("flex:0 0 auto"):
+            with ui.row().classes("w-full items-center no-wrap gap-2"):
+                ui.label("Que hizo el robot").classes("titulo")
+                ui.space()
+                ui.html(self._rend_leyenda()).style(
+                    "flex:1 1 auto;min-width:0;text-align:right")
+
+            self.html_cronologia = ui.html().classes("w-full")
+
+        with ui.column().classes("panel p-3 gap-1 w-full").style("flex:0 0 auto"):
+            with ui.row().classes("w-full items-center no-wrap gap-2"):
+                ui.label("Fotogramas por segundo").classes("titulo")
+                ui.space()
+                self.etiqueta_camara = ui.label("").style(
+                    f"color:{APAGADO};font-size:11.5px")
+
+            self.g_fps = ui.echart(_grafico_vacio()).style("width:100%;height:150px")
+
+    @staticmethod
+    def _rend_leyenda() -> str:
+        trozos = []
+
+        for cajon in rnd.CAJONES:
+            trozos.append(
+                f'<span style="display:inline-flex;align-items:center;margin-left:11px">'
+                f'<span style="width:10px;height:10px;border-radius:2px;'
+                f'background:{COLOR_CAJON[cajon]};margin-right:5px;'
+                f'border:1px solid {BORDE}"></span>'
+                f'<span style="color:{APAGADO};font-size:11.5px">'
+                f'{NOMBRE_CAJON[cajon]}</span></span>')
+
+        return "".join(trozos)
+
+    # ------------------------------------------------------------------
+    def _rend_graficos(self) -> None:
+        def panel(titulo: str, ayuda: str, flex: str, alto: int):
+            columna = ui.column().classes("panel p-3 gap-1 no-wrap").style(f"flex:{flex}")
+
+            with columna:
+                ui.label(titulo).classes("titulo")
+
+                if ayuda:
+                    ui.label(ayuda).style(
+                        f"color:{APAGADO};font-size:11.5px;line-height:1.3")
+
+                grafico = ui.echart(_grafico_vacio()).style(
+                    f"width:100%;height:{alto}px")
+
+            return grafico
+
+        with ui.row().classes("w-full gap-2 no-wrap items-stretch").style("flex:0 0 auto"):
+            self.g_reparto = panel(
+                "En que se le fue el tiempo", "", "1 1 0", 188)
+            self.g_tipos = panel(
+                "Fallos por tipo",
+                "Totales del firmware desde que se encendio.", "1 1 0", 188)
+            self.g_etapas = panel(
+                "En que parte del ciclo falla",
+                "Donde se traba dice que hay que revisar.", "1 1 0", 188)
+
+        with ui.row().classes("w-full gap-2 no-wrap items-stretch").style("flex:0 0 auto"):
+            self.g_produccion = panel(
+                "Produccion acumulada",
+                "Si la linea de descartadas se despega, el robot no llega al "
+                "ritmo de la cinta.", "1.3 1 0", 196)
+            self.g_ritmo = panel(
+                "Ritmo y cola",
+                "Una cola que crece con el ritmo planchado es el robot pasado "
+                "de trabajo.", "1 1 0", 196)
+
+        with ui.row().classes("w-full gap-2 no-wrap items-stretch").style("flex:0 0 auto"):
+            self.g_maniobras = panel(
+                "Cuanto tarda cada maniobra",
+                "Un punto muy arriba es el brazo trabado en ese instante.",
+                "1.3 1 0", 196)
+            self.g_trabas = panel(
+                "Se trabo, o mide mal el encoder",
+                "Cada colision: grados ordenados contra grados girados.",
+                "1 1 0", 196)
+
+    # ------------------------------------------------------------------
+    def _rend_fallos(self) -> None:
+        with ui.column().classes("panel p-3 gap-1 w-full").style("flex:0 0 auto"):
+            with ui.row().classes("w-full items-center no-wrap"):
+                ui.label("Registro de fallos").classes("titulo")
+                ui.space()
+                self.etiqueta_registro = ui.label("").style(
+                    f"color:{APAGADO};font-size:11.5px")
+
+            self.html_registro = ui.html().style(
+                "width:100%;max-height:270px;overflow-y:auto")
+
+    # ==================================================================
+    #  Refresco de la pestana
+    # ==================================================================
+    def _refrescar_rendimiento(self) -> None:
+        # Nada de esto se calcula si no se esta mirando: son siete graficos
+        # que se mandan enteros por websocket, y el robot puede pasarse la
+        # tarde en la pestana de operacion.
+        if self.tab_activa != "Rendimiento":
+            return
+
+        self._pintar_rendimiento()
+
+    def _pintar_rendimiento(self) -> None:
+        hist = self.estado.rendimiento
+        r = hist.resumen()
+
+        self._rend_pintar_encabezado(hist, r)
+        self._rend_pintar_tarjetas(r)
+        self._rend_pintar_cronologia(hist)
+        self._rend_pintar_graficos(hist, r)
+        self._rend_pintar_fallos(hist, r)
+        self._rend_pintar_eventos(hist)
+
+    def _rend_pintar_encabezado(self, hist, r) -> None:
+        veredicto = hist.veredicto(r)
+
+        self.html_veredicto.content = (
+            f'{_punto(veredicto.severidad)}'
+            f'<span style="color:{TEXTO};font-size:14px">{veredicto.texto}</span>')
+
+        if r.desde is None:
+            self.etiqueta_medicion.text = "sin datos todavia"
+        else:
+            arranques = (f" · {r.arranques} reinicio{'s' if r.arranques > 1 else ''} "
+                         "del firmware" if r.arranques else "")
+            self.etiqueta_medicion.text = (
+                f"midiendo desde {_hora(r.desde)} · {_duracion(r.en_servicio_s)} "
+                f"en servicio{arranques}")
+
+    def _rend_pintar_tarjetas(self, r) -> None:
+        def tarjeta(valor: str, sub: str, color: str = TEXTO) -> str:
+            return (f'<div style="color:{color};font-size:27px;font-weight:700;'
+                    f'line-height:1.15">{valor}</div>'
+                    f'<div style="color:{APAGADO};font-size:11.5px;line-height:1.35">'
+                    f'{sub}</div>')
+
+        # --- Disponibilidad ---
+        if r.disponibilidad is None:
+            color = COLOR_ESTADO[GRIS]
+        elif r.disponibilidad >= 0.95:
+            color = COLOR_ESTADO[VERDE]
+        elif r.disponibilidad >= 0.85:
+            color = COLOR_ESTADO[AMBAR]
+        else:
+            color = COLOR_ESTADO[ROJO]
+
+        self.html_disponibilidad.content = _svg_arco(r.disponibilidad, color)
+
+        parado = r.tiempos.get(rnd.RECUPERANDO, 0.0)
+        self.tarjetas["disponibilidad"].content = (
+            f'<div style="color:{APAGADO};font-size:11.5px;line-height:1.45">'
+            f'{_duracion(parado)} parado por fallas<br>'
+            f'de {_duracion(r.en_servicio_s)} en servicio<br>'
+            f'<span style="color:{TEXTO}">{_duracion(r.tiempos.get(rnd.TRABAJANDO, 0.0))}'
+            f'</span> con una pieza en curso</div>')
+
+        # --- Piezas sin agarrar ---
+        # Las que se pasaron porque el brazo no llego. Las que se dejan pasar
+        # a proposito en modo caja NO estan aca: el firmware no las cuenta
+        # como descartadas (ver el comentario de los contadores en Robot.h),
+        # y esa distincion es justamente lo que hace util a este numero.
+        perdidas = r.descartadas
+        pct = (f" · {perdidas / r.detectadas * 100:.0f} % de las detectadas"
+               if perdidas and r.detectadas else "")
+
+        # El total del firmware solo se muestra cuando NO coincide, o sea
+        # cuando la medicion arranco despues que el robot. Ponerlo siempre
+        # seria repetir el mismo numero dos veces.
+        desde_encendido = (
+            f"<br>{r.descartadas_total} desde que se encendio el robot"
+            if r.descartadas_total is not None and r.descartadas_total != perdidas
+            else "")
+
+        caidas = (f"{r.piezas_caidas} se le "
+                  f"{'cayo' if r.piezas_caidas == 1 else 'cayeron'} por un fallo")
+
+        self.tarjetas["perdidas"].content = tarjeta(
+            "—" if perdidas is None else str(perdidas),
+            f"no llego a tiempo{pct}<br>{caidas}{desde_encendido}",
+            COLOR_ESTADO[ROJO] if perdidas else TEXTO)
+
+        # --- Fallos ---
+        detalle = []
+
+        if r.mtbf_s:
+            detalle.append(f"uno cada {_duracion(r.mtbf_s)}")
+
+        if r.trabas:
+            detalle.append(f"{r.trabas} con el brazo frenado")
+
+        if r.fallos_vistos and r.fallos_total > r.fallos_vistos:
+            detalle.append(f"{r.fallos_vistos} en esta medicion")
+
+        self.tarjetas["fallos"].content = tarjeta(
+            str(r.fallos_total),
+            "<br>".join(detalle) or "ninguno desde que arranco",
+            COLOR_ESTADO[ROJO] if r.fallos_total else COLOR_ESTADO[VERDE])
+
+        # --- Ritmo ---
+        promedio = ("—" if r.piezas_por_min is None
+                    else f"{r.piezas_por_min:.1f} de promedio")
+        efectividad = ("" if r.efectividad is None
+                       else f" · {r.efectividad * 100:.0f} % de efectividad")
+
+        self.tarjetas["ritmo"].content = tarjeta(
+            "—" if r.ritmo_reciente is None else f"{r.ritmo_reciente:.1f}",
+            "piezas por minuto (ultimo minuto)<br>"
+            f"{promedio}{efectividad}")
+
+        # --- Camara ---
+        # El titular son los FPS de los ultimos cinco minutos, que es una
+        # resta de contadores sobre el tiempo transcurrido: si la camara
+        # estuvo muerta parte de la ventana, el numero baja solo. Eso es lo
+        # que se quiere de un promedio, y es lo que NO daria promediar los
+        # FPS instantaneos, que durante una caida no existen.
+        if not r.camara_presente:
+            self.tarjetas["camara"].content = tarjeta(
+                "—", "sin camara (se arranco con --sin-vision)",
+                COLOR_ESTADO[GRIS])
+        elif r.camara_viva is False:
+            self.tarjetas["camara"].content = tarjeta(
+                "CAIDA",
+                ("el hilo de vision no responde" if r.camara_muda
+                 else (r.camara_detalle[:40] or "no entrega imagen"))
+                + "<br>el robot no ve ninguna pieza",
+                COLOR_ESTADO[ROJO])
+        else:
+            estado_fps = (COLOR_ESTADO[AMBAR]
+                          if r.fps_5min is not None and r.fps_5min < rnd.FPS_MINIMOS
+                          else TEXTO)
+
+            detalle = []
+
+            if r.fps_ahora is not None:
+                detalle.append(f"{r.fps_ahora:.0f} ahora")
+
+            if r.camara_caidas:
+                detalle.append(f"{r.camara_caidas} corte"
+                               f"{'s' if r.camara_caidas > 1 else ''}")
+
+            if r.camara_disponibilidad is not None and r.camara_disponibilidad < 1.0:
+                detalle.append(f"{r.camara_disponibilidad * 100:.0f} % con imagen")
+
+            self.tarjetas["camara"].content = tarjeta(
+                "—" if r.fps_5min is None else f"{r.fps_5min:.1f}",
+                "fps, promedio de 5 min<br>"
+                + (" · ".join(detalle) or "sin cortes"),
+                estado_fps)
+
+        # --- Tiempo de ciclo ---
+        cortadas = (f" · {r.maniobras_interrumpidas} cortada"
+                    f"{'s' if r.maniobras_interrumpidas > 1 else ''}"
+                    if r.maniobras_interrumpidas else "")
+
+        self.tarjetas["ciclo"].content = tarjeta(
+            "—" if r.maniobra_mediana_s is None else f"{r.maniobra_mediana_s:.1f} s",
+            f"mediana de {r.maniobras} maniobras<br>"
+            f"peor: {_duracion(r.maniobra_peor_s)}{cortadas}")
+
+    def _rend_pintar_cronologia(self, hist) -> None:
+        marcas = [(hist.instante(f.t_ms), f"{f.tipo} eje {f.eje or '-'}",
+                   COLOR_TIPO_FALLO.get(f.tipo, ROJO_STOP))
+                  for f in hist.lista_fallos()]
+
+        self.html_cronologia.content = _svg_cronologia(
+            hist.cronologia(), marcas, time.time())
+
+    def _rend_pintar_fallos(self, hist, r) -> None:
+        fallos = list(reversed(hist.lista_fallos()))
+
+        self.etiqueta_registro.text = (
+            f"{len(fallos)} guardado{'s' if len(fallos) != 1 else ''}"
+            + (f" de {r.fallos_total} en total" if r.fallos_total > len(fallos) else ""))
+
+        if not fallos:
+            self.html_registro.content = (
+                f'<div style="color:{APAGADO};font-size:12px;padding:8px 2px">'
+                'Ningun fallo registrado. Si el robot venia andando antes de '
+                'abrir la interfaz, "Pedir historial" trae los ultimos 16 que '
+                'el firmware tenga guardados.</div>')
+            return
+
+        filas = []
+
+        for f in fallos:
+            color = COLOR_TIPO_FALLO.get(f.tipo, TEXTO)
+            etapa = f.estado_nombre or (f.estado.name if f.estado is not None else "?")
+
+            if f.brazo_frenado is True:
+                diagnostico = f'<span style="color:{COLOR_ESTADO[ROJO]}">brazo frenado</span>'
+            elif f.brazo_frenado is False:
+                diagnostico = f'<span style="color:{COLOR_ESTADO[AMBAR]}">el eje giro igual</span>'
+            else:
+                diagnostico = f'<span style="color:{APAGADO}">—</span>'
+
+            if f.con_pieza:
+                pieza = (f'{pr.COLORES.get(f.color, f.color or "?")} '
+                         f'{pr.FORMAS.get(f.forma, f.forma or "?")}'.lower())
+                pieza += " (en la mano)" if f.en_mano else ""
+            else:
+                pieza = "sin pieza"
+
+            filas.append(
+                f'<tr style="border-top:1px solid {BORDE}">'
+                f'<td style="padding:5px 8px;color:{APAGADO};white-space:nowrap">'
+                f'{_hora(hist.instante(f.t_ms))}</td>'
+                f'<td style="padding:5px 8px;color:{color};font-weight:600">{f.tipo}</td>'
+                f'<td style="padding:5px 8px;color:{TEXTO}">{f.eje or "—"}</td>'
+                f'<td style="padding:5px 8px;color:{TEXTO}">{etapa}</td>'
+                f'<td style="padding:5px 8px;color:{TEXTO};text-align:right">'
+                f'{"—" if f.error_deg is None else f"{f.error_deg:+.1f}°"}</td>'
+                f'<td style="padding:5px 8px;color:{APAGADO};text-align:right;'
+                f'white-space:nowrap">'
+                f'{"—" if f.cmd_delta is None else f"{f.cmd_delta:.0f}°"} → '
+                f'{"—" if f.enc_delta is None else f"{f.enc_delta:.0f}°"}</td>'
+                f'<td style="padding:5px 8px">{diagnostico}</td>'
+                f'<td style="padding:5px 8px;color:{APAGADO}">{pieza}</td>'
+                f'</tr>')
+
+        encabezados = ("hora", "tipo", "eje", "etapa del ciclo", "error",
+                       "ordenado → girado", "diagnostico", "pieza")
+
+        self.html_registro.content = (
+            '<table style="width:100%;border-collapse:collapse;font-size:12px">'
+            '<thead><tr>'
+            + "".join(f'<th style="padding:2px 8px;text-align:left;color:{APAGADO};'
+                      f'font-weight:500;font-size:11px;text-transform:uppercase;'
+                      f'letter-spacing:.05em">{h}</th>' for h in encabezados)
+            + "</tr></thead><tbody>" + "".join(filas) + "</tbody></table>")
+
+    def _rend_pintar_eventos(self, hist) -> None:
+        eventos = list(reversed(hist.lista_eventos()))
+        self.etiqueta_eventos.text = f"{len(eventos)} eventos"
+
+        if not eventos:
+            self.html_eventos.content = (
+                f'<div style="color:{APAGADO};font-size:12px">'
+                'Sin novedades. Aca van a ir apareciendo los fallos, las '
+                'paradas, los reinicios del firmware y las piezas que se '
+                'pasen sin agarrar.</div>')
+            return
+
+        filas = []
+
+        for e in eventos[:120]:
+            detalle = (f'<div style="color:{APAGADO};font-size:11px;'
+                       f'line-height:1.35">{e.detalle}</div>' if e.detalle else "")
+
+            filas.append(
+                f'<div style="display:flex;gap:7px;padding:6px 0;'
+                f'border-bottom:1px solid {BORDE}">'
+                f'<div style="flex:0 0 auto;padding-top:3px">{_punto(e.severidad)}</div>'
+                f'<div style="flex:1 1 0;min-width:0">'
+                f'<div style="color:{TEXTO};font-size:12.5px;line-height:1.35">'
+                f'{e.titulo}</div>{detalle}</div>'
+                f'<div style="flex:0 0 auto;color:{APAGADO};font-size:11px;'
+                f'padding-top:2px">{_hora(e.t)}</div></div>')
+
+        self.html_eventos.content = "".join(filas)
+
+    # ------------------------------------------------------------------
+    #  Los siete graficos
+    # ------------------------------------------------------------------
+    def _rend_pintar_graficos(self, hist, r) -> None:
+        _pintar(self.g_reparto, _grafico_reparto(r))
+        _pintar(self.g_tipos, _grafico_tipos(r))
+        _pintar(self.g_etapas, _grafico_etapas(r))
+        acumulada = hist.serie_acumulada()
+
+        _pintar(self.g_produccion, _grafico_produccion(acumulada))
+        _pintar(self.g_ritmo, _grafico_ritmo(hist.ritmo_serie(), acumulada))
+        _pintar(self.g_maniobras, _grafico_maniobras(hist.lista_maniobras(), r))
+        _pintar(self.g_trabas, _grafico_trabas(hist.lista_fallos()))
+        _pintar(self.g_fps, _grafico_fps(hist.fps_serie(), r))
+
+        if not r.camara_presente:
+            self.etiqueta_camara.text = "sin camara"
+        else:
+            peor = "—" if r.fps_peor is None else f"{r.fps_peor:.0f}"
+            self.etiqueta_camara.text = (
+                f"promedio 5 min: {'—' if r.fps_5min is None else f'{r.fps_5min:.1f}'}"
+                f" · peor segundo: {peor}"
+                f" · {r.fotogramas} fotogramas"
+                + (f" · {r.camara_caidas} corte"
+                   f"{'s' if r.camara_caidas > 1 else ''}" if r.camara_caidas else ""))
 
 
 def montar(estado: EstadoSistema, enviar, vision=None) -> Interfaz:

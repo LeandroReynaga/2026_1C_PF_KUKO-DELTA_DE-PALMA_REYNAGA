@@ -128,7 +128,18 @@ comandos `U`/`T` por Serial.
 **Registro de fallos** (`src/robot/FaultLog.h/.cpp`) guarda los últimos 16
 fallos (colisión, encoder caído, homing vencido, parada manual) con el
 contexto de la pieza involucrada, y los imprime en formato clave=valor
-pensado para que la interfaz de Python los parsee. Se vuelca con `D`.
+pensado para que la interfaz de Python los parsee. Se vuelca con `D`, que
+además imprime `[FALLOS]` con los contadores **por tipo**: esos no se pierden
+aunque el buffer de 16 dé la vuelta, y son el único histórico completo que
+hay. El campo `estado` de cada `[FALLO]` viaja como **nombre**, no como
+índice (`PROTOCOLO.md` decía lo contrario y el parser de Python estaba
+escrito contra el documento, así que la columna venía vacía; hoy se aceptan
+las dos formas).
+
+`dcmd` y `denc` —grados ordenados contra grados girados— son el par que
+separa *el brazo se trabó* de *el encoder midió mal*, que es la pregunta que
+decide qué se va a arreglar. Está expuesto como `Fallo.brazo_frenado` en
+`protocolo.py` y es de lo que vive media pestaña de Rendimiento.
 
 **Telemetría** (`src/robot/Telemetry.h/.cpp`) son las tres líneas periódicas
 que consume la interfaz: `[T]` a 10 Hz (ángulos medidos y comandados, error
@@ -290,12 +301,27 @@ actualmente pero están vacíos.
   registrados como parámetros de nivel servicio) se ajustan a mano contra el
   robot físico — se espera que sigan cambiando a medida que se calibra el
   hardware.
+- **La cámara se supervisa por el reloj**, no preguntándole a OpenCV: una
+  USB desconectada no da error, `read()` devuelve `False` para siempre y
+  `isOpened()` sigue diciendo que sí. El único dato válido es cuánto hace
+  que no llega un fotograma (`EstadoSistema.camara_viva()`, ver
+  `PROTOCOLO.md` §5.1). El hilo de `vision.py` son dos bucles anidados como
+  los del enlace serie —uno abre el dispositivo, el otro procesa
+  fotogramas—, porque el `VideoCapture` de un USB desenchufado queda muerto
+  y sin **reabrirlo** volver a enchufar la cámara no arregla nada. Dos
+  detalles que ya se rompieron una vez y están comentados en el código:
+  abrir el dispositivo **no** cuenta como tener imagen (marcarlo así hacía
+  parpadear el punto en cada reintento), y una reconexión se cuenta cuando
+  vuelve un fotograma, **no** al abrir —contra una cámara ausente el
+  `VideoCapture` se construye igual—. Todo esto se prueba sin cámara, con
+  una falsa que se "desenchufa" desde la prueba (`pc/tests/test_camara.py`).
 - La aplicación de PC vive en `pc/`: `pc/kuko/protocolo.py` es la mitad en
   Python del contrato serie (con pruebas en `pc/tests/`), `enlace.py` es el
   dueño del puerto, `vision.py` el de la cámara y `ui.py` la interfaz
   NiceGUI (`pc/kuko_app.py` levanta las tres). `cinematica.py` es la
-  cinemática directa e inversa del lado de Python, y `teach.py` la
-  biblioteca de secuencias grabadas.
+  cinemática directa e inversa del lado de Python, `teach.py` la
+  biblioteca de secuencias grabadas y `rendimiento.py` la historia de la
+  corrida (ver abajo).
 - Las pruebas se corren con `pc\.venv\Scripts\python -m pytest pc/tests`, o
   archivo por archivo (`python pc/tests/test_teach.py`). **Todas las que
   arman una página comparten un solo servidor** (`pc/tests/pagina.py`):
@@ -306,6 +332,50 @@ actualmente pero están vacíos.
   parámetros contra sus fichas, el enum de estados contra `protocolo.py`, y
   las constantes de `DeltaKinematics.h` contra `cinematica.py`. Es la única
   defensa contra tocar un solo lado de algo que está escrito dos veces.
+- **Pestaña de Rendimiento** (`pc/kuko/rendimiento.py` y los métodos
+  `_rend_*` de `ui.py`). El firmware lleva contadores pero **no lleva
+  historia**: no sabe cuándo pasó cada cosa ni cuánto tiempo estuvo en cada
+  estado, y no debería —lo que gaste en recordar el pasado se lo saca a la
+  generación de pasos—. La PC ya está leyendo todas las líneas igual, así
+  que la memoria vive ahí. `Rendimiento` la alimenta el enlace y la dibuja
+  la interfaz; no toca ni el puerto ni la pantalla, así que se prueba sin
+  robot mintiéndole el reloj (`pc/tests/test_rendimiento.py`).
+
+  Cuatro decisiones que conviene entender antes de tocarlo:
+
+  - **Cada estado cae en un cajón**: trabajando, esperando pieza, parado por
+    falla, arranque, teach o sin enlace. **La disponibilidad se mide contra
+    el tiempo en que el robot estaba PARA trabajar**: el homing inicial, el
+    modo teach y el rato apagado no van ni al numerador ni al denominador.
+    Esperar pieza **no** es estar caído — si contara, dejar la cinta vacía
+    cinco minutos daría 0 % con el robot perfecto. Una prueba verifica que
+    ningún estado del enum quede sin cajón.
+  - **El homing es el mismo estado antes y después de un choque, y no
+    significa lo mismo**: se distinguen por lo que venía antes, que es lo
+    único que los diferencia.
+  - **El reloj es el del ESP32.** Los fallos que vuelca `D` ocurrieron hace
+    minutos, así que se fechan traduciendo su `millis()` con un ancla
+    (`millis()` ↔ hora de la PC del último mensaje). Fecharlos con la hora
+    de llegada los amontonaría todos en el instante de conectarse.
+  - **Un hueco entre dos muestras no es tiempo del robot.** Un salto mayor a
+    `HUECO_MAX_S` se contabiliza como "sin enlace" y queda fuera de la
+    disponibilidad: no se afirma nada sobre lo que no se vio.
+  - **La cámara encabeza el veredicto.** Sin ella el firmware no recibe una
+    sola pieza y el robot se queda en `WAIT_PIECE`: 100 % de disponibilidad,
+    cero fallos y cero producción. Ningún otro número de la pantalla la
+    delata. El promedio de FPS se calcula restando el **contador** de
+    fotogramas sobre el tiempo transcurrido, no promediando tasas: así un
+    rato sin cámara baja el promedio solo, mientras que promediando tasas
+    ese rato no existiría —no hay muestras que promediar— y el número diría
+    que todo anduvo perfecto.
+
+  La cronología se dibuja como SVG a mano y no como un gráfico: lo que hay
+  que ver de un vistazo es *dónde* están los tramos rojos, y tres paradas
+  cortas repartidas en una hora dan la misma torta que una sola de quince
+  minutos. Los otros siete gráficos son ECharts, que NiceGUI trae adentro
+  (no sale a buscar nada a internet: la PC de la celda puede no tener red).
+  Es la única pestaña con scroll, y sólo se redibuja con la pestaña a la
+  vista.
 - Las pestañas de proceso y servicio son una lista de ajustes estilo menú de
   opciones, armada **recorriendo lo que contesta `P?`** — no hay ninguna
   lista de parámetros del lado de Python. `pc/kuko/parametros.py` sólo

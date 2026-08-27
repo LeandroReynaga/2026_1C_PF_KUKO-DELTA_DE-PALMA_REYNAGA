@@ -263,6 +263,69 @@ def test_pieza_y_fallo():
     assert f.pieza_x == -1.30
 
 
+def test_el_estado_de_un_fallo_viene_por_nombre():
+    """Es la forma que emite el firmware de verdad.
+
+    `FaultLog` guarda el literal que devuelve `Robot::nombreEstado()` y lo
+    imprime tal cual, pero el parser leia un indice -- el ejemplo del
+    documento decia `estado=6` -- y el campo valia None en todos los fallos
+    reales. Se aceptan las dos formas, y esta prueba cubre justamente la que
+    no estaba cubierta.
+    """
+
+    f = pr.parsear(
+        "[FALLO] n=7 t=900000 tipo=COLISION eje=3 err=-12.40 dcmd=18.30 "
+        "denc=5.90 estado=GO_BIN pieza=1 enmano=1 color=R forma=S "
+        "py=3.50 px=-4.20 tacho=1"
+    )
+
+    assert f.estado is pr.EstadoRobot.GO_BIN
+    assert f.estado_nombre == "GO_BIN"
+
+    # Un estado que este modulo todavia no conoce no rompe nada: el nombre
+    # crudo sigue diciendo donde fallo.
+    g = pr.parsear("[FALLO] n=8 t=1 tipo=COLISION eje=1 estado=INVENTADO")
+
+    assert g.estado is None and g.estado_nombre == "INVENTADO"
+
+
+def test_una_colision_dice_si_el_brazo_se_freno():
+    """`dcmd` contra `denc` es lo que separa la mecanica del sensor."""
+
+    def fallo(dcmd: float, denc: float) -> pr.Fallo:
+        return pr.parsear(f"[FALLO] n=1 t=1 tipo=COLISION eje=2 err=13.2 "
+                          f"dcmd={dcmd} denc={denc} estado=GO_BIN")
+
+    assert fallo(44.1, 1.9).brazo_frenado is True     # tenia orden y no giro
+    assert fallo(44.1, 42.0).brazo_frenado is False   # giro lo que se le pidio
+    assert fallo(0.4, 0.1).brazo_frenado is None      # giro muy chico: no dice nada
+
+    # Los otros tipos de fallo no traen un movimiento contra el cual comparar.
+    assert pr.parsear("[FALLO] n=1 t=1 tipo=HOMING eje=0").brazo_frenado is None
+
+
+def test_el_resumen_de_fallos():
+    """[FALLOS]: el encabezado del volcado de 'D' y su linea de cierre.
+
+    El firmware ya lo imprimia; hasta ahora se iba a la consola como texto y
+    con el se perdian los totales POR TIPO, que son los unicos que sobreviven
+    a que el registro de 16 de la vuelta.
+    """
+
+    r = pr.parsear("[FALLOS] total=41 COLISION=38 ENCODER=2 HOMING=0 "
+                   "MANUAL=1 DESCALIBRACION=0 guardados=16")
+
+    assert isinstance(r, pr.ResumenFallos)
+    assert r.total == 41 and r.guardados == 16 and not r.fin
+    assert r.por_tipo == {"COLISION": 38, "ENCODER": 2, "HOMING": 0,
+                          "MANUAL": 1, "DESCALIBRACION": 0}
+
+    cierre = pr.parsear("[FALLOS] fin")
+
+    assert isinstance(cierre, pr.ResumenFallos) and cierre.fin
+    assert cierre.total is None                        # ausente no es cero
+
+
 def test_lineas_que_no_son_de_maquina():
     """Prosa, avisos y basura de un reset: todo sale como Texto, sin romper."""
 

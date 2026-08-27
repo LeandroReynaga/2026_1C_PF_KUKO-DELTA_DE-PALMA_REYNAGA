@@ -63,10 +63,10 @@ static const float BELT_MAX_Y = 12.05f;
 //   pieza ADELANTADA (a la derecha de la ventosa) -> falta, subirlo
 //   pieza ATRASADA   (a la izquierda)             -> sobra, bajarlo
 //
-// Valor actual: 0,2695 s, ajustado contra el robot hasta que el gripper
-// dejo de errarle en X (antes 0,199 calculado, un rato en 0 y despues
-// 0,2554). Con la cinta a 7,25 cm/s compensa 1,95 cm de avance.
-static float VISION_LATENCY_S = 0.2695f;
+// Valor actual: 0,580 s, ajustado contra el robot hasta que el gripper
+// dejo de errarle en X (antes 0,199 calculado, un rato en 0, despues
+// 0,2554 y 0,2695). Con la cinta a 7,25 cm/s compensa 4,21 cm de avance.
+static float VISION_LATENCY_S = 0.580f;
 
 // ============================================================
 //  GEOMETRIA DE AGARRE (coordenadas de la PUNTA del gripper)
@@ -2884,7 +2884,7 @@ void Robot::registrarParametros()
     // avanza la pieza entre que cruza la linea y que llega el mensaje.
     // Admite negativos a proposito (ver PROTOCOLO.md): si alguna vez la
     // correccion tuviera que ir para el otro lado, el rango ya lo permite.
-    params.registrar("vis_lat", &VISION_LATENCY_S, -0.20f, 0.50f, "s", NIVEL_OPERACION);
+    params.registrar("vis_lat", &VISION_LATENCY_S, -0.20f, 1.00f, "s", NIVEL_OPERACION);
 
     // --- Nivel 2: proceso (afinado del agarre y de la supervision) ---
     params.registrar("press_dz", &PRESS_DZ,    0.0f,   0.30f, "cm", NIVEL_PROCESO);

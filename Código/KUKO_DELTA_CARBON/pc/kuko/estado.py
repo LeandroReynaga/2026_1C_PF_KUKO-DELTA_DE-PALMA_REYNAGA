@@ -1,9 +1,14 @@
-"""Estado agregado del sistema y los cinco chequeos de componentes.
+"""Estado agregado del sistema y los seis chequeos de componentes.
 
 Junta lo ultimo que dijo cada linea de telemetria y decide, con eso, de que
-color va cada puntito de la pantalla. Ver pc/PROTOCOLO.md §5: cuatro de los
-cinco chequeos son mediciones reales; el de neumatica es de estado, porque
+color va cada puntito de la pantalla. Ver pc/PROTOCOLO.md §5: cinco de los
+seis chequeos son mediciones reales; el de neumatica es de estado, porque
 sin vacuostato el firmware sabe si MANDO prender la bomba, no si hay vacio.
+
+El de la camara es el unico que NO depende del enlace serie: la camara
+cuelga del USB de la PC y el robot del suyo, asi que se pueden caer por
+separado y hay que poder verlo. Los otros cinco se apagan a gris sin enlace
+porque sin telemetria no hay con que decidirlos.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from . import protocolo as pr
+from .rendimiento import Rendimiento
 
 VERDE = "ok"
 AMBAR = "aviso"
@@ -23,6 +29,13 @@ GRIS = "sin_datos"
 # mas importante de todos: sin el, la pantalla sigue mostrando el ultimo
 # dato como si fuera actual.
 ENLACE_TIMEOUT_S = 1.5
+
+# Lo mismo para la camara, y por el mismo motivo, que ahi es todavia peor:
+# una camara USB desenchufada no da error, simplemente deja de entregar
+# fotogramas. Sin este vencimiento la pantalla muestra la ultima imagen
+# congelada y unos FPS clavados en el ultimo valor bueno, y no hay nada
+# en pantalla que diga que se dejo de ver la cinta.
+CAMARA_TIMEOUT_S = 2.0
 
 
 @dataclass
@@ -47,7 +60,13 @@ class EstadoSistema:
     ultimo_t: float = 0.0
     parametros: dict[str, pr.Parametro] = field(default_factory=dict)
     consola: list[str] = field(default_factory=list)
-    fallos: list[pr.Fallo] = field(default_factory=list)
+
+    # Historia de la corrida: cuanto tiempo estuvo el robot en cada
+    # situacion, cuando paso cada fallo y a que ritmo produjo. Vive aca y no
+    # en el firmware porque el ESP32 no tiene RAM para guardar historia y no
+    # la necesita para moverse; la PC ya esta leyendo todas las lineas igual.
+    # Lo alimenta el enlace y lo dibuja la pestana de Rendimiento.
+    rendimiento: Rendimiento = field(default_factory=Rendimiento)
 
     # ------------------------------------------------------------------
     #  Modo teach
@@ -73,7 +92,34 @@ class EstadoSistema:
     # Lo mide la vision siguiendo las piezas sobre la cinta (cm/s), o None
     # si no hay ninguna a la vista para medir.
     cinta_medida: Optional[float] = None
+
+    # ------------------------------------------------------------------
+    #  Camara
+    # ------------------------------------------------------------------
+    # Los escribe el hilo de vision. `fps_camara` es instantaneo (1/dt del
+    # ultimo fotograma) y sirve para el chip de arriba; el promedio de los
+    # ultimos cinco minutos sale del historial, que va guardando el CONTADOR
+    # de fotogramas.
     fps_camara: float = 0.0
+
+    #: Hay una camara prevista, o sea que se arranco sin --sin-vision. Con
+    #: la vision apagada no corresponde ni punto rojo ni alarma: no falta
+    #: nada, se pidio que no estuviera.
+    camara_presente: bool = False
+
+    camara_abierta: bool = False
+    camara_backend: str = ""
+    camara_error: str = ""
+
+    #: `time.monotonic()` del ultimo fotograma bueno. Es lo que hace que una
+    #: camara desenchufada se note: el reloj sigue corriendo y ella no.
+    ultimo_fotograma: float = 0.0
+
+    #: Fotogramas leidos desde que arranco el programa, y cuantas veces hubo
+    #: que volver a abrir la camara. Varias reaperturas en un turno son un
+    #: cable flojo, que no se ve en ningun otro lado.
+    fotogramas: int = 0
+    reconexiones_camara: int = 0
 
     # Suavizado de los angulos de encoder para las agujas de los diales: el
     # AS5600 analogico tiene ~1 grado de ruido y a 10 Hz la aguja tiembla.
@@ -82,6 +128,17 @@ class EstadoSistema:
 
     def enlace_vivo(self) -> bool:
         return self.conectado and (time.monotonic() - self.ultimo_t) < ENLACE_TIMEOUT_S
+
+    def camara_viva(self) -> bool:
+        """Hay una camara abierta Y esta entregando fotogramas ahora.
+
+        Las dos condiciones, no una: `VideoCapture` sigue diciendo que esta
+        abierto despues de que se desenchufa el USB, asi que preguntarle a
+        el es preguntarle al que no se entero.
+        """
+
+        return (self.camara_abierta
+                and (time.monotonic() - self.ultimo_fotograma) < CAMARA_TIMEOUT_S)
 
     def suavizar(self, alfa: float = 0.35) -> None:
         if not self.t:
@@ -95,20 +152,64 @@ class EstadoSistema:
             self.angulo_suave[i] = valor if previo is None else previo + alfa * (valor - previo)
 
     # ------------------------------------------------------------------
-    #  Los cinco chequeos
+    #  Los seis chequeos
     # ------------------------------------------------------------------
     def chequeos(self) -> dict[str, Chequeo]:
+        # La camara va FUERA del corte por enlace: cuelga del USB de la PC,
+        # no del ESP32, y las dos cosas se caen por separado. Meterla adentro
+        # la apagaria a gris cada vez que se desenchufa el robot, que es
+        # justo cuando uno mira la pantalla para entender que falta.
         if not self.enlace_vivo():
-            return {n: Chequeo(GRIS, "sin enlace")
-                    for n in ("cinta", "encoders", "endstops", "motores", "neumatica")}
+            chequeos = {n: Chequeo(GRIS, "sin enlace")
+                        for n in ("cinta", "encoders", "endstops", "motores",
+                                  "neumatica")}
+        else:
+            chequeos = {
+                "cinta": self._cinta(),
+                "encoders": self._encoders(),
+                "endstops": self._endstops(),
+                "motores": self._motores(),
+                "neumatica": self._neumatica(),
+            }
 
-        return {
-            "cinta": self._cinta(),
-            "encoders": self._encoders(),
-            "endstops": self._endstops(),
-            "motores": self._motores(),
-            "neumatica": self._neumatica(),
-        }
+        chequeos["camara"] = self._camara()
+
+        return chequeos
+
+    def _camara(self) -> Chequeo:
+        """Esta entregando imagen, o dejo de hacerlo.
+
+        Importa mas de lo que parece: sin camara el firmware no recibe una
+        sola pieza y el robot se queda esperando en WAIT_PIECE, o sea
+        perfectamente sano y perfectamente inutil. Es la falla que mejor
+        se disfraza de "hoy no vinieron piezas".
+        """
+
+        if not self.camara_presente:
+            return Chequeo(GRIS, "apagada (--sin-vision)")
+
+        if self.camara_viva():
+            detalle = f"{self.fps_camara:.0f} fps"
+
+            if self.reconexiones_camara:
+                # Anda, pero se reengancho: casi siempre es el cable.
+                veces = "vez" if self.reconexiones_camara == 1 else "veces"
+
+                return Chequeo(
+                    AMBAR,
+                    f"{detalle}, se reconecto {self.reconexiones_camara} {veces}")
+
+            return Chequeo(VERDE, detalle)
+
+        if self.camara_error:
+            return Chequeo(ROJO, f"no abre: {self.camara_error[:44]}")
+
+        if not self.ultimo_fotograma:
+            return Chequeo(GRIS, "abriendo")
+
+        sin_imagen = time.monotonic() - self.ultimo_fotograma
+
+        return Chequeo(ROJO, f"sin imagen hace {sin_imagen:.0f} s")
 
     def _encoders(self) -> Chequeo:
         if not self.h:

@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from kuko import parametros as par
 from kuko import protocolo as pr
+from kuko import rendimiento as rd
 from kuko.estado import EstadoSistema
 
 RAIZ = Path(__file__).resolve().parents[2]
@@ -90,7 +91,111 @@ def _estado_completo() -> EstadoSistema:
     estado.cinta_medida = 7.05
     estado.consola.append("12:00:00  [GUARD] pico 2.1 / 9.5 / 22.0")
 
+    _corrida_de_prueba(estado)
+
     return estado
+
+
+def _corrida_de_prueba(estado: EstadoSistema) -> None:
+    """Le mete al historial una corrida corta con todo lo que sabe dibujar.
+
+    Sin esto, la pestaña de Rendimiento se renderizaría con todos los
+    gráficos en su rama de "sin datos" y las siete funciones que arman las
+    opciones de verdad no las tocaría nadie hasta tener el robot delante.
+
+    El reloj del módulo se reemplaza mientras dura el armado: cuatro minutos
+    de corrida no se pueden simular esperándolos.
+    """
+
+    hist = estado.rendimiento
+    real = rd.time.time
+    ahora = real()
+    rd.time.time = lambda: ahora                    # type: ignore[assignment]
+
+    t_ms = 5000
+    contadores = dict(detectadas=0, depositadas=0, descartadas=0, fallos=0)
+
+    fotogramas = 0
+    camara_ok = True
+    ultimo_aviso = 0.0
+
+    # El robot y la cámara informan A LA VEZ, cada uno por su lado, así que
+    # el mismo avance de reloj tiene que mover a los dos. Alimentarlos por
+    # separado —primero el robot, después la cámara— dejaba a la cámara
+    # mandando todas sus muestras en el mismo instante, y una serie de FPS
+    # con todos los puntos en el mismo segundo no es una serie: la duración
+    # entre muestras da cero y no hay de dónde sacar unos fotogramas por
+    # segundo.
+    def estar(st, segundos, paso=0.25):
+        nonlocal ahora, t_ms, fotogramas, ultimo_aviso
+
+        for _ in range(max(1, int(segundos / paso))):
+            ahora += paso
+            t_ms += int(paso * 1000)
+            hist.observar_telemetria(pr.Telemetria(crudo="", t_ms=t_ms, estado=st))
+
+            if camara_ok:
+                fotogramas += int(30 * paso)         # una USB corriente
+
+            # Mismo ritmo que `Vision.PERIODO_AVISO_S`.
+            if ahora - ultimo_aviso >= 0.5:
+                ultimo_aviso = ahora
+                hist.observar_camara(
+                    viva=camara_ok, fotogramas=fotogramas,
+                    detalle="" if camara_ok else "sin imagen")
+
+    def proceso(st, **cambios):
+        contadores.update(cambios)
+        hist.observar_proceso(pr.Proceso(crudo="", t_ms=t_ms, estado=st, **contadores))
+
+    try:
+        estar(pr.EstadoRobot.IDLE, 3)
+        estar(pr.EstadoRobot.HOMING, 8)
+
+        for i in range(24):
+            estar(pr.EstadoRobot.WAIT_PIECE, 3)
+
+            # A mitad de la corrida el brazo choca EN PLENA MANIOBRA: parada,
+            # rehoming, y dos piezas que se pasan sin agarrar mientras tanto.
+            # Tiene que ser en el medio de la maniobra y no entre dos, porque
+            # es lo que hace que la maniobra quede marcada como cortada.
+            if i == 11:
+                estar(pr.EstadoRobot.PICK_APPROACH, 0.75)
+                estar(pr.EstadoRobot.PICK_DESCEND, 0.75)
+                hist.observar_fallo(pr.parsear(
+                    f"[FALLO] n=1 t={t_ms} tipo=COLISION eje=2 err=13.20 "
+                    "dcmd=44.10 denc=1.90 estado=PICK_DESCEND pieza=1 enmano=0 "
+                    "color=B forma=C py=4.20 px=-1.30 tacho=3"))
+                estar(pr.EstadoRobot.COLLISION_STOP, 4)
+                estar(pr.EstadoRobot.HOMING, 9)
+                proceso(pr.EstadoRobot.WAIT_PIECE, descartadas=2, fallos=1)
+                continue
+
+            for st in (pr.EstadoRobot.PICK_APPROACH, pr.EstadoRobot.PICK_DESCEND,
+                       pr.EstadoRobot.PICK_LIFT, pr.EstadoRobot.GO_BIN,
+                       pr.EstadoRobot.RELEASE_WAIT):
+                estar(st, 0.75)
+
+            proceso(pr.EstadoRobot.WAIT_PIECE, detectadas=i + 1, depositadas=i + 1)
+
+            # A los tres cuartos de la corrida se desenchufa la camara un
+            # rato: es lo que hace que la tarjeta y el grafico de FPS se
+            # dibujen con un corte de verdad y no con la nube plana, que es
+            # el caso facil.
+            if i == 17:
+                camara_ok = False
+
+            if i == 20:
+                camara_ok = True
+
+        hist.observar_resumen(pr.parsear(
+            "[FALLOS] total=3 COLISION=2 ENCODER=1 HOMING=0 MANUAL=0 "
+            "DESCALIBRACION=0 guardados=3"))
+        hist.observar_fallo(pr.parsear(
+            f"[FALLO] n=2 t={t_ms} tipo=ENCODER eje=3 err=2.10 dcmd=38.00 "
+            "denc=37.10 estado=WAIT_PIECE pieza=0 enmano=0"))
+    finally:
+        rd.time.time = real                         # type: ignore[assignment]
 
 
 def test_la_tabla_del_firmware_se_pudo_leer():
@@ -158,6 +263,13 @@ def test_la_pagina_entera_se_renderiza():
         interfaz._refrescar_lento()
         interfaz._refrescar_lento()
 
+        # La de rendimiento solo se dibuja con la pestana a la vista, asi
+        # que hay que decirle que lo esta: es el mismo camino que corre el
+        # temporizador, gate incluido.
+        interfaz.tab_activa = "Rendimiento"
+        interfaz._refrescar_rendimiento()
+        interfaz._refrescar_rendimiento()
+
     respuesta = pagina.pedir(cuerpo)
 
     assert respuesta.status_code == 200
@@ -165,8 +277,36 @@ def test_la_pagina_entera_se_renderiza():
     for texto in ("Presion sobre la pieza", "Supervision de colisiones",
                   "Corrimiento de la caja", "Consola del robot",
                   "medida por la vision", "Guardar en la placa",
-                  "Modo Teach", "Jog manual", "Volumen de trabajo"):
+                  "Modo Teach", "Jog manual", "Volumen de trabajo",
+                  "Disponibilidad", "Piezas sin agarrar", "Que hizo el robot",
+                  "Registro de fallos", "Cronologia de eventos",
+                  "Se trabo, o mide mal el encoder",
+                  "Camara", "Fotogramas por segundo",
+                  "fps, promedio de 5 min"):
         assert texto in respuesta.text, f"no se renderizo {texto!r}"
+
+    # El registro de fallos dibuja la fila con su diagnostico, no solo el
+    # marco de la tabla.
+    assert "brazo frenado" in respuesta.text
+    assert "COLISION" in respuesta.text
+
+    # Y los graficos salieron con datos, no en su rama de "sin datos": una
+    # maniobra cortada por el choque y un punto en la nube de trabas.
+    cortadas = interfaz.g_maniobras.options["series"][1]["data"]
+    trabados = interfaz.g_trabas.options["series"][3]["data"]
+
+    assert cortadas, "la maniobra que corto la colision no se dibujo"
+    assert trabados, "la colision con el brazo frenado no se dibujo"
+
+    # La camara: la curva de FPS con el corte adentro, no la nube plana.
+    fps = interfaz.g_fps.options["series"][0]["data"]
+
+    assert len(fps) > 20, "la curva de FPS no se dibujo"
+    assert any(v < 1.0 for _, v in fps), "el corte de camara no quedo dibujado"
+    assert any(v > 20.0 for _, v in fps), "no se dibujo la camara andando"
+
+    # El chip de arriba y el panel de componentes tienen su fila de camara.
+    assert "camara" in estado.chequeos()
 
     # Una fila de control por parámetro de proceso y de servicio (los de
     # operación viven en la otra pestaña).
@@ -184,6 +324,56 @@ def test_la_pagina_entera_se_renderiza():
     assert interfaz.slider_latencia is not None, "el slider no se creo"
     assert interfaz.slider_latencia._props["min"] == vis_lat.minimo
     assert interfaz.slider_latencia._props["max"] == vis_lat.maximo
+
+
+def test_el_rendimiento_sin_datos_no_rompe():
+    """La pestana tiene que dibujarse igual con el robot apagado.
+
+    Es el estado en que arranca siempre: la interfaz se abre antes de que el
+    ESP32 diga nada, y los siete graficos tienen que caer en su rama de "sin
+    datos" en vez de reventar contra una lista vacia.
+    """
+
+    import pagina
+
+    from kuko import ui as interfaz_ui
+
+    interfaz = interfaz_ui.Interfaz(EstadoSistema(), lambda linea: False, None)
+
+    def cuerpo():
+        interfaz.construir()
+        interfaz.tab_activa = "Rendimiento"
+        interfaz._refrescar_rendimiento()
+
+    respuesta = pagina.pedir(cuerpo)
+
+    assert respuesta.status_code == 200
+    assert "Ningun fallo registrado" in respuesta.text
+    assert "Todavia no llego telemetria" in respuesta.text
+
+
+def test_el_rendimiento_no_se_dibuja_en_otra_pestana():
+    """Siete graficos por websocket cada segundo sin que nadie los mire, no.
+
+    Se verifica sobre el efecto observable: con la pestana en otra cosa, el
+    refresco no toca el contenido de ningun panel.
+    """
+
+    import pagina
+
+    from kuko import ui as interfaz_ui
+
+    interfaz = interfaz_ui.Interfaz(_estado_completo(), lambda linea: True, None)
+
+    def cuerpo():
+        interfaz.construir()
+        interfaz.tab_activa = "Operacion"
+        interfaz._refrescar_rendimiento()
+
+        assert interfaz.html_cronologia.content == ""
+        assert interfaz.g_reparto.options == {"series": []}
+
+    assert pagina.pedir(cuerpo).status_code == 200
 
 
 if __name__ == "__main__":
