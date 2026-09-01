@@ -321,6 +321,22 @@ private:
     // partida sea conocida sin necesitar cinematica DIRECTA en el firmware.
     bool teachPedido = false;
 
+    // MODO CALIBRACION: alguien esta ajustando la vision con las piezas
+    // quietas sobre la cinta, o sea con las manos adentro del volumen de
+    // trabajo. Mientras dure, el robot NO sale a buscar ninguna pieza.
+    //
+    // Es un enclavamiento y no una comodidad. Antes bastaba con parar la
+    // cinta, y eso no alcanzaba: una pieza apoyada a mano cruza la linea de
+    // deteccion igual, la vision la informa, y el brazo sale a buscarla con
+    // alguien inclinado sobre la cinta. Paso, y por poco.
+    //
+    // La bandera no frena un movimiento en curso -- frenar el brazo a mitad
+    // de una maniobra con una pieza colgando de la ventosa es peor que
+    // dejarlo terminar --, corta el arranque del SIGUIENTE ciclo. Por eso
+    // el punto donde se pregunta es `iniciarSiguientePieza()`, que es el
+    // unico embudo por el que empieza una maniobra.
+    bool calibrando = false;
+
     // Posicion comandada de la punta (cm). Es la referencia del jog y la
     // deja escrita todo movimiento de teach.
     float teachX = 0.0f, teachY = 0.0f, teachZ = 0.0f;
@@ -540,6 +556,17 @@ private:
     // Comandos 'P...' y 'V...'. Devuelven true si consumieron el comando.
     bool procesarComandoParametro(const char *cmd);
     bool procesarComandoTelemetria(const char *cmd);
+
+    // Modo calibracion ('CAL1' / 'CAL0' / 'CAL?'): para la cinta Y deja al
+    // robot quieto, para poder ajustar la vision con las piezas apoyadas a
+    // mano. Misma convencion: true si consumio el comando.
+    bool procesarComandoCalibracion(const char *cmd);
+    void informarCalibracion();
+
+    // El brazo esta quieto en home y con las manos vacias, o sea que no se
+    // va a mover solo. Es lo que la interfaz espera ver antes de dejar
+    // meter las manos en la cinta.
+    bool enReposo() const;
 
     // Fija un parametro y contesta con la linea [P] set. Es el unico camino
     // por el que se cambia un parametro: los comandos historicos

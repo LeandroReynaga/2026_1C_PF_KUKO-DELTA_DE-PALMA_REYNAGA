@@ -20,6 +20,7 @@ from fastapi import Response
 from fastapi.responses import StreamingResponse
 from nicegui import app, ui
 
+from . import calibracion as cal
 from . import cinematica as cin
 from . import parametros as par
 from . import protocolo as pr
@@ -50,6 +51,19 @@ PASO_RECORTE = 4
 ZOOM = 1.1
 
 DIAL_MIN, DIAL_MAX = -70.0, 30.0
+
+# Lo que se espera la confirmacion del robot al pedirle que frene para
+# calibrar. Es corto a proposito, y por el mismo motivo que
+# ESPERA_IR_CONFIRMA_S del modo teach: un pedido que no se confirma no es un
+# robot lento, es una placa con firmware viejo que no conoce el comando -- y
+# ahi el cartel tiene que volver a rojo y decirlo, porque del otro lado hay
+# alguien a punto de meter la mano en la cinta.
+ESPERA_CAL_CONFIRMA_S = 1.5
+
+# Cada cuanto se redibuja la pestana de Vision. Es mas lento que el refresco
+# rapido a proposito: lo que dibuja son medianas de color, que la vision mide
+# dos veces por segundo, y no hay nada que ganar pidiendolas mas seguido.
+PERIODO_VISION_S = 0.5
 
 # Cada cuanto se redibuja la pestana de rendimiento. Un segundo alcanza --
 # nada de lo que muestra cambia mas rapido, y la serie se guarda justamente
@@ -462,6 +476,143 @@ def _svg_cronologia(tramos: list, marcas: list, ahora: float) -> str:
     return (f'<svg viewBox="0 0 {ANCHO_CRONO} {ALTO_CRONO}" '
             f'style="width:100%;height:auto;display:block">'
             f'{"".join(partes)}</svg>')
+
+
+def _muestra_color(color: str, lado: int) -> str:
+    """Un cuadradito de color, para comparar de un vistazo."""
+
+    return (f'<span style="display:inline-block;width:{lado}px;height:{lado}px;'
+            f'border-radius:4px;background:{color};'
+            f'border:1px solid rgba(255,255,255,.18);flex:0 0 auto"></span>')
+
+
+def _muestra_vacia(lado: int) -> str:
+    return (f'<span style="display:inline-block;width:{lado}px;height:{lado}px;'
+            f'border-radius:4px;border:1px dashed {BORDE};flex:0 0 auto"></span>')
+
+
+# En cuantas franjas se dibuja la rueda de tono. 60 alcanza para que el arco
+# se vea continuo (cada franja son 3 grados de Hue) sin llenar la pagina de
+# elementos.
+FRANJAS_TONO = 60
+
+
+def _tira_tono(rango) -> str:
+    """La rueda de tono con el arco del color encendido.
+
+    Es lo que hace evidente de un vistazo que el rojo es UN color y no dos:
+    su arco se enciende en las dos puntas de la tira porque da la vuelta, y
+    la tira se lee como lo que es -- una rueda cortada por el 0, no dos
+    colores distintos.
+    """
+
+    franjas = []
+
+    for indice in range(FRANJAS_TONO):
+        tono = int(indice * (cal.H_MAX + 1) / FRANJAS_TONO)
+        dentro = rango.contiene(tono, rango.s0, rango.v0)
+
+        # Adentro del arco, el color de verdad con la saturacion y el brillo
+        # del centro del rango; afuera, el mismo tono apagado, para que se
+        # siga entendiendo que la tira es una rueda y no una barra cualquiera.
+        color = (cal.hsv_a_hex(tono, (rango.s0 + rango.s1) // 2,
+                               (rango.v0 + rango.v1) // 2)
+                 if dentro else cal.hsv_a_hex(tono, 40, 70))
+
+        franjas.append(f'<span style="flex:1 1 0;background:{color}"></span>')
+
+    return ('<span style="display:flex;height:12px;width:100%;border-radius:3px;'
+            f'overflow:hidden;border:1px solid {BORDE}">'
+            + "".join(franjas) + "</span>")
+
+
+# Cuando un canal se considera "al filo" del rango. Son tres numeros y no uno
+# porque los tres canales no miden lo mismo: H va de 0 a 179 y separa un color
+# de otro (5 puntos ya es poco), mientras que V va de 0 a 255 y hoy no separa
+# nada -- es solo un piso contra la sombra --, asi que ahi 20 puntos de margen
+# tampoco preocupan demasiado.
+FILO = {"H": 5, "S": 15, "V": 20}
+
+
+def _veredicto_color(color: str, rango, muestra) -> tuple[str, str]:
+    """Por que se detecta, o por que no, esta pieza con este rango.
+
+    Es el renglon que contesta la pregunta con la que uno abre esta pestana
+    ("por que no me agarra el verde") sin obligar a leer seis numeros y
+    compararlos de a pares en la cabeza.
+    """
+
+    if muestra is None:
+        return GRIS, "No hay ninguna pieza de este color a la vista."
+
+    if muestra.detectado is not None and muestra.detectado != color:
+        otro = cal.NOMBRE_COLOR.get(muestra.detectado, muestra.detectado)
+
+        return ROJO, (f"Se detecta como {otro}: el rango de ese color tambien "
+                      f"la agarra. Hay que separar los dos.")
+
+    # El margen de cada canal: cuanto le falta al valor medido para caerse
+    # del rango. El del tono se mide sobre la RUEDA (`margen_h`) y no
+    # restando numeros, porque con un arco que da la vuelta --el rojo-- la
+    # resta cruda da cualquier cosa: 179 esta a 16 del final del arco, no a
+    # 164 del principio.
+    margenes = {
+        "H": rango.margen_h(muestra.h),
+        "S": min(muestra.s - rango.s0, rango.s1 - muestra.s),
+        "V": min(muestra.v - rango.v0, rango.v1 - muestra.v),
+    }
+
+    if muestra.detectado is None:
+        # Fuera de rango. Se dice por que canal se fue: sin eso queda "no
+        # detecta" a secas y hay que adivinar cual de los tres sliders tocar.
+        afuera = []
+
+        if margenes["H"] < 0:
+            afuera.append(f"H={muestra.h} y el arco va de {rango.h0} a {rango.h1}")
+
+        for nombre, valor, bajo, alto in (("S", muestra.s, rango.s0, rango.s1),
+                                          ("V", muestra.v, rango.v0, rango.v1)):
+            if valor < bajo:
+                afuera.append(f"{nombre}={valor} y el rango arranca en {bajo}")
+            elif valor > alto:
+                afuera.append(f"{nombre}={valor} y el rango llega hasta {alto}")
+
+        detalle = "; ".join(afuera) if afuera else "cae justo en el borde"
+
+        return ROJO, f"NO se detecta: {detalle}."
+
+    # La pieza no es un color, es una nube de colores. Que la MEDIANA entre
+    # no alcanza: si los bordes de la pieza se van del rango, la mascara
+    # queda mordida, el contorno se deforma y la forma sale mal -- que es la
+    # falla que no se parece en nada a "no detecta el color".
+    recortados = []
+
+    if rango.margen_h(muestra.h5) < 0 or rango.margen_h(muestra.h95) < 0:
+        recortados.append("H")
+
+    for nombre, p5, p95, bajo, alto in (("S", muestra.s5, muestra.s95, rango.s0, rango.s1),
+                                        ("V", muestra.v5, muestra.v95, rango.v0, rango.v1)):
+        if p5 < bajo or p95 > alto:
+            recortados.append(nombre)
+
+    if recortados:
+        return AMBAR, (f"Entra, pero el rango le corta parte de la pieza en "
+                       f"{', '.join(recortados)}. La mascara sale mordida y "
+                       f"eso arruina la forma antes que el color.")
+
+    # Se detecta y entera. Queda mirar con cuanto margen, que es lo que
+    # separa una calibracion que anda de una que anda HOY: la que pasa
+    # raspando se cae sola en cuanto alguien prenda otra luz. Los tres
+    # canales se comparan en unidades de su propio filo, no en crudo: 5
+    # puntos de H son graves y 5 de V no son nada.
+    peor = min(margenes, key=lambda n: margenes[n] / FILO[n])
+    margen = int(margenes[peor])
+
+    if margen < FILO[peor]:
+        return AMBAR, (f"Entra al filo: {peor} queda a {margen} del borde. "
+                       f"Con otra luz se cae.")
+
+    return VERDE, f"Entra con margen (el mas justo es {peor}, a {margen})."
 
 
 def _punto(estado: str) -> str:
@@ -933,6 +1084,44 @@ class Interfaz:
         self._cache_alcance: tuple = (None, [])
         self._dialogo_teach = None
 
+        # ---------------- Pestana de Vision ----------------
+        # Los ajustes de la camara viven en el modulo `config` de
+        # vision_python, que es lo que lee la deteccion. Aca se guarda la
+        # copia que manejan los controles, y `calibracion.aplicar()` la baja
+        # alla. Si hay una habitacion marcada como activa se aplica al
+        # arrancar: la calibracion del ultimo lugar donde anduvo el robot es
+        # la que corresponde, y esperar a que alguien abra la pestana
+        # significaria trabajar un rato con la de otra sala.
+        self.memoria_luces = cal.Memoria()
+
+        activa = self.memoria_luces.habitaciones.get(self.memoria_luces.activa)
+        self.ajustes_vision = activa.ajustes.copia() if activa else cal.leer()
+
+        # Se aplica ya, sin esperar a que nadie abra la pestana: incluye el
+        # pedido de exposicion, y la correccion por software vive en el
+        # objeto `Camera`, no en `config`, asi que sin este pedido la
+        # habitacion cargada andaria a medias hasta que alguien tocara un
+        # control. El hilo de vision todavia no arranco, pero eso no
+        # importa: el pedido queda guardado y se aplica al abrir la camara.
+        self._vis_aplicar()
+
+        self._dialogo_auto = None
+
+        #: `time.monotonic()` en que se pidio entrar a calibracion, para
+        #: poder decir "se pidio y el robot no lo confirmo" --que casi
+        #: siempre es una placa con firmware viejo-- en vez de dejar el
+        #: cartel en rojo sin explicar por que. 0 = no hay pedido en curso.
+        self._vis_pedido_s = 0.0
+
+        #: Los widgets de cada tarjeta de color, para refrescarles el eco y
+        #: la tira de tono sin rearmar la tarjeta debajo del cursor.
+        self._vis_color_ctrl: dict[str, dict] = {}
+
+        # Marca de "lo estoy moviendo yo": `set_value()` dispara el mismo
+        # on_change que mover el control a mano, asi que sin esto reflejar
+        # unos ajustes nuevos los volveria a aplicar de a uno.
+        self._vis_mudo = False
+
         # Ajustes: los controles se arman con lo que contesta 'P?', asi que
         # no existen hasta que llega. `_firma` guarda que parametros habia la
         # ultima vez para rearmar la lista SOLO cuando cambia el conjunto --
@@ -1021,6 +1210,7 @@ class Interfaz:
                 self.tab_operacion = ui.tab("Operacion")
                 self.tab_teach = ui.tab("Teach")
                 self.tab_rendimiento = ui.tab("Rendimiento")
+                self.tab_vision = ui.tab("Vision")
                 self.tab_proceso = ui.tab("Proceso")
                 self.tab_servicio = ui.tab("Servicio")
 
@@ -1037,6 +1227,9 @@ class Interfaz:
 
             with ui.tab_panel(self.tab_rendimiento).classes("p-0").style("height:100%"):
                 self._rendimiento()
+
+            with ui.tab_panel(self.tab_vision).classes("p-0").style("height:100%"):
+                self._vision()
 
             with ui.tab_panel(self.tab_proceso).classes("p-0").style("height:100%"):
                 self._ajustes(pr.NIVEL_PROCESO, self._panel_en_vivo)
@@ -1055,6 +1248,7 @@ class Interfaz:
         ui.timer(0.1, self._refrescar_rapido)
         ui.timer(0.5, self._refrescar_lento)
         ui.timer(PERIODO_TEACH_S, self._teach_tick)
+        ui.timer(PERIODO_VISION_S, self._refrescar_vision)
         ui.timer(PERIODO_RENDIMIENTO_S, self._refrescar_rendimiento)
 
     # ------------------------------------------------------------------
@@ -1131,7 +1325,7 @@ class Interfaz:
 
                     with ui.row().classes("panel px-3 py-2 gap-2 items-center no-wrap") \
                             .style("flex:1 1 0"):
-                        ui.label("Latencia").classes("titulo").style("flex:0 0 auto")
+                        ui.label("Calibracion").classes("titulo").style("flex:0 0 auto")
 
                         # El slider no se crea aca: sus topes son el rango que
                         # declara el firmware para 'vis_lat', y eso llega con
@@ -1922,6 +2116,13 @@ class Interfaz:
             senal, color = ROJO, COLOR_ESTADO[ROJO]
             texto = (f"firmware desparejo (proto={est.boot.proto}, "
                      f"la interfaz habla {pr.VERSION_PROTOCOLO}): hay que reflashear")
+        elif vivo and est.e and est.e.calibrando:
+            # La calibracion de la vision para el robot entero, asi que hay
+            # que verla desde CUALQUIER pestana: si no, alguien deja la
+            # celda frenada, se va a mirar Rendimiento y la unica pista de
+            # por que no produce nada es una pestana que no esta mirando.
+            senal, color = AMBAR, COLOR_ESTADO[AMBAR]
+            texto = "CALIBRANDO VISION — el robot esta detenido"
         elif vivo:
             # El chip resume las DOS conexiones, y se pinta con la peor: la
             # camara cuelga de otro USB y se cae por su cuenta, y sin ella el
@@ -2421,6 +2622,15 @@ class Interfaz:
         # proximo tic, que es justo el segundo en que uno la esta mirando.
         if self.tab_activa == "Rendimiento":
             self._pintar_rendimiento()
+
+        # La de vision empieza a medir el color de las piezas al entrar, y
+        # deja de hacerlo al salir: es casi lo que cuesta un fotograma de
+        # deteccion y no lo mira nadie desde otra pestana.
+        if self.vision:
+            self.vision.medir = self.tab_activa == "Vision"
+
+        if self.tab_activa == "Vision":
+            self._refrescar_vision()
 
     def _teach_tecla(self, evento) -> None:
         if self.tab_activa != "Teach":
@@ -3559,6 +3769,1033 @@ class Interfaz:
             self.etiqueta_grabacion.text = f"{len(self.biblioteca.movimientos)} guardados"
 
 
+
+    # ==================================================================
+    #  VISION
+    # ==================================================================
+    #
+    #  La pestana de calibrar la camara, y existe por un problema concreto:
+    #  el robot se muda de habitacion, cambia la luz, y los rangos HSV --que
+    #  se eligieron midiendo bajo OTRA luz-- dejan de contener a las piezas.
+    #  El verde es el que peor lo pasa, y su modo de falla es el peor
+    #  posible: no detecta peor, no detecta NADA (ver el comentario del
+    #  VERDE en vision_python/config.py, donde ya paso con 0/120 circulos).
+    #
+    #  Tres decisiones que conviene entender antes de tocar esto:
+    #
+    #  * SE CALIBRA CON LA CINTA PARADA. Con la cinta andando una pieza
+    #    cruza el cuadro en un par de segundos y no hay forma de ajustar un
+    #    umbral mirando algo que se va. El boton de frenar es tan parte de
+    #    la herramienta como los sliders.
+    #  * LO QUE SE MIDE NO PASA POR LA DETECCION. Cuando el verde se cae, la
+    #    deteccion no informa un verde malo: informa CERO verdes, o sea que
+    #    justo cuando hace falta saber el color de la pieza, el camino
+    #    normal no dice nada. `calibracion.muestrear()` encuentra las piezas
+    #    por saturacion --la cinta es gris, las piezas no-- sin mirar los
+    #    rangos, y recien despues informa si los rangos de hoy las agarran.
+    #  * COLOR Y FORMA VAN SEPARADOS, y no es cosmetico: el color se mueve
+    #    con la LAMPARA (cada vez que se muda el robot) y la forma con la
+    #    GEOMETRIA de las piezas (casi nunca). Mezclarlos invita a mover la
+    #    forma cuando lo que cambio fue la luz.
+
+    def _vision(self) -> None:
+        with ui.column().classes("w-full gap-2 p-2 no-wrap").style("height:100%"):
+            with ui.row().classes("w-full gap-2 no-wrap") \
+                    .style("flex:1 1 0;min-height:0"):
+                # ================= Columna izquierda =================
+                with ui.column().classes("gap-2 no-wrap items-stretch") \
+                        .style("flex:1.05 1 0;height:100%;min-height:0"):
+                    self._vis_camara()
+                    self._vis_comparacion()
+
+                # ================= Columna derecha =================
+                # Es la que scrollea: son cuatro paneles de sliders y no
+                # entran en la ventana. La de la izquierda NO scrollea a
+                # proposito -- el video y la comparacion son lo que se mira
+                # mientras se arrastra un slider de la derecha, y tienen que
+                # quedar fijos.
+                with ui.column().classes("gap-2 no-wrap") \
+                        .style("flex:1.35 1 0;height:100%;min-height:0;"
+                               "overflow-y:auto;overscroll-behavior:contain;"
+                               "padding-right:4px"):
+                    # El cartel de seguridad encabeza ESTA columna y no la
+                    # pantalla entera: cruzando las dos empujaba hacia abajo
+                    # el video y la comparacion de colores, que es lo que
+                    # hay que mirar mientras se arrastra un slider. Aca
+                    # sigue siendo lo primero que se lee al entrar --queda
+                    # justo encima de los controles que obligan a meter las
+                    # manos en la cinta-- sin costarle altura a la columna
+                    # de la izquierda.
+                    self._vis_cartel()
+
+                    self._vis_iluminacion()
+                    self._vis_memoria()
+
+                    self.caja_controles = ui.column().classes("w-full gap-2 no-wrap")
+                    self._vis_rearmar()
+
+    # ------------------------------------------------------------------
+    def _vis_cartel(self) -> None:
+        """El estado del ROBOT, no el de la cinta.
+
+        Esta pantalla se usa con las manos adentro del volumen de trabajo:
+        se apoyan piezas sobre la cinta para poder calibrar con algo quieto
+        delante de la camara. Mientras el robot pueda salir a buscar una
+        pieza, eso es peligroso, y no hay nada mas en la pantalla que lo
+        diga.
+
+        Tres estados y no dos, y el del medio es el importante: entre pedir
+        la calibracion y que el brazo se quede quieto puede pasar una
+        maniobra entera --el firmware no frena en el aire una pieza que ya
+        tiene agarrada--, y ese rato es justo cuando uno cree que ya paro.
+        """
+
+        with ui.row().classes("w-full items-center gap-3 no-wrap") \
+                .style("flex:0 0 auto;border-radius:8px;padding:9px 14px") as cartel:
+            self.cartel_vision = cartel
+            self.html_cartel = ui.html().style("flex:1 1 0;min-width:0")
+
+            self.boton_calibracion = ui.button(
+                "Frenar robot y cinta", on_click=self._vis_alternar_calibracion) \
+                .props("unelevated dense no-caps").style("min-width:196px")
+
+    def _vis_calibrando(self) -> bool:
+        e = self.estado.e
+
+        return bool(e and e.calibrando)
+
+    def _vis_seguro(self) -> bool:
+        """Se puede meter la mano: el robot esta en calibracion Y quieto."""
+
+        e = self.estado.e
+
+        return bool(e and e.calibrando and e.en_reposo)
+
+    def _vis_alternar_calibracion(self) -> None:
+        entrar = not self._vis_calibrando()
+
+        if entrar:
+            # La vision deja de informar piezas ANTES de mandar el comando,
+            # no despues: entre que sale el comando y que el ESP32 lo
+            # atiende hay milisegundos, y en esos milisegundos una pieza que
+            # cruce la linea todavia se encolaria.
+            if self.vision:
+                self.vision.pausada = True
+
+            self._vis_pedido_s = time.monotonic()
+
+        self.enviar(pr.cmd_calibracion(entrar))
+
+        if not entrar:
+            # Al salir, el orden es el contrario y por el mismo motivo: la
+            # vision vuelve a informar recien despues de pedirle al robot
+            # que vuelva a trabajar.
+            if self.vision:
+                self.vision.pausada = False
+
+            self._vis_pedido_s = 0.0
+
+    def _vis_pintar_cartel(self) -> None:
+        est = self.estado
+        e = est.e
+
+        if not est.enlace_vivo() or not e:
+            senal = GRIS
+            titulo = "Sin enlace con el robot"
+            detalle = ("No se sabe si el robot esta operativo. No apoyes "
+                       "piezas sobre la cinta.")
+        elif self._vis_seguro():
+            senal = VERDE
+            titulo = "Robot detenido y cinta parada"
+            detalle = ("Se pueden apoyar piezas sobre la cinta y calibrar. "
+                       "El robot no va a salir a buscarlas.")
+        elif self._vis_calibrando():
+            senal = AMBAR
+            titulo = "Frenando: el brazo esta terminando la maniobra"
+            detalle = ("No se frena en el aire una pieza que ya tiene "
+                       "agarrada. NO toques la cinta hasta que este cartel "
+                       "se ponga en verde.")
+        elif self._vis_pedido_s and (time.monotonic() - self._vis_pedido_s
+                                     < ESPERA_CAL_CONFIRMA_S):
+            senal = AMBAR
+            titulo = "Esperando la confirmacion del robot"
+            detalle = "Se pidio frenar; el robot todavia no contesto."
+        else:
+            senal = ROJO
+            titulo = "ROBOT OPERATIVO"
+            detalle = ("Puede salir a buscar una pieza en cualquier momento. "
+                       "Frenalo antes de apoyar nada sobre la cinta.")
+
+            if self._vis_pedido_s:
+                # Se pidio y no llego: casi siempre es una placa con firmware
+                # viejo, que no conoce 'CAL1' y lo contesto como invalido en
+                # una linea que nadie esta mirando. Decirlo aca importa mas
+                # que en ningun otro lado de la interfaz.
+                detalle = ("Se pidio frenar y el robot no lo confirmo. Si la "
+                           "placa tiene firmware viejo, este boton no hace "
+                           "nada: hay que reflashearla.")
+
+        color = COLOR_ESTADO[senal]
+
+        self.cartel_vision.style(
+            f"background:{color}1F;border:1px solid {color};"
+            "border-radius:8px;padding:9px 14px")
+
+        self.html_cartel.content = (
+            f'<div style="display:flex;align-items:center;gap:9px">'
+            f'{_punto(senal)}'
+            f'<span style="color:{color};font-size:14px;font-weight:700;'
+            f'letter-spacing:.04em">{titulo}</span></div>'
+            f'<div style="color:{APAGADO};font-size:12px;line-height:1.35;'
+            f'margin-left:19px">{detalle}</div>')
+
+        calibrando = self._vis_calibrando()
+
+        self.boton_calibracion.text = ("Reanudar produccion" if calibrando
+                                       else "Frenar robot y cinta")
+        self.boton_calibracion.props(
+            f'color={"cyan-9" if calibrando else "orange-9"}')
+        self.boton_calibracion.set_enabled(est.enlace_vivo())
+
+    # ------------------------------------------------------------------
+    def _vis_camara(self) -> None:
+        with ui.column().classes("panel p-2 gap-1").style("flex:0 0 auto;overflow:hidden"):
+            with ui.row().classes("w-full items-center gap-2 no-wrap px-1"):
+                ui.label("Vision IA").classes("titulo")
+                ui.space()
+
+                # El mismo control de recorte que la pestana de operacion:
+                # aca hace falta igual, porque mudar el robot corre la
+                # camara y encuadrar es lo primero que se hace al llegar.
+                self.etiqueta_recorte_vis = ui.label("").style(
+                    f"color:{APAGADO};font-size:12px")
+
+                for icono, paso in (("keyboard_arrow_up", -PASO_RECORTE),
+                                    ("keyboard_arrow_down", PASO_RECORTE)):
+                    boton = ui.button(icon=icono).props("dense flat round size=sm") \
+                        .style(f"color:{CELESTE}")
+                    boton.on("mousedown", lambda _, p=paso: self._empezar_a_mover(p))
+                    boton.on("mouseup", lambda _: self._dejar_de_mover())
+                    boton.on("mouseleave", lambda _: self._dejar_de_mover())
+
+            ui.html('<img src="/video" style="width:100%;height:auto;'
+                    'object-fit:contain;border-radius:4px;display:block" alt="camara"/>') \
+                .style("width:100%;display:flex;justify-content:center")
+
+    def _vis_comparacion(self) -> None:
+        """Lo esperado contra lo medido, que es de lo que vive la pantalla.
+
+        ESPERADO es el centro del rango configurado: el color que mejor
+        detectaria esta calibracion, o sea el que esta mas lejos de todos
+        los bordes. MEDIDO es el color que tiene de verdad la pieza que hay
+        ahora bajo la camara.
+
+        Puestos uno al lado del otro, la pregunta "por que no me detecta el
+        verde" se contesta mirando: si los dos cuadraditos son distintos, la
+        luz corrio el color de la pieza fuera del rango, y el numero de al
+        lado dice por cual de los tres canales se fue y por cuanto.
+        """
+
+        with ui.column().classes("panel p-3 gap-2") \
+                .style("flex:1 1 0;min-height:0;overflow-y:auto"):
+            with ui.row().classes("w-full items-center no-wrap"):
+                ui.label("Esperado contra medido").classes("titulo")
+                ui.space()
+                self.etiqueta_medicion = ui.label("").style(
+                    f"color:{APAGADO};font-size:11.5px")
+
+            self.html_comparacion = ui.html().classes("w-full")
+
+    # ------------------------------------------------------------------
+    def _vis_iluminacion(self) -> None:
+        with ui.column().classes("panel p-3 gap-2").style("flex:0 0 auto"):
+            ui.label("Iluminacion").classes("titulo")
+
+            self._vis_exposicion_controles()
+
+            ui.html(f'<div style="height:1px;background:{BORDE};width:100%"></div>')
+
+            ui.label("Ajuste rapido segun la lampara del lugar. Es un punto "
+                     "de partida, no una calibracion: parte siempre de los "
+                     "valores de fabrica y les corre el tono en la direccion "
+                     "en que esa luz mueve a las piezas.") \
+                .style(f"color:{APAGADO};font-size:11.5px;line-height:1.35;"
+                       "white-space:normal")
+
+            with ui.row().classes("w-full gap-2 no-wrap"):
+                self.botones_temperatura = {}
+
+                for clave in cal.TEMPERATURAS:
+                    self.botones_temperatura[clave] = ui.button(
+                        cal.NOMBRE_TEMPERATURA[clave],
+                        on_click=lambda _, c=clave: self._vis_temperatura(c)) \
+                        .props("dense no-caps unelevated").classes("flex-1") \
+                        .style("font-size:12px")
+
+            ui.html(f'<div style="height:1px;background:{BORDE};width:100%"></div>')
+
+            with ui.row().classes("w-full gap-2 no-wrap items-center"):
+                ui.button("Ajuste automatico", icon="auto_fix_high",
+                          on_click=self._vis_abrir_auto) \
+                    .props("dense no-caps unelevated").classes("flex-1") \
+                    .style(f"background:{CELESTE};color:#0B1015;font-size:12.5px")
+
+                ui.button("De fabrica", on_click=self._vis_de_fabrica) \
+                    .props("flat dense no-caps") \
+                    .style(f"color:{APAGADO};font-size:12px")
+
+    def _vis_exposicion_controles(self) -> None:
+        """Los controles de exposicion. Se arman UNA vez y se esconden.
+
+        No se rehacen al cambiar de modo, y es a proposito: quien pide el
+        cambio es el propio selector, asi que rehacer el panel seria borrar
+        el control desde adentro de su propio manejador.
+        """
+
+        ajustes = self.ajustes_vision
+
+        with ui.row().classes("w-full items-center no-wrap gap-2"):
+            ui.label("Exposicion").style(
+                f"color:{TEXTO};font-size:13px;flex:0 0 auto")
+
+            self.tog_exposicion = ui.toggle(
+                {cal.MODO_AUTO: "Auto", cal.MODO_MANUAL: "Manual"},
+                value=ajustes.exposicion_modo,
+                on_change=lambda e: self._vis_modo_exposicion(str(e.value))) \
+                .props("dense no-caps unelevated toggle-color=cyan-9") \
+                .style("font-size:12px")
+
+        self.aviso_auto = ui.label(
+            "La camara se acomoda sola, que es lo que permite mudar el robot "
+            "sin recalibrar. La contra es que promedia una cinta clara que "
+            "ocupa casi todo el cuadro y tiende a sobreexponer: para eso "
+            "esta la correccion de abajo.") \
+            .style(f"color:{APAGADO};font-size:11.5px;line-height:1.35;"
+                   "white-space:normal")
+
+        self.ctrl_exposicion = self._vis_fila_slider(
+            cal.FICHA_EXPOSICION, ajustes.exposicion_valor,
+            lambda v: self._vis_exposicion(int(v)))
+
+        self.ctrl_correccion = self._vis_fila_slider(
+            cal.FICHA_CORRECCION, ajustes.correccion_pct,
+            lambda v: self._vis_correccion(int(v)))
+
+        self._vis_reflejar_exposicion()
+
+    def _vis_reflejar_exposicion(self) -> None:
+        """Pone en los controles lo que dicen los ajustes.
+
+        `_vis_mudo` corta el camino de vuelta: `set_value()` dispara el
+        mismo `on_change` que mover el control a mano, y sin la marca un
+        preset que baja tres valores se re-aplicaria tres veces y ademas
+        borraria su propio nombre -- mover algo a mano deja de ser el preset.
+        """
+
+        manual = self.ajustes_vision.exposicion_modo == cal.MODO_MANUAL
+
+        self._vis_mudo = True
+
+        try:
+            self.tog_exposicion.set_value(self.ajustes_vision.exposicion_modo)
+            self.ctrl_exposicion["poner"](self.ajustes_vision.exposicion_valor)
+            self.ctrl_correccion["poner"](self.ajustes_vision.correccion_pct)
+        finally:
+            self._vis_mudo = False
+
+        # El slider de exposicion manual no tiene sentido en automatico, y
+        # el aviso de que la camara se acomoda sola no lo tiene en manual.
+        self.aviso_auto.set_visibility(not manual)
+        self.ctrl_exposicion["caja"].set_visibility(manual)
+
+    def _vis_memoria(self) -> None:
+        """Las habitaciones guardadas: la 'memoria de luces'."""
+
+        with ui.column().classes("panel p-3 gap-2").style("flex:0 0 auto"):
+            with ui.row().classes("w-full items-center no-wrap"):
+                ui.label("Memoria de luces").classes("titulo")
+                ui.space()
+                self.etiqueta_habitacion = ui.label("").style(
+                    f"color:{APAGADO};font-size:11.5px")
+
+            with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                self.select_habitacion = ui.select(
+                    options=self.memoria_luces.nombres() or [],
+                    value=self.memoria_luces.activa or None,
+                    label="Habitacion",
+                    on_change=lambda e: self._vis_cargar(e.value)) \
+                    .props("dense outlined").style("flex:1 1 0")
+
+                ui.button(icon="save", on_click=self._vis_guardar) \
+                    .props("flat dense round").style(f"color:{CELESTE}") \
+                    .tooltip("Guardar los ajustes de ahora con un nombre")
+
+                ui.button(icon="delete_outline", on_click=self._vis_borrar) \
+                    .props("flat dense round").style(f"color:{APAGADO}") \
+                    .tooltip("Borrar la habitacion elegida")
+
+            ui.label("Una habitacion guarda TODO: los tres colores, la "
+                     "geometria y la exposicion. Calibrar en la pieza, "
+                     "guardarla, calibrar en el aula y guardarla con otro "
+                     "nombre; despues cambiar de lugar es elegirla de la "
+                     "lista.") \
+                .style(f"color:{APAGADO};font-size:11.5px;line-height:1.35;"
+                       "white-space:normal")
+
+    # ------------------------------------------------------------------
+    def _vis_rearmar(self) -> None:
+        """Rehace las tarjetas de color y de forma con los valores de ahora.
+
+        Se rehacen enteras y no se les cambia el valor a los sliders porque
+        la CANTIDAD de controles puede cambiar: un color puede pasar de un
+        tramo a dos cuando su tono cruza el cero de la rueda (el rojo lo
+        hace), y ahi no hay ningun slider al que ponerle un valor.
+
+        Ojo que esto NO se llama al arrastrar un slider -- rearmar la lista
+        debajo del cursor mataria el arrastre. Solo cuando los ajustes
+        cambian de golpe: un preset, una habitacion, el ajuste automatico.
+        """
+
+        self.caja_controles.clear()
+        self._vis_color_ctrl.clear()
+
+        with self.caja_controles:
+            self._vis_colores()
+            self._vis_geometria()
+
+    def _vis_colores(self) -> None:
+        ajustes = self.ajustes_vision
+
+        with ui.column().classes("panel p-3 gap-2").style("flex:0 0 auto"):
+            ui.label("Color").classes("titulo")
+
+            ui.label("Lo que se mueve con la luz. H (tono) es el que separa "
+                     "un color de otro y de la cinta; S (saturacion) separa "
+                     "la pieza del gris del fondo; V (brillo) ya casi no "
+                     "separa nada y conviene dejarlo lejos, como piso contra "
+                     "la sombra.") \
+                .style(f"color:{APAGADO};font-size:11.5px;line-height:1.35;"
+                       "white-space:normal")
+
+            for color in cal.COLORES:
+                rango = ajustes.colores.get(color)
+
+                if rango is None:
+                    continue
+
+                self._vis_tarjeta_color(color, rango)
+
+    def _vis_tarjeta_color(self, color: str, rango) -> None:
+        """Un color, UNA tarjeta, UN arco de tono.
+
+        El rojo se veia antes como dos colores, y no lo es: se ve partido
+        porque `cv2.inRange()` no sabe que H=179 y H=0 son vecinos. Esa
+        limitacion vive en `Rango.a_tramos()`, que es donde corresponde;
+        aca el rojo es un arco solo que pasa por el 0, y la tira de tono lo
+        muestra encendido en las dos puntas para que se vea que es uno.
+        """
+
+        with ui.column().classes("w-full gap-1 no-wrap") \
+                .style(f"border:1px solid {BORDE};border-radius:6px;padding:8px"):
+            with ui.row().classes("w-full items-center no-wrap gap-2"):
+                ui.label(cal.NOMBRE_COLOR[color]).style(
+                    f"color:{TEXTO};font-size:13px;font-weight:600")
+                ui.space()
+
+                eco_arco = ui.label("").style(
+                    f"color:{APAGADO};font-size:11.5px;"
+                    "font-family:ui-monospace,monospace")
+
+                muestra = ui.html()
+
+            tira = ui.html().classes("w-full")
+
+            controles = {"arco": eco_arco, "muestra": muestra, "tira": tira}
+
+            # Dos sliders y no un `ui.range` para el tono: un rango de
+            # Quasar no puede tener el minimo por encima del maximo, y el
+            # arco del rojo es justamente eso (145 -> 15). Con dos sliders
+            # sueltos, dar la vuelta es simplemente cruzarlos.
+            for etiqueta, campo in (("Tono desde", "h0"), ("Tono hasta", "h1")):
+                controles[campo] = self._vis_slider_tono(color, etiqueta, campo,
+                                                         getattr(rango, campo))
+
+            for etiqueta, campo, tope in (("Saturacion", "s", cal.SV_MAX),
+                                          ("Brillo", "v", cal.SV_MAX)):
+                controles[campo] = self._vis_fila_rango(color, etiqueta, campo,
+                                                        tope, rango)
+
+            self._vis_color_ctrl[color] = controles
+            self._vis_pintar_color(color)
+
+    def _vis_slider_tono(self, color: str, etiqueta: str, campo: str,
+                         valor: int) -> dict:
+        with ui.row().classes("w-full items-center no-wrap gap-2"):
+            ui.label(etiqueta).style(
+                f"color:{APAGADO};font-size:11.5px;flex:0 0 68px")
+
+            eco = ui.label(str(valor)).style(
+                f"color:{TEXTO};font-size:11.5px;flex:0 0 58px;"
+                "text-align:right;font-family:ui-monospace,monospace")
+
+            slider = ui.slider(
+                min=0, max=cal.H_MAX, step=1, value=valor,
+                on_change=lambda e, c=color, f=campo:
+                self._vis_color_cambio(c, f, e.value)) \
+                .props("dense").style("flex:1 1 0")
+
+        return {"slider": slider, "eco": eco}
+
+    def _vis_fila_rango(self, color: str, etiqueta: str, campo: str,
+                        tope: int, rango) -> dict:
+        bajo = getattr(rango, campo + "0")
+        alto = getattr(rango, campo + "1")
+
+        with ui.row().classes("w-full items-center no-wrap gap-2"):
+            ui.label(etiqueta).style(
+                f"color:{APAGADO};font-size:11.5px;flex:0 0 68px")
+
+            eco = ui.label(f"{bajo}–{alto}").style(
+                f"color:{TEXTO};font-size:11.5px;flex:0 0 58px;"
+                "text-align:right;font-family:ui-monospace,monospace")
+
+            slider = ui.range(
+                min=0, max=tope, step=1, value={"min": bajo, "max": alto},
+                on_change=lambda e, c=color, f=campo:
+                self._vis_color_cambio(c, f, e.value)) \
+                .props("dense").style("flex:1 1 0")
+
+        return {"slider": slider, "eco": eco}
+
+    def _vis_color_cambio(self, color: str, campo: str, valor) -> None:
+        rango = self.ajustes_vision.colores.get(color)
+
+        if rango is None:
+            return
+
+        if isinstance(valor, dict):
+            setattr(rango, campo + "0", int(valor.get("min", 0)))
+            setattr(rango, campo + "1", int(valor.get("max", 0)))
+        else:
+            setattr(rango, campo, int(valor))
+
+        self._vis_pintar_color(color)
+        self._vis_a_mano()
+        self._vis_aplicar()
+
+    def _vis_pintar_color(self, color: str) -> None:
+        """Refresca los ecos y la tira de tono de una tarjeta."""
+
+        controles = self._vis_color_ctrl.get(color)
+        rango = self.ajustes_vision.colores.get(color)
+
+        if not controles or rango is None:
+            return
+
+        vuelta = " ↩ da la vuelta" if rango.da_la_vuelta() else ""
+
+        controles["arco"].text = f"{rango.h0} → {rango.h1}{vuelta}"
+        controles["muestra"].content = _muestra_color(
+            cal.hsv_a_hex(*rango.centro()), 20)
+        controles["tira"].content = _tira_tono(rango)
+
+        for campo in ("h0", "h1"):
+            controles[campo]["eco"].text = str(getattr(rango, campo))
+
+        for campo in ("s", "v"):
+            bajo = getattr(rango, campo + "0")
+            alto = getattr(rango, campo + "1")
+            controles[campo]["eco"].text = f"{bajo}–{alto}"
+
+    def _vis_geometria(self) -> None:
+        # Cerrada de entrada: es la seccion que casi no se toca, y abierta
+        # empuja fuera de la pantalla a la de color, que es la que importa.
+        with ui.expansion("Geometria", icon="category") \
+                .classes("panel w-full").props("dense") \
+                .style(f"flex:0 0 auto;color:{TEXTO}"):
+            with ui.column().classes("w-full gap-1 no-wrap").style("padding:4px 2px"):
+                ui.label("Como se decide si una pieza es cuadrado, hexagono o "
+                         "circulo. No depende de la luz, asi que mudar el "
+                         "robot no deberia obligar a tocarlo: si una FORMA "
+                         "empezo a fallar despues de una mudanza, casi seguro "
+                         "el problema esta en el color -- una mascara sucia "
+                         "deforma el contorno.") \
+                    .style(f"color:{APAGADO};font-size:11.5px;line-height:1.35;"
+                           "white-space:normal;padding-bottom:4px")
+
+                for ficha in cal.FICHAS_GEOMETRIA:
+                    valor = self.ajustes_vision.geometria.get(ficha.nombre, ficha.minimo)
+
+                    self._vis_fila_slider(
+                        ficha, valor,
+                        lambda v, n=ficha.nombre: self._vis_geometria_cambio(n, v))
+
+    def _vis_fila_slider(self, ficha, valor, alcambiar) -> dict:
+        """Un slider con su nombre, su valor y su explicacion debajo.
+
+        Devuelve con que volver a tocarlo desde afuera: `poner(valor)` mueve
+        el control y su eco juntos, que es lo que hace falta cuando los
+        ajustes cambian de golpe --un preset, una habitacion, el ajuste
+        automatico-- y no porque alguien este arrastrando ese slider.
+        """
+
+        decimales = 0 if ficha.entero else max(
+            0, -int(math.floor(math.log10(ficha.paso))))
+
+        def texto(v: float) -> str:
+            return f"{v:.{decimales}f} {ficha.unidad}".strip()
+
+        with ui.column().classes("w-full gap-0 no-wrap").style("padding:3px 0") as caja:
+            with ui.row().classes("w-full items-center no-wrap gap-2"):
+                ui.label(ficha.etiqueta).style(
+                    f"color:{TEXTO};font-size:12.5px;flex:1 1 0;min-width:0")
+
+                eco = ui.label(texto(valor)) \
+                    .style(f"color:{TEXTO};font-size:11.5px;flex:0 0 auto;"
+                           "font-family:ui-monospace,monospace")
+
+            def cambio(evento):
+                nuevo = ficha.saturar(evento.value)
+                eco.text = texto(nuevo)
+                alcambiar(nuevo)
+
+            slider = ui.slider(min=ficha.minimo, max=ficha.maximo,
+                               step=ficha.paso, value=valor, on_change=cambio) \
+                .props("dense").classes("w-full")
+
+            if ficha.ayuda:
+                ui.label(ficha.ayuda).style(
+                    f"color:{APAGADO};font-size:11px;line-height:1.3;"
+                    "white-space:normal")
+
+        def poner(v: float) -> None:
+            nuevo = ficha.saturar(v)
+
+            slider.set_value(nuevo)
+            eco.text = texto(nuevo)
+
+        return {"caja": caja, "slider": slider, "eco": eco, "poner": poner}
+
+    # ==================================================================
+    #  VISION: acciones
+    # ==================================================================
+    def _vis_aplicar(self, ajustes=None, rearmar: bool = False) -> None:
+        """Baja los ajustes a la deteccion y, si hace falta, a la camara.
+
+        `calibracion.aplicar()` escribe los atributos del modulo `config`,
+        que es lo que `detection.py` lee en el punto de uso: el cambio se ve
+        en el fotograma SIGUIENTE, sin reiniciar nada. La exposicion es la
+        excepcion -- hay que pedirsela al dispositivo, y eso solo lo puede
+        hacer el hilo de vision entre dos fotogramas.
+        """
+
+        if ajustes is not None:
+            self.ajustes_vision = ajustes
+
+        cal.aplicar(self.ajustes_vision)
+
+        if self.vision:
+            self.vision.pedir_camara(
+                self.ajustes_vision.exposicion_modo == cal.MODO_AUTO,
+                self.ajustes_vision.exposicion_valor,
+                self.ajustes_vision.correccion_pct)
+
+        if rearmar:
+            self._vis_rearmar()
+            self._vis_reflejar_exposicion()
+
+    def _vis_a_mano(self) -> None:
+        """Alguien movio un control: esto ya no es el preset de luz.
+
+        El preset arranca de fabrica y le corre el tono, asi que en cuanto
+        se toca cualquier cosa los numeros dejan de ser los suyos. Seguir
+        mostrando "Luz calida" arriba haria creer que apretar ese boton de
+        nuevo no cambia nada, cuando en realidad descarta el ajuste fino.
+        """
+
+        self.ajustes_vision.temperatura = ""
+
+    def _vis_geometria_cambio(self, nombre: str, valor: float) -> None:
+        self.ajustes_vision.geometria[nombre] = valor
+
+        self._vis_a_mano()
+        self._vis_aplicar()
+
+    def _vis_modo_exposicion(self, modo: str) -> None:
+        if self._vis_mudo or modo not in (cal.MODO_AUTO, cal.MODO_MANUAL):
+            return
+
+        self.ajustes_vision.exposicion_modo = modo
+
+        self._vis_a_mano()
+        self._vis_aplicar()
+        self._vis_reflejar_exposicion()
+
+    def _vis_exposicion(self, valor: int) -> None:
+        if self._vis_mudo:
+            return
+
+        self.ajustes_vision.exposicion_valor = int(valor)
+
+        self._vis_a_mano()
+        self._vis_aplicar()
+
+    def _vis_correccion(self, valor: int) -> None:
+        if self._vis_mudo:
+            return
+
+        self.ajustes_vision.correccion_pct = int(valor)
+
+        self._vis_a_mano()
+        self._vis_aplicar()
+
+    def _vis_temperatura(self, clave: str) -> None:
+        self._vis_aplicar(cal.aplicar_temperatura(clave), rearmar=True)
+
+        ui.notify(f"{cal.NOMBRE_TEMPERATURA[clave]}: punto de partida aplicado. "
+                  "Mira la comparacion de colores y afina, o corre el ajuste "
+                  "automatico.", color="info")
+
+    def _vis_de_fabrica(self) -> None:
+        self._vis_aplicar(cal.de_fabrica(), rearmar=True)
+        ui.notify("Vision de fabrica", color="info")
+
+    # ------------------------------------------------------------------
+    def _vis_cargar(self, nombre) -> None:
+        if not nombre or nombre == self.memoria_luces.activa:
+            return
+
+        ajustes = self.memoria_luces.cargar_habitacion(str(nombre))
+
+        if ajustes is None:
+            return
+
+        self._vis_aplicar(ajustes, rearmar=True)
+        ui.notify(f"Ajustes de «{nombre}»", color="info")
+
+    def _vis_guardar(self) -> None:
+        with ui.dialog() as dialogo, ui.card().style(f"background:{PANEL};color:{TEXTO}"):
+            ui.label("Guardar los ajustes de ahora").classes("text-lg")
+
+            ui.label("Con el nombre del lugar: «Pieza», «Aula facultad». "
+                     "Si ya existe, se pisa.") \
+                .style(f"color:{APAGADO};font-size:12px;white-space:normal;"
+                       "max-width:320px")
+
+            campo = ui.input(value=self.memoria_luces.activa or "") \
+                .props("dense outlined autofocus").classes("w-full")
+
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Cancelar", on_click=dialogo.close) \
+                    .props("flat dense no-caps").style(f"color:{APAGADO}")
+
+                ui.button("Guardar",
+                          on_click=lambda: self._vis_guardar_ya(dialogo, campo.value)) \
+                    .props("unelevated dense no-caps")
+
+        dialogo.open()
+
+    def _vis_guardar_ya(self, dialogo, nombre) -> None:
+        nombre = str(nombre or "").strip()
+
+        if not nombre:
+            ui.notify("Hace falta un nombre", color="warning")
+            return
+
+        self.memoria_luces.guardar(nombre, self.ajustes_vision)
+        dialogo.close()
+
+        self.select_habitacion.set_options(self.memoria_luces.nombres())
+        self.select_habitacion.set_value(nombre)
+
+        ui.notify(f"Guardado como «{nombre}»", color="positive")
+
+    def _vis_borrar(self) -> None:
+        nombre = self.memoria_luces.activa
+
+        if not nombre:
+            ui.notify("No hay ninguna habitacion elegida", color="warning")
+            return
+
+        with ui.dialog() as dialogo, ui.card().style(f"background:{PANEL};color:{TEXTO}"):
+            ui.label(f"¿Borrar «{nombre}»?").classes("text-lg")
+
+            ui.label("Los ajustes que estan puestos no cambian: se borra la "
+                     "copia guardada.") \
+                .style(f"color:{APAGADO};font-size:12px;white-space:normal;"
+                       "max-width:320px")
+
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Cancelar", on_click=dialogo.close) \
+                    .props("flat dense no-caps").style(f"color:{APAGADO}")
+
+                ui.button("Borrar",
+                          on_click=lambda: self._vis_borrar_ya(dialogo, nombre)) \
+                    .props("unelevated dense no-caps").style(f"background:{ROJO_STOP}")
+
+        dialogo.open()
+
+    def _vis_borrar_ya(self, dialogo, nombre: str) -> None:
+        self.memoria_luces.borrar(nombre)
+        dialogo.close()
+
+        self.select_habitacion.set_options(self.memoria_luces.nombres())
+        self.select_habitacion.set_value(None)
+
+        ui.notify(f"Borrada «{nombre}»", color="warning")
+
+    # ==================================================================
+    #  VISION: ajuste automatico
+    # ==================================================================
+    #
+    #  El robot llega a una sala nueva: se frena la cinta, se pone un
+    #  hexagono de cada color bajo la camara y la calibracion sale de medir
+    #  esas tres piezas contra el fondo. Es la misma receta que se uso a
+    #  mano para elegir los rangos que estan escritos en config.py, y esta
+    #  explicada con las mediciones al lado en `calibracion.calibrar()`.
+    #
+    #  El dialogo FRENA EL ROBOT al abrirse --no solo la cinta-- y va
+    #  diciendo que ve mientras esta abierto. Ese renglon en vivo es la mitad
+    #  de la herramienta: sin el, "no encontre las tres piezas" no dice si
+    #  falta poner una, si esta fuera de cuadro o si esta pero no se separa
+    #  del fondo. Y encabezandolo esta lo primero que hay que mirar: si el
+    #  brazo ya se quedo quieto, porque para poner las tres piezas hay que
+    #  meter las manos en la cinta.
+
+    def _vis_abrir_auto(self) -> None:
+        if not self.vision:
+            ui.notify("No hay camara (se arranco con --sin-vision)", color="warning")
+            return
+
+        # Frenar es parte del procedimiento y no una precaucion: hay que
+        # meter las manos en la cinta para poner las tres piezas, y ademas,
+        # con las piezas moviendose, la foto que se mide y la que se ve en
+        # pantalla ya no son la misma.
+        if not self._vis_calibrando():
+            self._vis_alternar_calibracion()
+
+        with ui.dialog() as dialogo, ui.card() \
+                .style(f"background:{PANEL};color:{TEXTO};min-width:420px"):
+            ui.label("Ajuste automatico").classes("text-lg")
+
+            ui.label("Se frenan el robot y la cinta solos. ESPERA a que el "
+                     "primer renglon este en verde --el brazo puede estar "
+                     "terminando una maniobra-- y recien ahi pone un "
+                     "hexagono de cada color sobre la cinta, separados y "
+                     "enteros dentro del cuadro. Cuando el resto de los "
+                     "renglones diga que ve los tres, dale a Calibrar.") \
+                .style(f"color:{APAGADO};font-size:12.5px;line-height:1.4;"
+                       "white-space:normal;max-width:420px")
+
+            self.html_auto = ui.html().classes("w-full")
+
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Cerrar", on_click=lambda: self._vis_cerrar_auto(dialogo)) \
+                    .props("flat dense no-caps").style(f"color:{APAGADO}")
+
+                self.boton_calibrar = ui.button(
+                    "Calibrar", on_click=self._vis_calibrar) \
+                    .props("unelevated dense no-caps") \
+                    .style(f"background:{CELESTE};color:#0B1015")
+
+        self._dialogo_auto = dialogo
+        self._vis_pintar_auto()
+
+        dialogo.open()
+
+    def _vis_cerrar_auto(self, dialogo) -> None:
+        self._dialogo_auto = None
+        dialogo.close()
+
+    def _vis_pintar_auto(self) -> None:
+        """Que esta viendo la camara ahora mismo, mientras el dialogo espera."""
+
+        if not self._dialogo_auto or not self.vision:
+            return
+
+        muestras = self.vision.muestras
+        vistos = {}
+
+        for muestra in muestras:
+            vistos.setdefault(muestra.color, muestra)
+
+        # El primer renglon es el unico que puede lastimar a alguien, asi
+        # que va primero y no al final: para poner las tres piezas hay que
+        # meter las manos en la cinta.
+        seguro = self._vis_seguro()
+
+        if seguro:
+            filas = [f'{_punto(VERDE)}<span style="font-size:12.5px">'
+                     'Robot detenido: se pueden poner las piezas</span>']
+        elif self._vis_calibrando():
+            filas = [f'{_punto(AMBAR)}<span style="font-size:12.5px;'
+                     f'color:{COLOR_ESTADO[AMBAR]}">El brazo esta terminando '
+                     'la maniobra que tenia. Esperá.</span>']
+        else:
+            filas = [f'{_punto(ROJO)}<span style="font-size:12.5px;'
+                     f'color:{COLOR_ESTADO[ROJO]}">EL ROBOT SIGUE OPERATIVO. '
+                     'No pongas las manos en la cinta.</span>']
+
+        # Y el boton no se habilita hasta que el brazo este quieto. Calibrar
+        # con el robot andando no es peligroso en si --es una foto--, pero
+        # llegar hasta ahi implica haber puesto tres piezas a mano.
+        self.boton_calibrar.set_enabled(seguro)
+
+        for color in cal.COLORES:
+            muestra = vistos.get(color)
+
+            if muestra is None:
+                filas.append(
+                    f'{_punto(ROJO)}<span style="color:{APAGADO};font-size:12.5px">'
+                    f'{cal.NOMBRE_COLOR[color]}: no se ve</span>')
+                continue
+
+            filas.append(
+                f'{_punto(VERDE)}<span style="font-size:12.5px">'
+                f'{cal.NOMBRE_COLOR[color]}</span>'
+                f'<span style="color:{APAGADO};font-size:12px"> — H={muestra.h} '
+                f'S={muestra.s} V={muestra.v}, {muestra.area:.0f} px2</span>'
+                f'{_muestra_color(muestra.hex(), 13)}')
+
+        sobran = len(muestras) - len(vistos)
+
+        if sobran > 0:
+            filas.append(
+                f'<span style="color:{COLOR_ESTADO[AMBAR]};font-size:12px">'
+                f'Hay {sobran} pieza(s) de mas en el cuadro: se mide la mas '
+                'grande de cada color.</span>')
+
+        self.html_auto.content = (
+            '<div style="display:flex;flex-direction:column;gap:5px;'
+            'padding:8px 0">'
+            + "".join(f'<div style="display:flex;align-items:center;gap:6px">{f}</div>'
+                      for f in filas)
+            + "</div>")
+
+    def _vis_calibrar(self) -> None:
+        # El boton ya esta deshabilitado mientras el brazo no este quieto;
+        # esto es la segunda vuelta, contra un click que llegue justo cuando
+        # se estaba habilitando. Es barato y evita que la unica defensa sea
+        # el estado de un widget.
+        if not self._vis_seguro():
+            ui.notify("El robot todavia no esta detenido", color="warning")
+            return
+
+        frame = self.vision.fotograma_crudo() if self.vision else None
+
+        if frame is None:
+            ui.notify("Todavia no llego ningun fotograma", color="warning")
+            return
+
+        resultado = cal.calibrar(frame, self.ajustes_vision)
+
+        if not resultado.ok:
+            # El dialogo queda abierto: casi siempre lo que falta es correr
+            # una pieza, y cerrarlo obligaria a empezar de nuevo.
+            ui.notify(resultado.mensaje, color="warning", multi_line=True,
+                      classes="max-w-md")
+            return
+
+        self._vis_aplicar(resultado.ajustes, rearmar=True)
+        self._vis_cerrar_auto(self._dialogo_auto)
+
+        ui.notify(resultado.mensaje + " Guardala con el nombre del lugar si "
+                  "quedo bien.", color="positive", multi_line=True,
+                  classes="max-w-md")
+
+    # ==================================================================
+    #  VISION: refresco
+    # ==================================================================
+    def _refrescar_vision(self) -> None:
+        # Medir el color de cada pieza cuesta casi lo mismo que detectarla,
+        # asi que solo se hace con esta pestana a la vista. El apagado vive
+        # aca y no solo en `_cambio_pestana` para que tambien se apague si
+        # alguien cierra el navegador con la pestana abierta.
+        if self.vision:
+            self.vision.medir = self.tab_activa == "Vision"
+
+        if self.tab_activa != "Vision":
+            return
+
+        self._vis_pintar_cartel()
+        self._vis_pintar_comparacion()
+        self._vis_pintar_auto()
+
+        if self.vision:
+            self.etiqueta_recorte_vis.text = f"recorte {self.vision.offset_recorte:+d} px"
+
+        ajustes = self.ajustes_vision
+        activa = self.memoria_luces.activa
+
+        for clave, boton in self.botones_temperatura.items():
+            boton.props(f'color={"cyan-9" if ajustes.temperatura == clave else "grey-9"}')
+
+        if ajustes.temperatura:
+            self.etiqueta_habitacion.text = cal.NOMBRE_TEMPERATURA[ajustes.temperatura]
+        elif activa:
+            self.etiqueta_habitacion.text = f"cargada: {activa}"
+        else:
+            self.etiqueta_habitacion.text = "sin guardar"
+
+    def _vis_pintar_comparacion(self) -> None:
+        muestras = self.vision.muestras if self.vision else []
+        vistas = {}
+
+        for muestra in muestras:
+            vistas.setdefault(muestra.color, muestra)
+
+        if not self.vision:
+            self.etiqueta_medicion.text = "sin camara"
+        elif not self.estado.camara_viva():
+            self.etiqueta_medicion.text = "camara caida"
+        elif not muestras:
+            self.etiqueta_medicion.text = "no hay piezas a la vista"
+        else:
+            self.etiqueta_medicion.text = f"{len(muestras)} pieza(s)"
+
+        filas = []
+
+        for color in cal.COLORES:
+            rango = self.ajustes_vision.colores.get(color)
+
+            if rango is None:
+                continue
+
+            filas.append(self._vis_fila_comparacion(color, rango, vistas.get(color)))
+
+        self.html_comparacion.content = "".join(filas)
+
+    def _vis_fila_comparacion(self, color: str, rango, muestra) -> str:
+        # UN cuadradito por color. Antes salia uno por sector HSV, o sea dos
+        # para el rojo, y eso se leia como "hay dos rojos" -- que no es una
+        # cosa que exista.
+        esperados = _muestra_color(cal.hsv_a_hex(*rango.centro()), 26)
+
+        if muestra is None:
+            medido = _muestra_vacia(26)
+            numeros = "—"
+        else:
+            medido = _muestra_color(muestra.hex(), 26)
+            numeros = f"H={muestra.h} S={muestra.s} V={muestra.v}"
+
+        senal, veredicto = _veredicto_color(color, rango, muestra)
+
+        return (
+            f'<div style="display:flex;align-items:center;gap:8px;'
+            f'padding:7px 2px;border-bottom:1px solid {BORDE}">'
+            f'{esperados}'
+            f'<span style="color:{APAGADO};font-size:14px">→</span>'
+            f'{medido}'
+            f'<div style="display:flex;flex-direction:column;gap:1px;'
+            f'flex:1 1 0;min-width:0">'
+            f'<div style="display:flex;align-items:center;gap:6px">'
+            f'{_punto(senal)}'
+            f'<span style="font-size:13px">{cal.NOMBRE_COLOR[color]}</span>'
+            f'<span style="color:{APAGADO};font-size:11.5px;'
+            f'font-family:ui-monospace,monospace">{numeros}</span></div>'
+            f'<span style="color:{COLOR_ESTADO[senal]};font-size:11.5px;'
+            f'line-height:1.3">{veredicto}</span>'
+            f'</div></div>')
 
     # ==================================================================
     #  RENDIMIENTO

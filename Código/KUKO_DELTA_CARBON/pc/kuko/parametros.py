@@ -58,7 +58,7 @@ FICHAS: dict[str, Ficha] = {
     #  Nivel 1 -- operacion (se ajusta desde la pantalla de operacion)
     # ==================================================================
     "vis_lat": Ficha(
-        "Cinta", "Latencia de la vision",
+        "Cinta", "Calibracion de la vision",
         "Cuanto avanza la pieza entre que cruza la linea de deteccion y que "
         "el mensaje llega al robot. Es el ajuste fino de cada arranque: si "
         "el gripper cae adelantado, hay que subirlo."),

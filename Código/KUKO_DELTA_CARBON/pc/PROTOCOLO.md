@@ -1,4 +1,4 @@
-# Protocolo serie KUKO Delta Carbon — versión 3
+# Protocolo serie KUKO Delta Carbon — versión 4
 
 Contrato entre el firmware del ESP32 y la aplicación de PC. **Es la única
 referencia válida**: si el firmware y Python no coinciden acá, el error está
@@ -18,6 +18,16 @@ aceptar el `estado` de `[FALLO]` por nombre. El firmware **no cambia** —las
 dos líneas son las que viene imprimiendo desde siempre—, así que la versión
 no sube: subirla marcaría como incompatible a una placa que habla exactamente
 el mismo protocolo.
+
+**Cambios de la versión 4** (§1.2.1 y §8): `CAL1` / `CAL0` / `CAL?`, el modo
+calibración de la visión, con su línea `[CAL]` y los campos `cal` y `rep` al
+final de `[E]`. La versión sube por el mismo motivo que la 3, y acá con más
+razón que nunca: con el firmware viejo en la placa, el botón de la pestaña de
+Visión se dibujaría, se apretaría, el ESP32 contestaría `comando invalido` en
+la consola que nadie mira, y el operador metería las manos en la cinta con el
+robot operativo. **Es la única parte de este protocolo que puede lastimar a
+alguien si las dos mitades no coinciden**, así que la interfaz además avisa en
+el cartel cuando pide frenar y el robot no lo confirma.
 
 **Cambios de la versión 3** (§6.3.1 y §6.3.2): `JI`, ir a una coordenada
 escrita pasando por home, con sus eventos `[TEACH] ir` / `irfin`; y `JL`,
@@ -84,6 +94,54 @@ una letra aunque compartan letra (`C` de color vs. `C` de círculo).
 
 Los comandos del modo teach empiezan todos con `J` y van en §6.
 
+### 1.2.1 Modo calibración de la visión
+
+    CAL1   entra: para la cinta Y el robot
+    CAL0   sale: el robot vuelve a trabajar y la cinta arranca
+    CAL?   pide el estado sin cambiar nada
+
+Contesta siempre con `[CAL] <on|off> rep=<0/1> cinta=<0/1> est=<ESTADO>`, y
+`[E]` lleva los mismos dos datos en `cal` y `rep`.
+
+**No es sólo parar la cinta, y ésa fue la primera versión de esto.** Parar la
+cinta no alcanza: una pieza apoyada a mano cruza la línea de detección igual
+—la cruza quien la apoya, no la cinta—, la visión la informa y el brazo sale a
+buscarla con alguien inclinado sobre la cinta. Pasó, y por poco. Así que
+frenar la cinta y frenar el robot son la **misma orden**: la única razón para
+parar la cinta a mano es meter las manos.
+
+Qué hace al entrar:
+
+| | |
+|---|---|
+| La cinta se para | para que las piezas se queden quietas bajo la cámara |
+| La cola se vacía | esas piezas venían viajando y su posición se calcula desde el instante del cruce; con la cinta parada esa cuenta ya no vale |
+| Se ignoran las piezas nuevas | igual que en teach, en silencio y sin contarlas |
+| **No** se frena el brazo | si está a mitad de una maniobra la termina |
+
+Lo último es deliberado y es lo que obliga a mirar `rep` y no sólo `cal`:
+frenar el brazo en el aire con una pieza colgando de la ventosa es peor que
+dejarlo depositarla y volver a home. Lo que se corta es el arranque del ciclo
+**siguiente**, y el enclavamiento vive en `iniciarSiguientePieza()`, que es el
+único embudo por el que empieza una maniobra. Entre `CAL1` y `rep=1` puede
+pasar una maniobra entera, y ése es justo el rato en que uno cree que ya paró.
+
+`rep=1` quiere decir que el robot está en `WAIT_PIECE`, `IDLE` o `ERROR`: el
+brazo quieto, en home y con las manos vacías. **La interfaz no habilita nada
+que implique meter las manos hasta verlo.**
+
+Salir siempre se puede. Al salir, la cinta arranca sólo si el robot está
+calibrado y fuera de `ERROR`. Mientras dure la calibración, ni el fin de un
+homing ni la salida de teach arrancan la cinta: un `R` mal apretado no puede
+ser la forma de que se le mueva a alguien que tiene las manos adentro.
+
+La defensa del lado de la PC es independiente y **también hace falta**: la
+visión deja de emitir mensajes de pieza en cuanto se pide la calibración, sin
+esperar la confirmación. El firmware no puede confiar en eso —una PC vieja, un
+navegador que quedó abierto o un monitor serie a mano alcanzan para que llegue
+una pieza—, y la PC no puede confiar en el firmware —una placa sin reflashear
+no conoce `CAL1`—. Por eso están las dos.
+
 ### 1.3 Caja del modo Box
 
     X<c1><c2><c3><c4><c5><c6>    ej: XBRGRBG
@@ -134,13 +192,14 @@ espacios; sí pueden llevar comas.
 
 La interfaz **parsea** `[T]`, `[E]`, `[H]`, `[P]`, `[FALLO]`, `[FALLOS]`,
 `[PIEZA]`, `[TEACH]` y `[BOOT]`. Todo lo demás (`[GUARD]`, `[MODO]`,
-`[CAJA]`, `[SERIAL]`, `[EMERGENCIA]`, `[TAPA]`, `[COLA]`, `[TRAZA]`…) se
+`[CAJA]`, `[CAL]`, `[SERIAL]`, `[EMERGENCIA]`, `[TAPA]`, `[COLA]`,
+`[TRAZA]`…) se
 muestra tal cual en la consola de la interfaz. Una etiqueta desconocida
 **nunca** es un error: se trata como texto.
 
 ### 2.1 `[BOOT]` — al arrancar el firmware
 
-    [BOOT] proto=3 fw=2026-08-21 estados=17 params=55
+    [BOOT] proto=4 fw=2026-08-21 estados=17 params=55
 
 `proto` es la versión de este documento. Si no coincide con la que espera
 Python, la interfaz avisa en grande y no habilita los controles: un
@@ -196,6 +255,7 @@ la visualización más útil del tablero de diagnóstico.
 | `ob` | Guard en modo observador (mide y avisa pero no frena), 0/1 |
 | `sup` | Paradas por colisión habilitadas, 0/1 |
 | `cv` / `cvp` | Cinta en marcha (0/1) y su PWM en % |
+| `cal` / `rep` | Modo calibración de la visión (0/1) y si el brazo ya está quieto en home (0/1). Ver §1.2.1: **son dos cosas distintas** y sólo `rep=1` autoriza a meter las manos en la cinta |
 | `bx` | Disposición de la caja, 6 colores; `-` fuera del modo Box |
 | `bf` | Celdas llenas, 6 dígitos 0/1 |
 | `bc` | Celda reservada por la pieza en la mano (0 = ninguna) |
@@ -750,3 +810,122 @@ Si alguna vez se hace variable la velocidad de la cinta, el parámetro tiene
 que ser la **velocidad en cm/s** —y que el firmware derive el PWM de una
 tabla medida—, nunca el PWM suelto: un PWM que no se corresponde con la
 velocidad real deja la planificación mintiendo en silencio.
+
+---
+
+## 8. Calibración de la visión (pestaña de Visión)
+
+Nada de esta sección viaja por el puerto serie —los umbrales de la visión
+viven enteros del lado de la PC— salvo el modo calibración (§1.2.1). Está
+acá porque es la otra mitad de "el robot se mudó y dejó de andar", y porque
+tiene las mismas dos trampas que el resto del documento: valores escritos en
+dos lados y fallas que no dan síntoma.
+
+### 8.1 El problema
+
+El robot se muda de habitación, cambia la luz y los rangos HSV —elegidos
+midiendo bajo **otra** luz— dejan de contener a las piezas. El verde es el
+peor caso por dos motivos: su rango es el más angosto de los tres, y su modo
+de falla es total y silencioso. No detecta *peor*: no detecta **nada** (ya
+pasó, con 0 de 120 círculos; está medido en el comentario del `VERDE` de
+`vision_python/config.py`).
+
+### 8.2 Los umbrales se leen en el punto de uso
+
+`detection.py` y `camera.py` usan `config.X` y **no** `from config import X`.
+No es estilo: la segunda forma copia el número una sola vez al importar, así
+que con los sliders andando la pantalla se movería y la detección no. Eso
+falla en silencio y de la peor manera —el operador cree que ya probó un rango
+que nunca se aplicó—, y hay una prueba dedicada a eso
+(`test_aplicar_cambia_la_deteccion_sin_reiniciar`).
+
+La excepción es lo que se le pide al sensor al abrirlo (resolución, backend,
+FOURCC): eso no lo cambia ningún backend de Windows sin cerrar y reabrir el
+dispositivo, y se sigue leyendo una sola vez.
+
+### 8.3 Quién escribe qué
+
+| Archivo | Qué guarda |
+|---|---|
+| `vision_python/config.py` | Los valores **de fábrica**, con la medición que eligió cada uno escrita al lado. Es la referencia; no se toca desde la interfaz |
+| `pc/kuko/calibracion.py` | La tabla de lo que se puede mover, las habitaciones, la medición de color y el ajuste automático |
+| `pc/config/vision.json` | Las habitaciones guardadas. **Va al repositorio**, igual que las secuencias de teach: una calibración medida es trabajo hecho |
+
+`calibracion.py` toma una foto de `config.py` al importar, antes de que nadie
+escriba encima: es lo que hace que "de fábrica" siga existiendo después de
+aplicar tres habitaciones seguidas.
+
+### 8.4 La exposición no la aplica la interfaz
+
+`VideoCapture.set()` y `.read()` sobre el mismo dispositivo desde dos hilos
+cuelgan MSMF. La interfaz deja un **pedido** (`Vision.pedir_camara`) y el hilo
+de visión lo aplica entre dos fotogramas. Un pedido hecho con la cámara
+desenchufada no se descarta: espera a que vuelva a abrir.
+
+La corrección por software (`-10 %` deja el fotograma al 90 % del brillo que
+entregó la cámara) se aplica **dentro de `Camera.read()`**, o sea que el
+fotograma que se detecta y el que se muestra en pantalla son el mismo. No
+recupera un píxel quemado: uno que llegó a 255 perdió su color en el sensor y
+bajarle el brillo lo deja gris. Contra el quemado sirve la exposición manual
+o menos luz, no esto.
+
+### 8.5 Lo que se mide no pasa por la detección
+
+Cuando el verde se cae, la detección no informa un verde malo: informa **cero
+verdes**. O sea que justo cuando hace falta saber el color de la pieza, el
+camino normal no dice nada.
+
+`calibracion.muestrear()` encuentra las piezas por **saturación** —la cinta es
+gris (S 17-50 medido), las piezas son plástico de color— sin mirar los rangos
+configurados, mide el **núcleo erosionado** de cada una (el borde es una
+franja mezclada con la cinta, ni pieza ni fondo) y recién ahí informa si los
+rangos de hoy la agarran. Es lo que permite que la pantalla diga "hay un verde
+en H=80 y tu rango llega a 74" en vez de "no se detecta".
+
+El tono se promedia **circularmente**: una pieza roja tiene píxeles en H=178 y
+en H=2 a la vez, y la mediana aritmética de eso da 90, que es cian.
+
+### 8.5.1 Un color es UN rango
+
+`Rango` es un **arco** de tono (`h0` → `h1`, y `h0 > h1` quiere decir que da la
+vuelta por el 0) más una caja de S y V. El rojo vive en las dos puntas de la
+rueda, pero **no son dos colores**: se ve partido sólo porque `cv2.inRange()`
+no sabe que H=179 y H=0 son vecinos.
+
+Esa limitación se queda donde corresponde —`Rango.a_tramos()`, que es lo único
+que produce los dos sectores, y sólo al momento de escribir en `config`— y no
+sube hasta la pantalla. La primera versión de la pestaña sí la dejaba subir, y
+el resultado era que el rojo aparecía con dos cuadraditos de color y dos juegos
+de sliders: **dos rojos**, que no es una cosa que exista.
+
+Los dos sectores del rojo de fábrica tenían además pisos de S y V distintos
+(S≥50 en uno, S≥35 en el otro) sin ninguna razón medida: el sector de abajo era
+histórico y, según el propio comentario de `config.py`, «hoy no aporta píxeles
+nuevos». Al fusionarlos se conserva la caja del sector **más ancho**, que es el
+que contiene la pieza de verdad, así que el sector donde el rojo realmente vive
+(H 145-179) queda idéntico a como estaba.
+
+### 8.6 El ajuste automático
+
+Se frena la cinta, se pone un hexágono de cada color y se mide. La receta es
+la misma que se usó a mano para elegir los rangos de `config.py`: percentiles
+y no mínimos y máximos (una cola de tres píxeles no puede decidir un umbral),
+y margen distinto por canal, porque cada canal falla distinto. Los tres
+márgenes salen de comparar el rango elegido a mano contra la pieza que lo
+originó, y la cuenta está escrita en el código.
+
+Si no ve las tres piezas **no cambia nada** y dice cuál falta: una calibración
+a medias dejaría dos colores buenos y uno con el rango de otra sala, sin forma
+de saber cuál es cuál mirando la pantalla.
+
+### 8.7 Los presets de luz son un lugar, no un empujón
+
+Los tres botones (cálida / neutra / fría) parten **siempre de fábrica** y le
+corren el tono. Si partieran de lo que hay puesto, apretar dos veces el mismo
+botón correría el tono dos veces y alternar entre cálida y fría iría
+acumulando corrimientos hasta dejar los rangos en cualquier parte.
+
+Los corrimientos **no están medidos** contra las lámparas de la facultad: son
+la dirección correcta con una magnitud razonable, pensados como punto de
+partida para cuando el robot llega a una sala nueva. El que da el número bueno
+es el ajuste automático con las piezas delante.

@@ -242,7 +242,7 @@ def test_cada_nivel_tiene_contenido():
 def test_la_pagina_entera_se_renderiza():
     """Arma la página completa y la pide por HTTP, sin navegador.
 
-    Cubre las cuatro pestañas de una: cualquier excepción al construirlas o
+    Cubre las cinco pestañas de una: cualquier excepción al construirlas o
     al refrescarlas sale como error del pedido, no como un panel en blanco.
     """
 
@@ -270,6 +270,15 @@ def test_la_pagina_entera_se_renderiza():
         interfaz._refrescar_rendimiento()
         interfaz._refrescar_rendimiento()
 
+        # Y la de visión, que también está detrás de un gate por pestaña.
+        # Acá va SIN cámara (vision=None), que es como se arranca la
+        # interfaz con --sin-vision: tiene que dibujarse igual y decir que
+        # no hay con qué medir, en vez de reventar contra un objeto que no
+        # está. Lo que sí ve son los rangos configurados, que no dependen de
+        # que haya cámara.
+        interfaz.tab_activa = "Vision"
+        interfaz._refrescar_vision()
+
     respuesta = pagina.pedir(cuerpo)
 
     assert respuesta.status_code == 200
@@ -282,7 +291,9 @@ def test_la_pagina_entera_se_renderiza():
                   "Registro de fallos", "Cronologia de eventos",
                   "Se trabo, o mide mal el encoder",
                   "Camara", "Fotogramas por segundo",
-                  "fps, promedio de 5 min"):
+                  "fps, promedio de 5 min",
+                  "Esperado contra medido", "Memoria de luces",
+                  "Ajuste automatico", "Luz neutra", "Geometria"):
         assert texto in respuesta.text, f"no se renderizo {texto!r}"
 
     # El registro de fallos dibuja la fila con su diagnostico, no solo el

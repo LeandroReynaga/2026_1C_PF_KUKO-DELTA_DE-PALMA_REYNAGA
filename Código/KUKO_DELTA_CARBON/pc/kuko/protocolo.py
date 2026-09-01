@@ -29,7 +29,7 @@ from typing import Optional
 # Versión del contrato. El firmware la anuncia en su línea [BOOT] y el
 # núcleo compara: si no coinciden, la interfaz no habilita los controles.
 # Un protocolo desparejo hay que verlo ANTES de mover el brazo.
-VERSION_PROTOCOLO = 3
+VERSION_PROTOCOLO = 4
 
 
 # ==================================================================
@@ -221,6 +221,13 @@ class Proceso(Mensaje):
     paradas_activas: Optional[bool] = None
     cinta: Optional[bool] = None
     cinta_pwm: Optional[int] = None
+
+    #: Modo calibración de la visión: el robot no sale a buscar piezas.
+    #: `en_reposo` dice si el brazo YA terminó lo que tenía y está quieto en
+    #: home — entre pedir la calibración y eso puede pasar una maniobra
+    #: entera, y ése es justo el rato en que no se puede tocar la cinta.
+    calibrando: Optional[bool] = None
+    en_reposo: Optional[bool] = None
 
     # Caja del modo Box. `layout` son los 6 colores objetivo y `llenas` las
     # celdas ya ocupadas; ambos vacíos fuera del modo Box.
@@ -718,6 +725,8 @@ def parsear(linea: str) -> Mensaje:
             paradas_activas=_b(p, "sup"),
             cinta=_b(p, "cv"),
             cinta_pwm=_i(p, "cvp"),
+            calibrando=_b(p, "cal"),
+            en_reposo=_b(p, "rep"),
             layout="" if p.get("bx", "-") == "-" else p.get("bx", ""),
             llenas=_bits(p.get("bf", "")),
             celda_reservada=_i(p, "bc"),
@@ -954,6 +963,30 @@ def cmd_alternar_paradas() -> str:
 
 def cmd_alternar_traza() -> str:
     return "M\n"
+
+
+def cmd_calibracion(activa: bool) -> str:
+    """Entra o sale del modo calibración de la visión.
+
+    NO es sólo parar la cinta: para la cinta **y** el robot. Las dos cosas
+    van juntas porque la única razón para parar la cinta a mano es meter las
+    manos, y con la cinta quieta una pieza apoyada a mano cruza igual la
+    línea de detección —la cruza quien la apoya— y el brazo sale a buscarla.
+
+    Al entrar, el firmware vacía la cola e ignora las piezas nuevas, pero
+    **no frena un movimiento en curso**: dejar el brazo colgado en el aire
+    con una pieza en la ventosa es peor que dejarlo terminar. Por eso hay
+    que esperar a `Proceso.en_reposo` antes de tocar nada, y no alcanza con
+    `Proceso.calibrando`.
+    """
+
+    return "CAL1\n" if activa else "CAL0\n"
+
+
+def cmd_estado_calibracion() -> str:
+    """Pide la línea `[CAL]` sin cambiar nada."""
+
+    return "CAL?\n"
 
 
 def cmd_layout_caja(colores: str) -> str:

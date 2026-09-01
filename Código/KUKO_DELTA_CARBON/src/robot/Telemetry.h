@@ -81,6 +81,14 @@ struct TeleProceso
     bool     cinta;
     uint8_t  cintaPwm;       // %
 
+    // Modo calibracion de la vision: el robot no sale a buscar piezas y hay
+    // alguien con las manos sobre la cinta. `reposo` dice si el brazo ya
+    // termino lo que tenia y esta quieto en home -- entre el pedido y eso
+    // puede pasar una maniobra entera, y es justo el rato en que la
+    // interfaz NO puede decir que se puede tocar la cinta.
+    bool     calibrando;
+    bool     reposo;
+
     const char *layout;      // 6 colores, o NULL fuera del modo caja
     const bool *llenas;      // 6 celdas,  o NULL
     uint8_t     celdaReservada;

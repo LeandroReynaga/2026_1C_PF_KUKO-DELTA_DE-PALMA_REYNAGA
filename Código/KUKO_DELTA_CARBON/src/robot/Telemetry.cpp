@@ -4,7 +4,7 @@
 // formato de una linea de forma que rompa a la interfaz vieja: agregar un
 // campo al final NO rompe nada (el parser de Python ignora lo que no
 // conoce), pero renombrar o sacar uno si.
-static const uint8_t VERSION_PROTOCOLO = 3;
+static const uint8_t VERSION_PROTOCOLO = 4;
 
 // Fecha de compilacion como identificacion del firmware. No es un hash de
 // git, pero alcanza para lo que hace falta: darse cuenta de que la placa
@@ -245,6 +245,8 @@ void Telemetria::emitirProceso(const TeleProceso &d) const
     Serial.print(" sup=");      Serial.print(d.paradasActivas ? 1 : 0);
     Serial.print(" cv=");       Serial.print(d.cinta ? 1 : 0);
     Serial.print(" cvp=");      Serial.print(d.cintaPwm);
+    Serial.print(" cal=");      Serial.print(d.calibrando ? 1 : 0);
+    Serial.print(" rep=");      Serial.print(d.reposo ? 1 : 0);
 
     Serial.print(" bx=");
 

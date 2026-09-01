@@ -853,7 +853,7 @@ void Robot::procesarComando(char *cmd, uint8_t len)
 
         Serial.print("[SERIAL] comando invalido: '");
         Serial.print(cmd);
-        Serial.println("'. Validos: 'C', 'F', 'A', 'N', 'R', 'D', 'S', 'G' o 'Y,color,forma'");
+        Serial.println("'. Validos: 'C', 'F', 'A', 'N', 'R', 'D', 'S', 'G', 'CAL0'/'CAL1' o 'Y,color,forma'");
         return;
     }
 
@@ -873,6 +873,12 @@ void Robot::procesarComando(char *cmd, uint8_t len)
     // mensaje de la vision. Ninguna pieza empieza con letra, asi que
     // consumir todo lo que arranca con 'J' no le saca nada a nadie.
     if (procesarComandoTeach(cmd))
+    {
+        return;
+    }
+
+    // --- Modo calibracion de la vision ('CAL1', 'CAL0', 'CAL?') ---
+    if (procesarComandoCalibracion(cmd))
     {
         return;
     }
@@ -976,7 +982,7 @@ void Robot::procesarComando(char *cmd, uint8_t len)
     {
         Serial.print("[SERIAL] comando invalido: '");
         Serial.print(cmd);
-        Serial.println("'. Validos: 'C', 'F', 'A', 'N', 'R', 'D', 'S', 'G' o 'Y,color,forma'");
+        Serial.println("'. Validos: 'C', 'F', 'A', 'N', 'R', 'D', 'S', 'G', 'CAL0'/'CAL1' o 'Y,color,forma'");
         return;
     }
 
@@ -1062,11 +1068,19 @@ void Robot::procesarComando(char *cmd, uint8_t len)
         return;
     }
 
-    // En modo teach el brazo lo maneja el operador: encolar piezas que
-    // nadie va a ir a buscar solo llenaria la cola de posiciones vencidas.
-    // Se ignoran en silencio -- no son un fallo del robot ni una pieza
-    // perdida por no llegar a tiempo, asi que tampoco se cuentan.
-    if (state == TEACH || teachPedido)
+    // En modo teach el brazo lo maneja el operador, y en calibracion no lo
+    // maneja nadie: encolar piezas que nadie va a ir a buscar solo llenaria
+    // la cola de posiciones vencidas. Se ignoran en silencio -- no son un
+    // fallo del robot ni una pieza perdida por no llegar a tiempo, asi que
+    // tampoco se cuentan.
+    //
+    // Con `calibrando` esto es ademas la segunda defensa, detras del
+    // enclavamiento de `iniciarSiguientePieza()`: la interfaz ya deberia
+    // haber dejado de mandar piezas al entrar a calibracion, pero el
+    // firmware no puede confiar en eso. Una PC vieja, un navegador que se
+    // quedo abierto o un monitor serie a mano alcanzan para que llegue una,
+    // y del otro lado hay alguien con las manos sobre la cinta.
+    if (state == TEACH || teachPedido || calibrando)
     {
         return;
     }
@@ -1189,6 +1203,117 @@ void Robot::aplicarParametro(const char *nombre, float valor)
 }
 
 // ------------------------------------------------------------------
+// Modo calibracion ('CAL1' / 'CAL0' / 'CAL?').
+//
+// Existe para poder ajustar la vision: se paran la cinta Y el robot, se
+// apoyan piezas a mano bajo la camara y se mueven los umbrales de color
+// mirando como cambia la deteccion.
+//
+// Parar la cinta sola NO alcanzaba, y esa era la version anterior de esto:
+// una pieza apoyada a mano cruza la linea de deteccion igual --la cruza el
+// operador al apoyarla, no la cinta--, la vision la informa y el brazo sale
+// a buscarla con alguien inclinado sobre la cinta. Paso de verdad, y por
+// poco. Asi que frenar la cinta y frenar el robot son la MISMA orden: no se
+// pueden pedir por separado, porque la unica razon para parar la cinta a
+// mano es meter las manos.
+//
+// Que hace cada cosa al entrar:
+//
+//   la cinta se para       para que las piezas se queden quietas;
+//   la cola se vacia       las piezas que ya venian viajando ya no estan
+//                          donde dice la cola, y salir a buscarlas seria
+//                          ir a una posicion vieja;
+//   se ignoran las nuevas  ver el parser de piezas;
+//   NO se frena el brazo   si esta a mitad de una maniobra la termina. Un
+//                          brazo frenado en el aire con una pieza colgando
+//                          de la ventosa es peor que uno que deja la pieza
+//                          y vuelve a home. Lo que se corta es el arranque
+//                          del ciclo SIGUIENTE.
+//
+// De ahi que la interfaz tenga que mirar `rep=` (en reposo) y no solo
+// `cal=`: entre el pedido y el brazo quieto puede pasar una maniobra entera.
+bool Robot::procesarComandoCalibracion(const char *cmd)
+{
+    if (strncasecmp(cmd, "CAL", 3) != 0 || strchr(cmd, ',') != NULL)
+    {
+        return false;
+    }
+
+    const char sub = cmd[3];
+
+    // 'CAL' pelado, o algo mas largo que 'CALx': no es este comando. Se
+    // devuelve false y sigue el parser, que va a decir que es invalido.
+    if (sub == '\0' || cmd[4] != '\0')
+    {
+        return false;
+    }
+
+    if (sub == '?')
+    {
+        informarCalibracion();
+        return true;
+    }
+
+    if (sub == '1')
+    {
+        calibrando = true;
+
+        conveyor.stop();
+
+        // La cola se vacia ENTERA. Las piezas que estaban en ella venian
+        // viajando sobre la cinta y su posicion se calcula a partir del
+        // instante en que cruzaron la linea; con la cinta parada, esa cuenta
+        // deja de valer y lo que queda guardado son destinos inventados.
+        queueHead  = 0;
+        queueCount = 0;
+
+        informarCalibracion();
+
+        return true;
+    }
+
+    if (sub != '0')
+    {
+        return false;
+    }
+
+    calibrando = false;
+
+    // La cinta vuelve sola, con la misma condicion que el resto del
+    // firmware: sin homing o en ERROR no se arranca nada. SALIR de
+    // calibracion siempre se puede -- lo que no se puede es que salir
+    // ponga en marcha una celda que no esta lista.
+    if (state != ERROR && homed)
+    {
+        conveyor.setSpeedPercent(CONVEYOR_PWM);
+    }
+
+    informarCalibracion();
+
+    return true;
+}
+
+// El brazo esta quieto, en home y con las manos vacias. Es la condicion que
+// la interfaz espera antes de dejar meter las manos sobre la cinta, y por
+// eso mira el estado y no el movimiento: 'enPosicion()' es cierto tambien a
+// mitad de una maniobra, entre dos tramos.
+bool Robot::enReposo() const
+{
+    return (state == WAIT_PIECE || state == IDLE || state == ERROR);
+}
+
+void Robot::informarCalibracion()
+{
+    Serial.print("[CAL] ");
+    Serial.print(calibrando ? "on" : "off");
+    Serial.print(" rep=");
+    Serial.print(enReposo() ? 1 : 0);
+    Serial.print(" cinta=");
+    Serial.print(conveyor.getSpeed() > 0 ? 1 : 0);
+    Serial.print(" est=");
+    Serial.println(nombreEstado(state));
+}
+
 bool Robot::procesarComandoParametro(const char *cmd)
 {
     if (toupper(cmd[0]) != 'P')
@@ -1798,9 +1923,20 @@ void Robot::updateHoming()
         homed = true;
 
         // La cinta arranca recien con el robot ya calibrado: antes de eso
-        // no tendria sentido aceptar piezas.
+        // no tendria sentido aceptar piezas. Salvo que se este calibrando
+        // la vision: ahi hay alguien con las manos sobre la cinta, y un
+        // homing --que se puede pedir en cualquier momento con 'R'-- no
+        // puede ser la forma de que se le mueva sola.
         conveyor.begin();
-        conveyor.setSpeedPercent(CONVEYOR_PWM);
+
+        if (!calibrando)
+        {
+            conveyor.setSpeedPercent(CONVEYOR_PWM);
+        }
+        else
+        {
+            conveyor.stop();
+        }
 
         Serial.println("[HOMING] OK. Robot listo.");
         Serial.print("[MODO] ");
@@ -1982,6 +2118,17 @@ bool Robot::planificarPieza(const Piece &p)
 
 bool Robot::iniciarSiguientePieza()
 {
+    // EL ENCLAVAMIENTO de la calibracion, y esta aca y no en los cuatro
+    // lugares que llaman a esta funcion justamente para que no se pueda
+    // olvidar en uno: este es el unico embudo por el que empieza una
+    // maniobra. Devolver false hace que cada uno de esos cuatro lugares
+    // haga lo que ya sabe hacer cuando no hay pieza -- irse a home y
+    // esperar --, que es exactamente lo que se quiere.
+    if (calibrando)
+    {
+        return false;
+    }
+
     // Aca el robot no tiene ninguna pieza en la mano: es el momento seguro
     // para aplicar un cambio de modo pendiente, ANTES de decidir el tacho
     // de la proxima pieza.
@@ -2884,7 +3031,7 @@ void Robot::registrarParametros()
     // avanza la pieza entre que cruza la linea y que llega el mensaje.
     // Admite negativos a proposito (ver PROTOCOLO.md): si alguna vez la
     // correccion tuviera que ir para el otro lado, el rango ya lo permite.
-    params.registrar("vis_lat", &VISION_LATENCY_S, -0.20f, 1.00f, "s", NIVEL_OPERACION);
+    params.registrar("vis_lat", &VISION_LATENCY_S, -0.20f, 3.00f, "s", NIVEL_OPERACION);
 
     // --- Nivel 2: proceso (afinado del agarre y de la supervision) ---
     params.registrar("press_dz", &PRESS_DZ,    0.0f,   0.30f, "cm", NIVEL_PROCESO);
@@ -3130,6 +3277,9 @@ void Robot::emitirTelemetria(uint32_t ahora)
 
         d.cinta    = (pwm > 0);
         d.cintaPwm = (uint8_t)((pwm * 100) / 255);
+
+        d.calibrando = calibrando;
+        d.reposo     = enReposo();
 
         // La caja solo tiene sentido en el modo que la usa: fuera de ahi se
         // manda '-' para que la interfaz no dibuje una grilla que no
@@ -3482,7 +3632,14 @@ bool Robot::entrarTeach()
     if (!teachMover(x, y, z, TEACH_JOG_PCT))
     {
         Serial.println("[TEACH] err=ik");
-        conveyor.setSpeedPercent(CONVEYOR_PWM);
+
+        // Se deshace la parada de arriba, pero sin arrancar la cinta si
+        // hay una calibracion en curso.
+        if (!calibrando)
+        {
+            conveyor.setSpeedPercent(CONVEYOR_PWM);
+        }
+
         return false;
     }
 
@@ -3525,7 +3682,12 @@ void Robot::salirTeach()
     pumpOn = false;
     guard.silenciar((uint32_t)BLANQUEO_NEUMATICA_MS);
 
-    conveyor.setSpeedPercent(CONVEYOR_PWM);
+    // Igual que al terminar el homing: salir de teach no puede poner en
+    // marcha la cinta si lo que se esta haciendo es calibrar la vision.
+    if (!calibrando)
+    {
+        conveyor.setSpeedPercent(CONVEYOR_PWM);
+    }
 
     // Se vuelve por GO_HOME_IDLE y no directo a WAIT_PIECE: el brazo quedo
     // donde lo dejo el operador, y ese estado es justamente el que lo lleva

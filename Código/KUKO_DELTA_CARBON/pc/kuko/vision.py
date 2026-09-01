@@ -34,6 +34,7 @@ from line_crossing import LineCrossingDetector, draw_detection_line  # noqa: E40
 from tracker import CentroidTracker, TrackedObject                    # noqa: E402
 
 from . import ajustes
+from . import calibracion as cal
 from . import estado as est_mod
 from . import protocolo as pr
 from .estado import EstadoSistema
@@ -69,6 +70,14 @@ RETARDO_REAPERTURA_MAX_S = 20.0
 # que seguir diciendo "sigo sin imagen" o el historial no podria distinguir
 # una camara caida de un hilo de vision muerto.
 PERIODO_AVISO_S = 0.5
+
+# Cada cuanto se mide el color real de las piezas mientras la pestana de
+# Vision esta a la vista. Es una conversion a HSV y una busqueda de
+# contornos mas por medicion, o sea casi lo mismo que cuesta un fotograma
+# entero de deteccion: a cada fotograma seria pagar el doble para mirar un
+# numero que no cambia tan rapido. Con la cinta parada --que es como se
+# calibra-- dos por segundo sobra.
+PERIODO_MEDICION_S = 0.5
 
 
 def _dibujar(frame, track: TrackedObject, line_x: int) -> None:
@@ -137,6 +146,48 @@ class Vision:
         # para dar por perdida una camara que abrio pero nunca entrego nada.
         self._abierta_en = 0.0
 
+        # ---------------- Calibracion (pestana de Vision) --------------
+        # Todo lo de aca abajo esta APAGADO salvo con esa pestana a la
+        # vista: guardar una copia del fotograma y medirle el color a cada
+        # pieza cuesta casi tanto como detectarla, y con el robot
+        # produciendo no lo mira nadie.
+        self.medir = False
+
+        #: Modo calibracion: NO se le informa ninguna pieza al robot.
+        #:
+        #: Es la primera de las dos defensas contra el accidente que motivo
+        #: todo esto: con la cinta parada y alguien apoyando piezas a mano
+        #: para calibrar, cada pieza apoyada CRUZA la linea de deteccion --
+        #: la cruza la mano, no la cinta -- y el brazo salia a buscarla.
+        #:
+        #: La segunda defensa esta en el firmware (`calibrando`), y las dos
+        #: hacen falta: esta corta el mensaje en el origen, aquella protege
+        #: contra una PC vieja, un navegador que quedo abierto o alguien
+        #: mandando una pieza a mano por el monitor serie.
+        self.pausada = False
+
+        #: Ultimo fotograma SIN anotar. Tiene que ser sin anotar: sobre el
+        #: dibujado, el contorno verde y el texto blanco que se le pintan
+        #: encima entran a la medicion de color como si fueran la pieza.
+        self._crudo: Optional[object] = None
+
+        #: Lo ultimo que se midio de cada pieza a la vista, y cuando.
+        self.muestras: list = []
+        self.medido_en = 0.0
+        self._ultima_medicion = 0.0
+
+        #: Cambio de exposicion pedido desde la interfaz, todavia sin
+        #: aplicar. NO se aplica desde el hilo de la interfaz: `set()` y
+        #: `read()` sobre el mismo VideoCapture desde dos hilos cuelgan
+        #: MSMF. Lo toma el bucle entre dos fotogramas, que es el unico
+        #: momento en que nadie esta leyendo.
+        self._camara_pedida: Optional[tuple] = None
+        self.correccion_pct = 0.0
+
+        #: Ultimo error avisado por consola, para no repetirlo cada vuelta.
+        self._error_camara = ""
+        self._error_medicion = ""
+
     def arrancar(self) -> None:
         self._hilo = threading.Thread(target=self._correr, daemon=True, name="vision")
         self._hilo.start()
@@ -170,6 +221,91 @@ class Vision:
     @property
     def offset_recorte(self) -> int:
         return self._camara.offset_y if self._camara else self._offset_pedido
+
+    # ==================================================================
+    #  Calibracion: lo que usa la pestana de Vision
+    # ==================================================================
+    def fotograma_crudo(self):
+        """El ultimo fotograma sin anotar, o None.
+
+        Solo hay uno mientras `medir` este encendido: guardarlo cuesta una
+        copia por fotograma y con la pestana de Vision cerrada no lo mira
+        nadie.
+        """
+
+        with self._lock:
+            return None if self._crudo is None else self._crudo.copy()
+
+    def pedir_camara(self, automatica: bool, exposicion: float,
+                     correccion: float) -> None:
+        """Deja pedido un cambio de exposicion; lo aplica el hilo.
+
+        Es un PEDIDO y no una aplicacion directa a proposito: ver
+        `_camara_pedida` en el constructor. Se pisa el pedido anterior si
+        todavia no se aplico -- arrastrando un slider salen veinte pedidos
+        por segundo y el unico que importa es el ultimo.
+        """
+
+        self.correccion_pct = float(correccion)
+        self._camara_pedida = (bool(automatica), float(exposicion))
+
+    def _aplicar_camara(self) -> None:
+        camara = self._camara
+
+        if camara is None:
+            # SIN consumir el pedido: la interfaz puede haber movido la
+            # exposicion con la camara desenchufada, y ese ajuste tiene que
+            # sobrevivir hasta que vuelva a abrir.
+            return
+
+        # La correccion se reescribe siempre y no solo cuando cambia: vive
+        # en el objeto `Camera`, y una camara que se desenchufa y vuelve es
+        # un objeto NUEVO, que arranca sin ella.
+        camara.correccion_pct = self.correccion_pct
+
+        pedido, self._camara_pedida = self._camara_pedida, None
+
+        if pedido is None:
+            return
+
+        automatica, exposicion = pedido
+
+        try:
+            camara.aplicar_exposicion(automatica, exposicion)
+        except Exception as err:                      # noqa: BLE001
+            # Una camara que no acepta el modo de exposicion no es motivo
+            # para matar el hilo entero: se sigue con la que tenia y se
+            # avisa una vez.
+            if self._error_camara != str(err):
+                self._error_camara = str(err)
+                self.estado.consola.append(
+                    f"la camara rechazo la exposicion: {err}")
+
+    def _medir(self, frame) -> None:
+        """Mide el color real de las piezas del fotograma, cada tanto."""
+
+        ahora = time.monotonic()
+
+        if ahora - self._ultima_medicion < PERIODO_MEDICION_S:
+            return
+
+        self._ultima_medicion = ahora
+
+        try:
+            muestras = cal.muestrear(frame)
+        except Exception as err:                      # noqa: BLE001
+            # Una vez por racha y no una cada medio segundo: la pestana de
+            # Vision queda abierta, asi que un error que se repite llenaria
+            # la consola y taparia todo lo demas.
+            if self._error_medicion != str(err):
+                self._error_medicion = str(err)
+                self.estado.consola.append(f"no se pudo medir el color: {err}")
+
+            return
+
+        self._error_medicion = ""
+        self.muestras = muestras
+        self.medido_en = ahora
 
     # ==================================================================
     #  Bucle principal
@@ -259,6 +395,14 @@ class Vision:
         camara, self._camara = self._camara, None
         self.estado.camara_abierta = False
 
+        # Lo guardado deja de ser "lo que se ve": calibrar contra la ultima
+        # imagen de antes de que se cayera la camara es exactamente el modo
+        # de fallar que evita todo el resto de este archivo.
+        with self._lock:
+            self._crudo = None
+
+        self.muestras = []
+
         if camara is not None:
             try:
                 camara.release()
@@ -307,6 +451,10 @@ class Vision:
         anterior = time.perf_counter()
 
         while not self._parar.is_set():
+            # Entre dos fotogramas, que es el unico momento en que nadie
+            # esta leyendo el dispositivo (ver `pedir_camara`).
+            self._aplicar_camara()
+
             ok, frame = camara.read()
 
             if not ok:
@@ -345,12 +493,29 @@ class Vision:
             alto, ancho = frame.shape[:2]
             line_x = int(ancho * config.LINE_X_RATIO)
 
+            # La copia se toma ACA, antes de dibujar nada encima: el
+            # contorno y el texto que se le pintan a cada pieza son pixeles
+            # saturados y entrarian a la medicion de color como si fueran
+            # parte de la pieza.
+            if self.medir:
+                with self._lock:
+                    self._crudo = frame.copy()
+
+                self._medir(frame)
+
             detecciones, _ = detect_objects(frame)
             seguidas = tracker.update(detecciones)
 
             self._medir_cinta(seguidas, ancho, alto, line_x)
 
             for track in cruce.check_crossings(seguidas, line_x):
+                # El cruce se consume igual aunque no se informe: la marca
+                # `crossed_line` del tracker tiene que quedar puesta o al
+                # salir de calibracion se avisaria de golpe cada pieza que
+                # quedo del lado de alla de la linea.
+                if self.pausada:
+                    continue
+
                 _, y_cm = pixels_to_robot_cm(track.center, ancho, alto, line_x)
 
                 self.piezas_vistas += 1

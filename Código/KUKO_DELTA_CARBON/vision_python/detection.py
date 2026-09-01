@@ -8,26 +8,19 @@ from pathlib import Path          # TEMPORAL: solo para LOG_FORMAS
 import cv2
 import numpy as np
 
-from config import (
-    CIRCLE_CIRCULARITY_MIN,
-    COLOR_HSV_RANGES,
-    HEXAGON_CIRCULARITY_MAX,
-    HEXAGON_FILL_RATIO_MAX,
-    HEXAGON_FILL_RATIO_MIN,
-    LOG_FORMAS,
-    LOG_FORMAS_ARCHIVO,
-    MASK_SMOOTHING_KERNEL_SIZE,
-    MAX_CONTOUR_AREA,
-    MIN_CONTOUR_AREA,
-    MORPH_KERNEL_SIZE,
-    SHAPE_APPROX_EPSILON_RATIO,
-    SMOOTH_MASK_EDGES,
-    SQUARE_ASPECT_RATIO_MAX,
-    SQUARE_ASPECT_RATIO_MIN,
-    SPLIT_CLEANUP_KERNEL_SIZE,
-    WATERSHED_MIN_PEAK_DISTANCE,
-    WATERSHED_MIN_PEAK_HEIGHT,
-)
+import config
+
+# El MODULO, no los valores: `from config import X` copia el numero UNA VEZ
+# al importar, y despues de eso cambiarlo en config.py no cambia nada aca.
+# Eso alcanzaba mientras la unica forma de tocar un umbral era editar el
+# archivo y reiniciar el programa, pero la pestana de Vision los mueve con
+# la camara andando, y ahi la copia congelada es exactamente el bug: los
+# sliders se mueven, la deteccion no cambia y no hay nada en pantalla que
+# lo explique. Leyendo `config.X` en el punto de uso, escribir el atributo
+# del modulo se ve en el fotograma siguiente.
+#
+# El costo es una busqueda de atributo por uso, que al lado de un inRange
+# sobre 240.000 pixeles no se mide.
 
 
 @dataclass
@@ -51,7 +44,7 @@ def clean_mask(mask: np.ndarray) -> np.ndarray:
     """Elimina puntos pequeños y completa huecos en la máscara."""
 
     kernel = np.ones(
-        (MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE),
+        (config.MORPH_KERNEL_SIZE, config.MORPH_KERNEL_SIZE),
         dtype=np.uint8,
     )
 
@@ -67,7 +60,7 @@ def clean_mask(mask: np.ndarray) -> np.ndarray:
         kernel,
     )
 
-    if SMOOTH_MASK_EDGES:
+    if config.SMOOTH_MASK_EDGES:
         # Una superficie texturada/matte, con un rango HSV bien
         # ajustado, deja pixeles sueltos justo al filo del umbral
         # en el borde de la pieza ("festoneado"). Difuminar la
@@ -75,7 +68,7 @@ def clean_mask(mask: np.ndarray) -> np.ndarray:
         # sin cambiar la forma general de la pieza.
         blurred = cv2.GaussianBlur(
             mask,
-            (MASK_SMOOTHING_KERNEL_SIZE, MASK_SMOOTHING_KERNEL_SIZE),
+            (config.MASK_SMOOTHING_KERNEL_SIZE, config.MASK_SMOOTHING_KERNEL_SIZE),
             0,
         )
 
@@ -101,7 +94,7 @@ def create_color_masks(
 
     masks: dict[str, np.ndarray] = {}
 
-    for color, hsv_ranges in COLOR_HSV_RANGES.items():
+    for color, hsv_ranges in config.COLOR_HSV_RANGES.items():
         color_mask: np.ndarray | None = None
 
         # Un color puede estar partido en varios sectores del
@@ -159,7 +152,7 @@ def classify_shape(
 
     approximation = cv2.approxPolyDP(
         hull,
-        SHAPE_APPROX_EPSILON_RATIO * perimeter,
+        config.SHAPE_APPROX_EPSILON_RATIO * perimeter,
         True,
     )
 
@@ -176,9 +169,9 @@ def classify_shape(
             aspect_ratio = width / float(height)
 
             if (
-                SQUARE_ASPECT_RATIO_MIN
+                config.SQUARE_ASPECT_RATIO_MIN
                 <= aspect_ratio
-                <= SQUARE_ASPECT_RATIO_MAX
+                <= config.SQUARE_ASPECT_RATIO_MAX
             ):
                 return "CUADRADO", circularity
 
@@ -203,7 +196,7 @@ def classify_shape(
     #       quedan separados (0.965-0.992 contra 0.927-0.940): morderle un
     #       pedazo a un círculo le baja el área, pero no lo vuelve menos
     #       redondo en el resto del borde.
-    if vertices in (5, 6, 7) and circularity <= HEXAGON_CIRCULARITY_MAX:
+    if vertices in (5, 6, 7) and circularity <= config.HEXAGON_CIRCULARITY_MAX:
         _, enclosing_radius = cv2.minEnclosingCircle(hull)
 
         if enclosing_radius > 0:
@@ -212,9 +205,9 @@ def classify_shape(
             )
 
             if (
-                HEXAGON_FILL_RATIO_MIN
+                config.HEXAGON_FILL_RATIO_MIN
                 <= fill_ratio
-                <= HEXAGON_FILL_RATIO_MAX
+                <= config.HEXAGON_FILL_RATIO_MAX
             ):
                 return "HEXAGONO", circularity
 
@@ -222,7 +215,7 @@ def classify_shape(
     # Comprobación de círculo
     # ----------------------------
 
-    if circularity >= CIRCLE_CIRCULARITY_MIN:
+    if circularity >= config.CIRCLE_CIRCULARITY_MIN:
         return "CIRCULO", circularity
 
     return None, circularity
@@ -255,14 +248,14 @@ def _registrar_forma(color, contour, shape) -> None:
     circularity = (4.0 * pi * area) / (perimeter * perimeter)
 
     vertices = len(cv2.approxPolyDP(
-        hull, SHAPE_APPROX_EPSILON_RATIO * perimeter, True))
+        hull, config.SHAPE_APPROX_EPSILON_RATIO * perimeter, True))
 
     _, enclosing_radius = cv2.minEnclosingCircle(hull)
     fill_ratio = (area / (pi * enclosing_radius * enclosing_radius)
                   if enclosing_radius > 0 else 0.0)
 
     if _registro["archivo"] is None:
-        ruta = Path(__file__).resolve().parents[1] / LOG_FORMAS_ARCHIVO
+        ruta = Path(__file__).resolve().parents[1] / config.LOG_FORMAS_ARCHIVO
         nuevo = not ruta.exists()
 
         _registro["archivo"] = open(ruta, "a", encoding="utf-8")
@@ -356,7 +349,7 @@ def split_touching_blob(
     # comparar evita ese falso positivo.
     distance_rounded = np.round(distance).astype(np.int32)
 
-    kernel_size = 2 * WATERSHED_MIN_PEAK_DISTANCE + 1
+    kernel_size = 2 * config.WATERSHED_MIN_PEAK_DISTANCE + 1
 
     dilated_distance = cv2.dilate(
         distance_rounded.astype(np.float32),
@@ -365,7 +358,7 @@ def split_touching_blob(
 
     peaks = (
         (distance_rounded == dilated_distance)
-        & (distance_rounded > WATERSHED_MIN_PEAK_HEIGHT)
+        & (distance_rounded > config.WATERSHED_MIN_PEAK_HEIGHT)
     )
 
     sure_foreground = (
@@ -431,12 +424,12 @@ def split_touching_blob(
 
         # Limpieza del corte: borra lo que quede mas fino que el kernel sin
         # tocar la pieza, que es mas ancha. Ver SPLIT_CLEANUP_KERNEL_SIZE.
-        if SPLIT_CLEANUP_KERNEL_SIZE > 0:
+        if config.SPLIT_CLEANUP_KERNEL_SIZE > 0:
             piece_mask = cv2.morphologyEx(
                 piece_mask,
                 cv2.MORPH_OPEN,
                 np.ones(
-                    (SPLIT_CLEANUP_KERNEL_SIZE, SPLIT_CLEANUP_KERNEL_SIZE),
+                    (config.SPLIT_CLEANUP_KERNEL_SIZE, config.SPLIT_CLEANUP_KERNEL_SIZE),
                     dtype=np.uint8,
                 ),
             )
@@ -506,10 +499,10 @@ def detect_objects(
         for contour in contours:
             area = cv2.contourArea(contour)
 
-            if area < MIN_CONTOUR_AREA:
+            if area < config.MIN_CONTOUR_AREA:
                 continue
 
-            if area > MAX_CONTOUR_AREA:
+            if area > config.MAX_CONTOUR_AREA:
                 continue
 
             shape, circularity = classify_shape(contour)
@@ -517,7 +510,7 @@ def detect_objects(
             # TEMPORAL (ver LOG_FORMAS en config.py). Va ANTES del descarte
             # a proposito: la pieza que no clasifica es justamente la que
             # hay que medir.
-            if LOG_FORMAS:
+            if config.LOG_FORMAS:
                 _registrar_forma(color, contour, shape)
 
             if shape is None:

@@ -360,6 +360,8 @@ def test_comandos():
     assert pr.cmd_layout_caja("brgrbg") == "XBRGRBG\n"
     assert pr.cmd_parametro("vis_lat", 0.18) == "Pvis_lat=0.1800\n"
     assert pr.cmd_telemetria(True) == "V1\n"
+    assert pr.cmd_calibracion(True) == "CAL1\n"
+    assert pr.cmd_calibracion(False) == "CAL0\n"
 
     # Un valor chico no puede irse a notación científica: el strtof del
     # firmware no la interpreta y leería 1 en vez de 0,0001. Se mira sólo

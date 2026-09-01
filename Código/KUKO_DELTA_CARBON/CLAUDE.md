@@ -320,8 +320,9 @@ actualmente pero están vacíos.
   dueño del puerto, `vision.py` el de la cámara y `ui.py` la interfaz
   NiceGUI (`pc/kuko_app.py` levanta las tres). `cinematica.py` es la
   cinemática directa e inversa del lado de Python, `teach.py` la
-  biblioteca de secuencias grabadas y `rendimiento.py` la historia de la
-  corrida (ver abajo).
+  biblioteca de secuencias grabadas, `rendimiento.py` la historia de la
+  corrida y `calibracion.py` los umbrales de la visión (ver abajo los dos
+  últimos).
 - Las pruebas se corren con `pc\.venv\Scripts\python -m pytest pc/tests`, o
   archivo por archivo (`python pc/tests/test_teach.py`). **Todas las que
   arman una página comparten un solo servidor** (`pc/tests/pagina.py`):
@@ -374,8 +375,89 @@ actualmente pero están vacíos.
   cortas repartidas en una hora dan la misma torta que una sola de quince
   minutos. Los otros siete gráficos son ECharts, que NiceGUI trae adentro
   (no sale a buscar nada a internet: la PC de la celda puede no tener red).
-  Es la única pestaña con scroll, y sólo se redibuja con la pestaña a la
-  vista.
+  Sólo se redibuja con la pestaña a la vista. Tiene scroll, igual que la
+  columna derecha de la de Visión; las de operación y teach entran enteras
+  en la ventana a propósito, porque se miran de reojo con el robot andando.
+- **Pestaña de Visión** (`pc/kuko/calibracion.py` y los métodos `_vis_*` de
+  `ui.py`, más `PROTOCOLO.md` §8). Existe por un problema concreto: el robot
+  se muda de habitación, cambia la luz y los rangos HSV —elegidos midiendo
+  bajo **otra** luz— dejan de contener a las piezas. El verde es el peor
+  caso, y su modo de falla es total y silencioso: no detecta peor, no
+  detecta **nada** (ya pasó, 0 de 120 círculos, medido en el comentario del
+  `VERDE` de `vision_python/config.py`).
+
+  Seis decisiones que conviene entender antes de tocarlo, y la primera es
+  la única de todo este repositorio que puede lastimar a alguien:
+
+  - **Calibrar frena el robot, no sólo la cinta** (`CAL1`/`CAL0`,
+    `PROTOCOLO.md` §1.2.1). Parar la cinta no alcanza: una pieza apoyada a
+    mano cruza la línea de detección igual —la cruza quien la apoya—, la
+    visión la informa y el brazo sale a buscarla con alguien inclinado sobre
+    la cinta. **Pasó, y por poco.** El enclavamiento está en
+    `Robot::iniciarSiguientePieza()`, que es el único embudo por el que
+    arranca una maniobra, y **no** frena un movimiento en curso: dejar el
+    brazo colgado en el aire con una pieza en la ventosa es peor que dejarlo
+    terminar. Por eso hay dos datos y no uno —`cal` (se pidió) y `rep` (el
+    brazo ya está quieto en home)— y el cartel de la pestaña sólo se pone en
+    verde con el segundo. Del lado de la PC, la visión deja de emitir
+    mensajes de pieza en cuanto se pide la calibración; las dos defensas
+    hacen falta, porque el firmware no puede confiar en una PC que puede
+    estar vieja y la PC no puede confiar en una placa que puede no estar
+    reflasheada.
+  - **Un color es UN rango**, con el arco de tono pudiendo dar la vuelta
+    (`h0 > h1`). El rojo vive en las dos puntas de la rueda y eso **no** son
+    dos colores: se ve partido sólo porque `cv2.inRange()` no sabe que H=179
+    y H=0 son vecinos. Esa limitación vive en `Rango.a_tramos()` y no sube
+    hasta la pantalla —la primera versión la dejaba subir y el rojo aparecía
+    con dos cuadraditos y dos juegos de sliders, o sea "dos rojos".
+  - **`detection.py` y `camera.py` leen `config.X` en el punto de uso**, no
+    `from config import X`. No es estilo: la segunda forma copia el número
+    una sola vez al importar, así que con los sliders andando la pantalla se
+    movería y la detección no —y eso falla en silencio, con el operador
+    creyendo que ya probó un rango que nunca se aplicó. Lo que se le pide al
+    sensor al abrirlo (resolución, backend, FOURCC) sí se sigue leyendo una
+    sola vez: ningún backend de Windows lo cambia sin reabrir el
+    dispositivo.
+  - **Lo que se mide no pasa por la detección.** Cuando el verde se cae, la
+    detección informa cero verdes, o sea que justo cuando hace falta saber
+    el color de la pieza, el camino normal no dice nada.
+    `calibracion.muestrear()` encuentra las piezas por **saturación** —la
+    cinta es gris, las piezas son plástico de color— sin mirar los rangos
+    configurados, y mide el **núcleo erosionado** de cada una; el borde es
+    una franja mezclada con la cinta, ni pieza ni fondo. Eso es lo que
+    permite que la pantalla diga «hay un verde en H=80 y tu rango llega a
+    74». El tono se promedia **circularmente**: un rojo tiene píxeles en
+    H=178 y en H=2, y la mediana aritmética de eso da cian.
+  - **La interfaz no toca el `VideoCapture`.** `set()` y `read()` sobre el
+    mismo dispositivo desde dos hilos cuelgan MSMF, así que la exposición
+    viaja como pedido y la aplica el hilo de visión entre dos fotogramas. La
+    corrección por software se aplica dentro de `Camera.read()`, o sea que
+    el fotograma que se detecta y el que se muestra son el mismo.
+  - **Los presets de luz parten siempre de fábrica**, nunca de lo que hay
+    puesto: si no, apretar dos veces el mismo botón correría el tono dos
+    veces. Sus corrimientos **no están medidos** contra las lámparas de la
+    facultad —son la dirección correcta con una magnitud razonable—; el que
+    da el número bueno es el ajuste automático con las piezas delante.
+  - **El ajuste automático no calibra a medias.** Si no ve las tres piezas
+    no cambia nada y dice cuál falta: dejar dos colores buenos y uno con el
+    rango de otra sala no se puede distinguir mirando la pantalla.
+
+  Las habitaciones ("Pieza", "Aula facultad") viven en `pc/config/vision.json`
+  y **sí** van al repositorio, igual que las secuencias de teach: una
+  calibración medida es trabajo hecho. Lo que no va es el puerto COM ni el
+  encuadre de la cámara (`local.json`), que son distintos en cada PC a
+  propósito.
+
+  `pc/tests/test_vision.py` prueba todo esto sin cámara y sin robot, sobre
+  escenas sintéticas (una cinta gris y tres hexágonos): que mover un umbral
+  cambie lo que detecta el detector, que se mida una pieza que la detección
+  **no** ve, que el ajuste automático recupere una escena corrida, que el
+  rojo siga siendo un solo color dando la vuelta, y que el cartel no se
+  ponga en verde hasta que el brazo esté de verdad quieto.
+
+  `CAL0`/`CAL1` **no tocan `cinta_pwm`**: bajar ese parámetro a cero dejaría
+  la cinta parada para siempre, porque el firmware sólo reaplica el PWM si la
+  cinta ya está andando.
 - Las pestañas de proceso y servicio son una lista de ajustes estilo menú de
   opciones, armada **recorriendo lo que contesta `P?`** — no hay ninguna
   lista de parámetros del lado de Python. `pc/kuko/parametros.py` sólo
