@@ -786,7 +786,7 @@ def _grafico_produccion(serie: list) -> dict:
 
     return {
         "tooltip": dict(_TOOLTIP, trigger="axis"),
-        "legend": dict(_LEYENDA, data=["Detectadas", "Depositadas", "Sin agarrar"]),
+        "legend": dict(_LEYENDA, data=["Detectadas", "Depositadas", "Sin alcanzar"]),
         "grid": {"left": 4, "right": 12, "top": 26, "bottom": 2,
                  "containLabel": True},
         "xAxis": _eje(tipo="time"),
@@ -794,7 +794,7 @@ def _grafico_produccion(serie: list) -> dict:
         "series": [
             curva("Detectadas", "detectadas", APAGADO, False),
             curva("Depositadas", "depositadas", CELESTE, True),
-            curva("Sin agarrar", "descartadas", ROJO_STOP, True),
+            curva("Sin alcanzar", "descartadas", ROJO_STOP, True),
         ],
     }
 
@@ -3705,9 +3705,13 @@ class Interfaz:
 
         bomba = bool(est.t and est.t.bomba)
 
+        # Apagado se ve como Subir y Bajar --fondo inactivo, letra blanca--
+        # y no en gris: el gris de `APAGADO` es el mismo que usa la interfaz
+        # para un control deshabilitado, asi que el boton parecia no estar
+        # disponible cuando en realidad estaba esperando que lo apreten.
         self.boton_bomba.style(
             f'background:{CELESTE if bomba else INACTIVO}!important;'
-            f'color:{"#0B1220" if bomba else APAGADO}!important')
+            f'color:{"#0B1220" if bomba else TEXTO}!important')
         self.boton_bomba.set_enabled(en_teach and not ocupado)
 
         for boton in (self.boton_z_sube, self.boton_z_baja):

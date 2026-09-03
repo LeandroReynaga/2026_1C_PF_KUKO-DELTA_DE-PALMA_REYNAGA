@@ -377,7 +377,15 @@ static float MAX_COLISIONES_SEGUIDAS = 3;
 // Ademas, el tramo de bajada TOCA la pieza a proposito (y la comprime, ver
 // PRESS_DZ): ahi hay una perturbacion mecanica real y esperada, que no es
 // una colision. Esta ventana cubre las dos cosas.
-static float BLANQUEO_NEUMATICA_MS = 300;
+//
+// De fabrica en 0 desde que se rehizo el conexionado de la bomba: el riel
+// ya no se hunde al conmutarla, asi que las tres lecturas no se corren y no
+// hay nada que tapar. Y silenciar de menos es mejor que silenciar de mas --
+// cada milisegundo de blanqueo es un milisegundo en que una colision de
+// verdad no se ve. Si alguna vez se vuelve a tocar la alimentacion de la
+// neumatica y reaparecen los saltos, este es el numero a subir (el guard
+// imprime cuanto salto cada eje al conmutar, que es con lo que se elige).
+static float BLANQUEO_NEUMATICA_MS = 0;
 
 // Cada cuanto se vuelca la linea [GUARD] con los numeros de la supervision.
 //
@@ -496,7 +504,13 @@ static float TEACH_ESQUINA_DEG = 30.0f;
 // obstaculo que causo la colision sigue ahi): se corta todo, se para la
 // cinta y se espera intervencion manual. Sin esto, un brazo trabado deja
 // al robot empujando contra el obstaculo para siempre.
-static float HOMING_TIMEOUT_MS = 20000;
+//
+// Bajado de 20 s a 10 s: el homing normal tarda unos 5 s en llegar a los
+// tres finales, asi que 10 s ya son el doble de lo que hace falta y siguen
+// siendo margen de sobra contra un arranque lento. Lo que se gana es que un
+// eje trabado se detecta a la mitad de tiempo, y ese rato el brazo lo pasa
+// empujando contra lo que sea que lo detuvo.
+static float HOMING_TIMEOUT_MS = 10000;
 
 namespace {
 

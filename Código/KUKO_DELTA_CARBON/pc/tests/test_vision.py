@@ -956,8 +956,19 @@ def test_el_ajuste_automatico_desde_la_pantalla_frena_la_cinta_y_calibra():
         vision.muestras = cal.muestrear(frame)
 
         enviados: list[str] = []
-        interfaz = interfaz_ui.Interfaz(_estado_con_cinta(True),
-                                        enviados.append, vision)
+
+        # Sin habitacion guardada: `Interfaz` aplica la activa al arrancar,
+        # asi que con el vision.json de la maquina la escena "corrida" ya
+        # podria detectarse y la prueba no probaria nada.
+        real, cal.ARCHIVO = cal.ARCHIVO, Path(tempfile.mkdtemp()) / "vision.json"
+
+        try:
+            interfaz = interfaz_ui.Interfaz(_estado_con_cinta(True),
+                                            enviados.append, vision)
+        finally:
+            cal.ARCHIVO = real
+
+        cal.aplicar(cal.de_fabrica())
 
         def cuerpo():
             interfaz.construir()

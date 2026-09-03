@@ -158,8 +158,11 @@ private:
     // el momento: se guarda como pendiente y se aplica recien cuando el
     // robot no tiene ninguna pieza en la mano, para no cambiarle el destino
     // a una pieza que ya esta en vuelo.
-    SortMode sortMode        = SORT_BOX;
-    SortMode pendingSortMode = SORT_BOX;
+    // Arranca clasificando POR COLOR: es el modo que no necesita que haya
+    // una caja puesta ni que nadie confirme una tapa, o sea el unico que
+    // puede empezar a trabajar solo despues de un homing.
+    SortMode sortMode        = SORT_BY_COLOR;
+    SortMode pendingSortMode = SORT_BY_COLOR;
     bool     sortModePending = false;
 
     void aplicarModoPendiente();
