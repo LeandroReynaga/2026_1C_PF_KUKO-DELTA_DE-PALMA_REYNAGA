@@ -4,19 +4,29 @@ Hojas de datos de los componentes principales del KUKO Delta Carbon.
 
 | Componente | Archivo esperado | Dato que interesa |
 | :--- | :--- | :--- |
-| ESP32 NodeMCU-32S | `esp32-nodemcu-32s.pdf` | Pines con ADC, canales PWM, timers de hardware |
+| ESP32 NodeMCU-32S | `nodemcu-32s.pdf` | Pines con ADC, canales PWM, timers de hardware |
 | Driver DM556 | `dm556.pdf` | Tabla de microstepping y de corriente (DIP switches) |
 | Motor NEMA 23 | `nema23.pdf` | Par, corriente por fase, inercia del rotor |
 | Encoder AS5600 | `as5600.pdf` | Salida analógica, resolución, alimentación ratiométrica |
 | Bomba de vacío | `bomba-vacio.pdf` | Consumo y caudal |
-| Cámara USB | `camara-usb.pdf` | Modos de captura soportados (MJPG vs. YUY2) |
+| Electroválvula | `electrovalvula.pdf` | Alimentación, acción directa, rango de presiones|
+| Cámara USB | `camara-usb.pdf` | Resolución, modos de captura |
+| Driver DRV8833 | `dvr8833.pdf` | Pinout, corriente máxima |
+| Motorreductor 60RPM | `motorreductor.pdf` | Torque a tensión nominal, rpm |
+| Switch Final de Carrera | `final-de-carrera.pdf` | Dimensiones, NO y NC|
 
-> **Por qué importan dos de estas en particular**
->
-> - El **AS5600** tiene salida **ratiométrica a su VCC**: una caída del riel de
->   alimentación corre las tres lecturas de ángulo a la vez sin que el robot se mueva.
->   Ese comportamiento es la razón de los 300 ms de blanqueo al conmutar la bomba.
-> - La **cámara** solo llega a 30 fps a 720p si negocia **MJPG**; sin compresión el
->   video no entra en el ancho de banda de USB 2.0 y el driver baja a 10 fps.
+
+> **Los aspectos más importantes**
+
+> - La **placa ESP32** debe tener suficiente capacidad de procesamiento y cantidad de pines para todos los componentes del robot.
+
+> - La selección del modelo de **motores paso a paso** es fundamental para garantizar **torque sostenido a altas RPM** ya que una caída
+>   del torque genera pérdida de pasos.
+
+> - El **circuito neumático** debe ser capaz de generar vacío y liberar el sistema **a alta velocidad**.
+
+> - La **cámara** debe tener suficiente resolución y contraste.
+
+> - La **cinta transportadora** no debe trabarse durante el funcionamiento.
 
 Nombres de archivo sin espacios, sin acentos y en minúscula.
