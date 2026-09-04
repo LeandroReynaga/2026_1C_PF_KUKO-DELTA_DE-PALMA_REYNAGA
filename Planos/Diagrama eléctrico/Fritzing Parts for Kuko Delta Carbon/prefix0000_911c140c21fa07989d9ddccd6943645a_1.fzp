@@ -1,0 +1,207 @@
+<?xml version='1.0' encoding='UTF-8' standalone='no'?>
+<module referenceFile="prefix0000_911c140c21fa07989d9ddccd6943645a_1.fzp" moduleId="prefix0000_911c140c21fa07989d9ddccd6943645a_1" fritzingVersion="0.9.10">
+  <version>5</version>
+  <date>Sat Sep 9 2017</date>
+  <author>Peter Van Epp (vanepp in forums)</author>
+  <description>&lt;!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0//EN" "http://www.w3.org/TR/REC-html40/strict.dtd"&gt;
+&lt;html&gt;&lt;head&gt;&lt;meta name="qrichtext" content="1" /&gt;&lt;style type="text/css"&gt;
+p, li { white-space: pre-wrap; }
+&lt;/style&gt;&lt;/head&gt;&lt;body style=" font-family:'MS Shell Dlg 2'; font-size:8.25pt; font-weight:400; font-style:normal;"&gt;
+&lt;p style=" margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;"&gt;&lt;span style=" font-size:10pt;"&gt;DM860A  is a type of two-phase hybrid stepping motor driver, The drive voltage of which is from 24VDC to 80VDC. It is designed for use with 2-phase hybrid stepper motor of all kinds with 57mm to 110mm outside diameter and less than 8.0A phase current. Mar 2023: Correct pcb layerId as the part won't save correctly in a .fzz file as is.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</description>
+  <title>DM860A Stepper Motor Driver</title>
+  <url>http://www.longs-motor.com/productinfo/detail_12_80_137.aspx</url>
+  <tags>
+    <tag>fritzing user</tag>
+    <tag>Motor Driver</tag>
+    <tag>stepper driver</tag>
+    <tag>DM860A</tag>
+    <tag>contrib</tag>
+  </tags>
+  <properties>
+    <property name="layer"/>
+    <property name="part number"/>
+    <property name="family">motor driver</property>
+    <property name="variant">variant 4</property>
+  </properties>
+  <views>
+    <breadboardView>
+      <layers image="breadboard/prefix0000_911c140c21fa07989d9ddccd6943645a_1_breadboard.svg">
+        <layer layerId="breadboard"/>
+      </layers>
+    </breadboardView>
+    <schematicView>
+      <layers image="schematic/prefix0000_911c140c21fa07989d9ddccd6943645a_1_schematic.svg">
+        <layer layerId="schematic"/>
+      </layers>
+    </schematicView>
+    <pcbView>
+      <layers image="breadboard/prefix0000_911c140c21fa07989d9ddccd6943645a_1_breadboard.svg">
+        <layer layerId="breadboard"/>
+      </layers>
+    </pcbView>
+    <iconView>
+      <layers image="breadboard/prefix0000_911c140c21fa07989d9ddccd6943645a_1_breadboard.svg">
+        <layer layerId="icon"/>
+      </layers>
+    </iconView>
+  </views>
+  <connectors>
+    <connector id="connector0" name="B-" type="male">
+      <description>B- Motor Output</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector0pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector0terminal" svgId="connector0pin"/>
+        </schematicView>
+        <pcbView>
+    </pcbView>
+      </views>
+    </connector>
+    <connector id="connector1" name="B+" type="male">
+      <description>B+ Motor Output</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector1pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector1terminal" svgId="connector1pin"/>
+        </schematicView>
+        <pcbView>
+    </pcbView>
+      </views>
+    </connector>
+    <connector id="connector2" name="A-" type="male">
+      <description>A- Motor Output</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector2pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector2terminal" svgId="connector2pin"/>
+        </schematicView>
+        <pcbView>
+    </pcbView>
+      </views>
+    </connector>
+    <connector id="connector3" name="A+" type="male">
+      <description>A+ Motor Output</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector3pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector3terminal" svgId="connector3pin"/>
+        </schematicView>
+        <pcbView>
+        </pcbView>
+      </views>
+    </connector>
+    <connector id="connector4" name="VDC" type="male">
+      <description>VDC + Power Input</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector4pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector4terminal" svgId="connector4pin"/>
+        </schematicView>
+        <pcbView>
+    </pcbView>
+      </views>
+    </connector>
+    <connector id="connector5" name="GND" type="male">
+      <description>GND Power Ground</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector5pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector5terminal" svgId="connector5pin"/>
+        </schematicView>
+        <pcbView>
+    </pcbView>
+      </views>
+    </connector>
+    <connector id="connector6" name="ENBL-(ENB)" type="male">
+      <description>ENBL-(ENB)</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector6pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector6terminal" svgId="connector6pin"/>
+        </schematicView>
+        <pcbView>
+    </pcbView>
+      </views>
+    </connector>
+    <connector id="connector7" name="ENBL+(+5V)" type="male">
+      <description>ENBL+(+5V)</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector7pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector7terminal" svgId="connector7pin"/>
+        </schematicView>
+        <pcbView>
+    </pcbView>
+      </views>
+    </connector>
+    <connector id="connector8" name="DIR-(DIR)" type="male">
+      <description>DIR-(DIR)</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector8pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector8terminal" svgId="connector8pin"/>
+        </schematicView>
+        <pcbView>
+    </pcbView>
+      </views>
+    </connector>
+    <connector id="connector9" name="DIR+(+5V)" type="male">
+      <description>DIR+(+5V)</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector9pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector9terminal" svgId="connector9pin"/>
+        </schematicView>
+        <pcbView>
+    </pcbView>
+      </views>
+    </connector>
+    <connector id="connector10" name="PUL-(PUL)" type="male">
+      <description>PUL-(PUL)</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector10pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector10terminal" svgId="connector10pin"/>
+        </schematicView>
+        <pcbView>
+    </pcbView>
+      </views>
+    </connector>
+    <connector id="connector11" name="PUL+(+5V)" type="male">
+      <description>PUL+(+5V)</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector11pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector11terminal" svgId="connector11pin"/>
+        </schematicView>
+        <pcbView>
+    </pcbView>
+      </views>
+    </connector>
+  </connectors>
+  <label>A</label>
+</module>

@@ -1,0 +1,119 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<module referenceFile="USB connector.fzp" fritzingVersion="0.2.1.b.03.03.2541" moduleId="boost Convertor_ec0cbe044c53152313ae8b82c11c6aad_2">
+ <version>4</version>
+ <author>Learnayg</author>
+ <title>Boost Convertor</title>
+ <label>Boost Convertor</label>
+ <date>Thu Jun 17 2021</date>
+ <tags>
+  <tag>6009</tag>
+  <tag>XL6009E1</tag>
+  <tag>boost convertor</tag>
+ </tags>
+ <properties>
+  <property name="variant">variant 3</property>
+  <property name="family">regulator</property>
+  <property name="package">THT</property>
+  <property name="layer"></property>
+  <property name="part number">XL6009E1</property>
+ </properties>
+ <description>&lt;!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0//EN" "http://www.w3.org/TR/REC-html40/strict.dtd">
+&lt;html>&lt;head>&lt;meta name="qrichtext" content="1" />&lt;style type="text/css">
+p, li { white-space: pre-wrap; }
+&lt;/style>&lt;/head>&lt;body style=" font-family:'MS Shell Dlg 2'; font-size:8.25pt; font-weight:400; font-style:normal;">
+&lt;p style=" margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;">DC to DC boost convertor&lt;/p>&lt;/body>&lt;/html></description>
+ <views>
+  <schematicView>
+   <layers image="schematic/boost Convertor_ec0cbe044c53152313ae8b82c11c6aad_6_schematic.svg">
+    <layer layerId="schematic"/>
+   </layers>
+  </schematicView>
+  <breadboardView>
+   <layers image="breadboard/boost Convertor_ec0cbe044c53152313ae8b82c11c6aad_6_breadboard.svg">
+    <layer layerId="breadboard"/>
+   </layers>
+  </breadboardView>
+  <pcbView>
+   <layers image="pcb/boost Convertor_ec0cbe044c53152313ae8b82c11c6aad_6_pcb.svg">
+    <layer layerId="copper0"/>
+    <layer layerId="silkscreen"/>
+    <layer layerId="copper1"/>
+   </layers>
+  </pcbView>
+  <iconView>
+   <layers image="icon/boost Convertor_ec0cbe044c53152313ae8b82c11c6aad_6_icon.svg">
+    <layer layerId="icon"/>
+   </layers>
+  </iconView>
+ </views>
+ <connectors>
+  <connector name="Negative Input" id="connector0" type="pad">
+   <description>Negative Input</description>
+   <views>
+    <breadboardView>
+     <p terminalId="connector0terminal" svgId="connector0pin" layer="breadboard"/>
+    </breadboardView>
+    <schematicView>
+     <p terminalId="connector0terminal" svgId="connector0pin" layer="schematic"/>
+    </schematicView>
+    <pcbView>
+     <p svgId="connector0pin" layer="copper0"/>
+     <p svgId="connector0pin" layer="copper1"/>
+    </pcbView>
+   </views>
+  </connector>
+  <connector name="Positive Input" id="connector1" type="pad">
+   <description>Positive Input</description>
+   <views>
+    <breadboardView>
+     <p terminalId="connector1terminal" svgId="connector1pin" layer="breadboard"/>
+    </breadboardView>
+    <schematicView>
+     <p terminalId="connector1terminal" svgId="connector1pin" layer="schematic"/>
+    </schematicView>
+    <pcbView>
+     <p svgId="connector1pin" layer="copper0"/>
+     <p svgId="connector1pin" layer="copper1"/>
+    </pcbView>
+   </views>
+  </connector>
+  <connector name="Negative Output" id="connector2" type="pad">
+   <description>Negative Output</description>
+   <views>
+    <breadboardView>
+     <p terminalId="connector2terminal" svgId="connector2pin" layer="breadboard"/>
+    </breadboardView>
+    <schematicView>
+     <p terminalId="connector2terminal" svgId="connector2pin" layer="schematic"/>
+    </schematicView>
+    <pcbView>
+     <p svgId="connector2pin" layer="copper0"/>
+     <p svgId="connector2pin" layer="copper1"/>
+    </pcbView>
+   </views>
+  </connector>
+  <connector name="Positive Output" id="connector3" type="pad">
+   <description>Positive Output</description>
+   <views>
+    <breadboardView>
+     <p terminalId="connector3terminal" svgId="connector3pin" layer="breadboard"/>
+    </breadboardView>
+    <schematicView>
+     <p terminalId="connector3terminal" svgId="connector3pin" layer="schematic"/>
+    </schematicView>
+    <pcbView>
+     <p svgId="connector3pin" layer="copper0"/>
+     <p svgId="connector3pin" layer="copper1"/>
+    </pcbView>
+   </views>
+  </connector>
+ </connectors>
+ <buses>
+  <bus id="chassis">
+   <nodeMember connectorId="connector3"/>
+   <nodeMember connectorId="connector4"/>
+   <nodeMember connectorId="connector5"/>
+  </bus>
+  <bus id="internal1"/>
+ </buses>
+</module>

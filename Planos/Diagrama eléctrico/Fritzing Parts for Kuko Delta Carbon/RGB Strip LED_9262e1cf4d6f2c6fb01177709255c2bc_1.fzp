@@ -1,0 +1,196 @@
+<?xml version='1.0' encoding='UTF-8' standalone='no'?>
+<module referenceFile="RGB Strip LED_9262e1cf4d6f2c6fb01177709255c2bc_1.fzp" moduleId="RGB Strip LED_9262e1cf4d6f2c6fb01177709255c2bc_1" fritzingVersion="0.9.9">
+  <version>1</version>
+  <author>Bantum Works (modified by vanepp Apr 2022)</author>
+  <title>RGB Strip LED </title>
+  <label>A</label>
+  <date>Mon Apr 11 2022</date>
+  <tags>
+    <tag>Strip</tag>
+    <tag>full color</tag>
+    <tag>indicator</tag>
+    <tag>RGB LED</tag>
+  </tags>
+  <properties>
+    <property name="variant">Variant 3</property>
+    <property name="family">LED STRIP</property>
+    <property name="rgb">RGB</property>
+    <property name="polarity">common cathode</property>
+    <property name="layer"/>
+    <property name="part number"/>
+    <property name="current"/>
+    <property name="pin order">rbg</property>
+  </properties>
+  <description>&lt;!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0//EN" "http://www.w3.org/TR/REC-html40/strict.dtd"&gt;
+&lt;html&gt;&lt;head&gt;&lt;meta name="qrichtext" content="1" /&gt;&lt;style type="text/css"&gt;
+p, li { white-space: pre-wrap; }
+&lt;/style&gt;&lt;/head&gt;&lt;body style=" font-family:'MS Shell Dlg 2'; font-size:8.25pt; font-weight:400; font-style:normal;"&gt;
+&lt;p style=" margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;"&gt;&lt;span style=" font-size:8pt;"&gt;A tri-color Strip LED with red, green and blue.&lt;/span&gt;&lt;/p&gt;
+&lt;p style="-qt-paragraph-type:empty; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px; font-size:8pt;"&gt;&lt;br /&gt;&lt;/p&gt;
+&lt;p style=" margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;"&gt;&lt;span style=" font-size:8pt;"&gt;Pin order: red - common cathode - blue - green&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</description>
+  <views>
+    <iconView>
+      <layers image="breadboard/RGB Strip LED_4485e57b62162be5c0db2752e7572eb5_3_breadboard.svg">
+        <layer layerId="icon"/>
+      </layers>
+    </iconView>
+    <breadboardView>
+      <layers image="breadboard/RGB Strip LED_4485e57b62162be5c0db2752e7572eb5_3_breadboard.svg">
+        <layer layerId="breadboard"/>
+      </layers>
+    </breadboardView>
+    <schematicView>
+      <layers image="schematic/RGB Strip LED_4485e57b62162be5c0db2752e7572eb5_3_schematic.svg">
+        <layer layerId="schematic"/>
+      </layers>
+    </schematicView>
+    <pcbView>
+      <layers image="pcb/RGB Strip LED_4485e57b62162be5c0db2752e7572eb5_3_pcb.svg">
+        <layer layerId="copper0"/>
+        <layer layerId="copper1"/>
+        <layer layerId="silkscreen"/>
+      </layers>
+    </pcbView>
+  </views>
+  <connectors>
+    <connector name="Common Connect" id="connector0" type="male">
+      <description>Connector Pad for every color, supply : +12 - Volts</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector0pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector0terminal" svgId="connector0pin"/>
+        </schematicView>
+        <pcbView>
+          <p layer="copper1" svgId="connector0pin"/>
+          <p layer="copper0" svgId="connector0pin"/>
+        </pcbView>
+      </views>
+    </connector>
+    <connector name="Blue Connect" id="connector1" type="male">
+      <description> Connector Pad for Blue LED's </description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector1pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" svgId="connector1pin" terminalId="connector1terminal"/>
+        </schematicView>
+        <pcbView>
+          <p layer="copper1" svgId="connector1pin"/>
+          <p layer="copper0" svgId="connector1pin"/>
+        </pcbView>
+      </views>
+    </connector>
+    <connector name="Red Connect" id="connector2" type="male">
+      <description>Connector Pad for Red LEDs</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector2pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector2terminal" svgId="connector2pin"/>
+        </schematicView>
+        <pcbView>
+          <p layer="copper1" svgId="connector2pin"/>
+          <p layer="copper0" svgId="connector2pin"/>
+        </pcbView>
+      </views>
+    </connector>
+    <connector name="Green Connect" id="connector3" type="male">
+      <description>Connector Pad for Green LED's</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector3pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector3terminal" svgId="connector3pin"/>
+        </schematicView>
+        <pcbView>
+          <p layer="copper1" svgId="connector3pin"/>
+          <p layer="copper0" svgId="connector3pin"/>
+        </pcbView>
+      </views>
+    </connector>
+    <connector name="Common Connect" id="connector4" type="male">
+      <description>Connector Pad for every color, supply : +12 - Volts</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector4pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector4terminal" svgId="connector4pin"/>
+        </schematicView>
+        <pcbView>
+          <p layer="copper1" svgId="connector4pin"/>
+          <p layer="copper0" svgId="connector4pin"/>
+        </pcbView>
+      </views>
+    </connector>
+    <connector name="Blue Connect" id="connector5" type="male">
+      <description> Connector Pad for Blue LED's</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector5pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" terminalId="connector5terminal" svgId="connector5pin"/>
+        </schematicView>
+        <pcbView>
+          <p layer="copper1" svgId="connector5pin"/>
+          <p layer="copper0" svgId="connector5pin"/>
+        </pcbView>
+      </views>
+    </connector>
+    <connector name="Red Connect" id="connector6" type="male">
+      <description>Connector Pad for Red LEDs</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector6pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" svgId="connector6pin" terminalId="connector6terminal"/>
+        </schematicView>
+        <pcbView>
+          <p layer="copper1" svgId="connector6pin"/>
+          <p layer="copper0" svgId="connector6pin"/>
+        </pcbView>
+      </views>
+    </connector>
+    <connector name="Green Connect" id="connector7" type="male">
+      <description>Connector Pad for Green LED's</description>
+      <views>
+        <breadboardView>
+          <p layer="breadboard" svgId="connector7pin"/>
+        </breadboardView>
+        <schematicView>
+          <p layer="schematic" svgId="connector7pin" terminalId="connector7terminal"/>
+        </schematicView>
+        <pcbView>
+          <p layer="copper1" svgId="connector7pin"/>
+          <p layer="copper0" svgId="connector7pin"/>
+        </pcbView>
+      </views>
+    </connector>
+  </connectors>
+  <buses>
+    <bus id="+12V">
+      <nodeMember connectorId="connector0"/>
+      <nodeMember connectorId="connector4"/>
+    </bus>
+    <bus id="GREEN">
+      <nodeMember connectorId="connector3"/>
+      <nodeMember connectorId="connector7"/>
+    </bus>
+    <bus id="RED">
+      <nodeMember connectorId="connector2"/>
+      <nodeMember connectorId="connector6"/>
+    </bus>
+    <bus id="BLUE">
+      <nodeMember connectorId="connector1"/>
+      <nodeMember connectorId="connector5"/>
+    </bus>
+  </buses>
+  <url>https://ledmontreal.com/en/rgb-led-strip-kits/rgb-led-strip-with-24-key-remote-150-led.html</url>
+</module>
