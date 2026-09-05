@@ -37,6 +37,41 @@ static const float BELT_MIN_Y = -1.95f;
 static const float BELT_MAX_Y = 12.05f;
 
 // ============================================================
+//  CALIBRACION EN Y DE LA VISION
+// ============================================================
+// Cuanto se corre en Y la posicion que informa la camara. Es el gemelo de
+// VISION_LATENCY_S para el otro eje: aquella corrige el atraso a lo LARGO
+// de la cinta (X), esta corrige el error de encuadre a lo ANCHO (Y).
+//
+// Existe porque el mapa pixel->cm de la vision se apoya en donde cae el
+// borde inferior del recorte en coordenadas del robot
+// (IMAGE_BOTTOM_Y_CM en config.py), y ese numero se mueve cada vez que se
+// toca la camara o se vuelve a armar la cinta. Sin este parametro hay dos
+// formas de compensarlo y las dos son peores:
+//
+//   * correr la ventana de recorte desde la interfaz -- pero el recorte
+//     tambien es lo que decide que pedazo de cinta se ve, asi que
+//     centrar el agarre desencuadra la imagen y deja media cinta afuera;
+//   * editar IMAGE_BOTTOM_Y_CM a mano -- hay que reiniciar el programa, y
+//     ademas tiene su par en BELT_MIN_Y/BELT_MAX_Y de aca arriba, que
+//     habria que mover junto o el firmware empieza a rechazar piezas de un
+//     borde de la cinta por creerlas fuera de rango.
+//
+// PARA CALIBRARLO: mirar cuanto le erra el gripper en Y (el eje transversal
+// a la cinta) y corregir esa cantidad en cm. El brazo va a donde dice la Y
+// corregida, y la Y crece hacia el BORDE SUPERIOR de la imagen de la camara
+// (ver coordinates.py: el eje de la vision esta invertido respecto del de
+// OpenCV justamente para que coincida con el del robot), asi que:
+//
+//   subirlo  -> el agarre se corre hacia arriba en la imagen
+//   bajarlo  -> el agarre se corre hacia abajo
+//
+// Se suma ANTES de validar contra BELT_MIN_Y/BELT_MAX_Y, no despues: el
+// valor corregido es la mejor estimacion de donde esta la pieza de verdad,
+// asi que es el que tiene sentido comparar contra el ancho de la cinta.
+static float VISION_DY = 0.0f;
+
+// ============================================================
 //  LATENCIA DE LA VISION
 // ============================================================
 // Entre el instante en que la pieza cruza FISICAMENTE la linea de
@@ -270,8 +305,8 @@ static float BOX_TRANSIT_DZ = 6.0f;
 //      1 azul     2 rojo     3 verde
 //      4 rojo     5 azul     6 verde
 //
-// Es provisoria hasta que la interfaz deje elegir los 6 colores a mano; el
-// comando 'X' ya permite cambiarla sin recompilar.
+// Es solo el valor de arranque: la interfaz deja editar las 6 celdas y lo
+// manda con 'X', asi que esto es lo que hay antes de que alguien elija.
 static const char BOX_LAYOUT_DEFECTO[6] = {'B', 'R', 'G',
                                            'R', 'B', 'G'};
 
@@ -898,8 +933,8 @@ void Robot::procesarComando(char *cmd, uint8_t len)
     }
 
     // --- Disposicion de la caja: 'X' + los 6 colores, de la celda 1 a la 6 ---
-    // Es el reemplazo provisorio de la interfaz que todavia no existe: deja
-    // elegir que color va en cada celda sin recompilar. Ej: XBRGRBG.
+    // Es lo que manda la interfaz al confirmar la caja editada, y sirve
+    // igual a mano por el monitor serie. Ej: XBRGRBG.
     if (toupper(cmd[0]) == 'X' && strchr(cmd, ',') == NULL)
     {
         if (n != BOX_CELLS + 1)
@@ -1025,7 +1060,7 @@ void Robot::procesarComando(char *cmd, uint8_t len)
     // dentro de la cinta, asi que un "hola,B,S" se habria aceptado en
     // silencio como una pieza en Y=0.
     char *fin = NULL;
-    const float y = strtof(campoY, &fin);
+    const float yMedida = strtof(campoY, &fin);
 
     if (*campoY == '\0' || fin == campoY || *fin != '\0')
     {
@@ -1034,6 +1069,12 @@ void Robot::procesarComando(char *cmd, uint8_t len)
         Serial.println("'. Tiene que ser un numero en cm (ej: 3.5)");
         return;
     }
+
+    // La calibracion en Y se aplica aca, apenas se lee el numero, y no en
+    // planificarPieza(): asi todo lo que viene despues --la validacion
+    // contra el ancho de la cinta, la cola, el log y el registro de
+    // fallos-- habla de la misma Y, que es la corregida (ver VISION_DY).
+    const float y = yMedida + VISION_DY;
 
     if (strlen(campoColor) != 1)
     {
@@ -1074,6 +1115,20 @@ void Robot::procesarComando(char *cmd, uint8_t len)
     {
         Serial.print("[SERIAL] Y=");
         Serial.print(y);
+
+        // Se informan las dos cuando difieren: si la calibracion en Y esta
+        // mal puesta, el sintoma es justamente este mensaje, y con un solo
+        // numero no hay forma de saber si la pieza estaba fuera de la cinta
+        // o si la saco de la cinta el propio ajuste.
+        if (VISION_DY != 0.0f)
+        {
+            Serial.print(" (medida ");
+            Serial.print(yMedida);
+            Serial.print(" + vis_dy ");
+            Serial.print(VISION_DY);
+            Serial.print(")");
+        }
+
         Serial.print(" fuera de la cinta (");
         Serial.print(BELT_MIN_Y);
         Serial.print(" a ");
@@ -3148,6 +3203,13 @@ void Robot::registrarParametros()
     // que nada avise: el nucleo compara los dos al conectarse.
     params.registrar("cinta_cms", &BELT_VELOCITY_CMS, 1.0f, 30.0f, "cm/s", NIVEL_SERVICIO);
     params.registrar("linea_x",   &DETECTION_LINE_X, -40.0f, 0.0f, "cm", NIVEL_SERVICIO);
+
+    // El rango es holgado contra lo que hace falta (el desencuadre medido
+    // fue de 0,85 cm) pero corto contra el ancho de la cinta: 3 cm de un
+    // lado o del otro alcanzan para recentrar el agarre despues de volver a
+    // armar la cinta, y no tanto como para llevar todas las piezas fuera
+    // del ancho util y dejar al robot rechazandolas todas.
+    params.registrar("vis_dy", &VISION_DY, -3.0f, 3.0f, "cm", NIVEL_SERVICIO);
 
     // La caja entera se corre con estos dos. La grilla de 6 cm entre celdas
     // es la geometria de la caja y no se toca; lo que se mueve es donde

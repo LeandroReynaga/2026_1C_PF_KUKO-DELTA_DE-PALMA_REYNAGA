@@ -285,6 +285,14 @@ FICHAS: dict[str, Ficha] = {
         "La velocidad REAL, medida con un cronometro o con la vision. Es la "
         "que usa la planificacion del encuentro. Se actualiza cada vez que "
         "se toca el PWM."),
+    "vis_dy": Ficha(
+        "Cinta y agarre", "Calibracion de la vision en Y",
+        "Corre en Y lo que informa la camara, a lo ANCHO de la cinta. Es el "
+        "gemelo de «Calibracion de la vision» de la pantalla de operacion, "
+        "que corrige a lo largo. Se toca cuando el gripper agarra las piezas "
+        "descentradas: subirlo corre el agarre hacia el borde de ARRIBA de "
+        "la imagen. Sirve para recentrar el agarre sin mover la ventana de "
+        "recorte, que si se corre deja parte de la cinta fuera de cuadro."),
 
     "bin_x1": Ficha("Tachos", "Tacho 1: X", "Centro del primer tacho."),
     "bin_x2": Ficha("Tachos", "Tacho 2: X", "Centro del tacho del medio."),

@@ -1,54 +1,126 @@
-KUKO_DELTA_CARBON/
-│
-├── include/
-│   ├── Config.h
-│   ├── Pinout.h
-│   ├── Types.h
-│   ├── Constants.h
-│
-├── src/
-│   ├── main.cpp
-│   │
-│   ├── hardware/
-│   │   ├── Motors.cpp
-│   │   ├── Motors.h
-│   │   ├── Encoders.cpp
-│   │   ├── Encoders.h
-│   │   ├── Endstops.cpp
-│   │   ├── Endstops.h
-│   │   ├── Pneumatics.cpp
-│   │   ├── Pneumatics.h
-│   │   ├── Conveyor.cpp
-│   │   ├── Conveyor.h
-│   │
-│   ├── kinematics/
-│   │   ├── DeltaKinematics.cpp
-│   │   ├── DeltaKinematics.h
-│   │
-│   ├── motion/
-│   │   ├── ConveyorIntercept.cpp
-│   │   ├── ConveyorIntercept.h
-│   │   ├── Trajectory.cpp
-│   │   ├── Trajectory.h
-│   │
-│   │
-│   ├── robot/
-│   │   ├── Robot.cpp
-│   │   ├── Robot.h
-│   │   ├── Stepper.cpp
-│   │   ├── Stepper.h
-│   │   ├── CollisionGuard.cpp   (supervision por encoders)
-│   │   ├── CollisionGuard.h
-│   │   ├── FaultLog.cpp         (registro de fallos)
-│   │   ├── FaultLog.h
+KUKO DELTA CARBON - estructura del proyecto
+===========================================
 
-│   │
-│   ├── tasks/
-│   │   ├── TaskManager.cpp
-│   │   ├── TaskManager.h
-│   │
-│   ├── vision/
-│   │   ├── Vision.cpp
-│   │   ├── Vision.h
-│
-├── platformio.ini
+El sistema son dos mitades que se hablan por el puerto serie:
+
+  * el FIRMWARE del ESP32 (PlatformIO / Arduino), en include/ y src/;
+  * la APLICACION DE PC (Python), en pc/ y vision_python/.
+
+El contrato entre las dos esta escrito en pc/PROTOCOLO.md, y es la
+referencia valida: si el firmware y ese documento no coinciden, el que se
+aparto es el firmware. La explicacion de por que cada cosa es como es esta
+en CLAUDE.md.
+
+
+FIRMWARE (ESP32)
+----------------
+
+platformio.ini              dos entornos: "main" compila src/ (el firmware
+                            real) y "test" compila solo pruebas/test.cpp
+
+include/
+  Pinout.h                  UNICO lugar donde se definen numeros de pin
+
+src/
+  main.cpp                  setup() y loop(): todo corre en un solo core
+
+  robot/
+    Robot.cpp/.h            maquina de estados y orquestador. Tambien la
+                            consola serie y la tabla de parametros
+    Stepper.cpp/.h          generacion de pasos por timer de hardware,
+                            rampa trapezoidal en punto fijo dentro de la ISR
+    CollisionGuard.cpp/.h   supervision por encoders: compara el angulo
+                            medido contra el comandado y declara colision
+    FaultLog.cpp/.h         los ultimos 16 fallos con su contexto
+    Params.cpp/.h           parametros ajustables en caliente, con rango,
+                            nivel y persistencia en NVS
+    Telemetry.cpp/.h        las tres lineas periodicas que lee la interfaz
+
+  hardware/
+    Motors.cpp/.h           coordinacion de los 3 ejes (movJ) y limites
+    Encoders.cpp/.h         AS5600 magneticos, uno por motor
+    Endstops.cpp/.h         finales de carrera (solo durante el homing)
+    Pneumatics.cpp/.h       agarre y liberacion por vacio
+    Conveyor.cpp/.h         velocidad de la cinta por PWM
+
+  kinematics/
+    DeltaKinematics.cpp/.h  cinematica inversa y geometria del robot
+
+  motion/
+    Trajectory.cpp/.h       movimiento lineal (movL)
+    ConveyorIntercept.cpp/.h  donde y cuando encontrar una pieza en marcha
+
+
+APLICACION DE PC
+----------------
+
+pc/
+  kuko_app.py               punto de entrada: levanta enlace, vision e
+                            interfaz
+  PROTOCOLO.md              el contrato serie completo
+  requirements.txt          dependencias de TODA la aplicacion
+
+  kuko/
+    enlace.py               dueno del puerto serie
+    protocolo.py            la mitad en Python del contrato serie
+    estado.py               lo que se sabe del robot ahora mismo
+    vision.py               hilo de vision: camara, deteccion y envio de
+                            piezas (el unico bucle de vision del sistema)
+    calibracion.py          umbrales de la vision, habitaciones de luz y
+                            ajuste automatico
+    cinematica.py           cinematica directa e inversa del lado de Python
+    teach.py                biblioteca de secuencias grabadas
+    rendimiento.py          historia de la corrida (el firmware no la lleva)
+    parametros.py           como se PRESENTA cada parametro (nombre en
+                            castellano, grupo y explicacion)
+    ajustes.py              preferencias locales de esta PC
+    ui.py                   la interfaz NiceGUI: las seis pestanas
+
+  config/
+    vision.json             habitaciones de luz calibradas (VA al repo)
+    movimientos.json        secuencias de teach con nombre (VA al repo)
+    movimientos_locales.json  las que todavia tienen nombre de fabrica
+    local.json              puerto COM y encuadre de ESTA PC (no va al repo)
+    local.ejemplo.json      plantilla del anterior
+
+  tests/                    pruebas del lado de PC, sin robot ni camara.
+                            Se corren con:
+                                pc\.venv\Scripts\python -m pytest pc/tests
+                            Varias comparan las dos mitades leyendo el C++
+                            (parametros, estados, constantes de geometria):
+                            es la unica defensa contra tocar un solo lado
+                            de algo que esta escrito dos veces
+
+  tools/                    utilidades sueltas (preparado de la portada)
+  assets/                   imagenes de la interfaz
+
+
+VISION (modulos calibrados)
+---------------------------
+
+vision_python/
+  config.py                 TODOS los umbrales, cada uno con la medicion
+                            que lo eligio escrita al lado
+  camera.py                 apertura, rotacion, recorte y exposicion
+  detection.py              mascaras de color, separacion de piezas
+                            pegadas y clasificacion de forma
+  tracker.py                seguimiento por centroide (asigna un ID)
+  line_crossing.py          cruce de la linea de deteccion
+  coordinates.py            de pixeles a centimetros del robot
+  flujograma_vision.md      diagrama del pipeline completo
+
+  hsv_calibrator.py         herramienta suelta: mover los rangos HSV en vivo
+  crop_calibrator.py        herramienta suelta: ajustar el recorte de la cinta
+  test_benchmark_camera.py  herramienta suelta: medir FPS reales por backend
+
+Estos modulos los usa pc/kuko/vision.py; no se copiaron a pc/ a proposito,
+son los que estan calibrados y andan.
+
+
+OTROS
+-----
+
+pruebas/                    test.cpp (entorno "test" de PlatformIO) y
+                            sketches viejos .bak de bring-up de placa,
+                            utiles como referencia historica
+lib/, test/                 carpetas de la plantilla de PlatformIO, vacias

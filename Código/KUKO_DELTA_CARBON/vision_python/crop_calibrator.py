@@ -4,7 +4,7 @@ Herramienta de calibración interactiva del recorte de la cinta.
 Muestra la imagen COMPLETA (ya rotada, pero sin recortar) con el
 recorte dibujado encima, y cuatro sliders para moverlo en vivo. La
 ventana "recorte" muestra el resultado, o sea exactamente lo que va
-a ver main.py.
+a ver la deteccion.
 
 Uso:
     python crop_calibrator.py
@@ -69,9 +69,9 @@ def main() -> None:
     capture.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
     capture.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
 
-    # Misma exposición que main.py: si acá se viera con la exposición
-    # automática, la imagen saldría quemada y sería imposible ver
-    # dónde termina la cinta.
+    # Misma exposición que el bucle de visión: si acá se viera con la
+    # exposición automática, la imagen saldría quemada y sería imposible
+    # ver dónde termina la cinta.
     if CAMERA_AUTO_EXPOSURE:
         capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75)
     else:

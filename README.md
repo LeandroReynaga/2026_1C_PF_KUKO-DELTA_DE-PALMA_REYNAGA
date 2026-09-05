@@ -190,7 +190,7 @@ tanto el protocolo de comunicación como la matemática del movimiento.
 | **Ciclo completo**   | ✅ Homing → detección → intercepción → agarre → clasificación → retorno                    |
 | **Modos operativos** | ✅ Color · Forma · Box · Teach                                                    |
 | **Seguridad**        | ✅ Supervisión de colisión activa, con recuperación automática                             |
-| **Interfaz**         | ✅ 5 pestañas operativas (Operación, Teach, Rendimiento, Proceso, Servicio)                 |
+| **Interfaz**         | ✅ 6 pestañas operativas (Operación, Teach, Rendimiento, Visión, Proceso, Servicio)          |
 
 > 🎬 **`VIDEO PENDIENTE`** · `Multimedia/09-video-demo.mp4`<br>
 > **Qué mostrar:** un ciclo completo de clasificación por color, en tiempo real, con la interfaz visible.<br>
@@ -338,8 +338,9 @@ pio device monitor             # monitor serie a 115200 baudios
 
 <br>
 
-Las carpetas `pruebas/` y `otros_codigos/` guardan sketches históricos (`.bak`) de motores, encoders y
-cinemática. No forman parte del build, pero sirven de referencia al depurar un subsistema por separado.
+La carpeta `pruebas/` guarda sketches históricos (`.bak`) de motores, encoders y cinemática, además de
+`test.cpp`, que es lo que compila el entorno `test`. Los `.bak` no forman parte de ningún build, pero
+sirven de referencia al depurar un subsistema por separado.
 
 </details>
 

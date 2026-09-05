@@ -1,8 +1,8 @@
 """Hilo de vision: camara, deteccion, seguimiento y envio de piezas.
 
-Es el bucle que antes vivia en vision_python/main.py, sin la ventana de
-OpenCV: en vez de cv2.imshow() deja el ultimo fotograma anotado en memoria,
-codificado a JPEG, para que el servidor lo sirva como MJPEG.
+Es el UNICO bucle de vision del sistema. No abre ninguna ventana de
+OpenCV: deja el ultimo fotograma anotado en memoria, codificado a JPEG,
+para que el servidor lo sirva como MJPEG.
 
 Reutiliza los modulos de vision que ya existen y estan calibrados
 (vision_python/): camara, deteccion de color y forma, seguimiento y cruce de

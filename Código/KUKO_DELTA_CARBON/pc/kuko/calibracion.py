@@ -60,13 +60,34 @@ COLORES = ("ROJO", "VERDE", "AZUL")
 NOMBRE_COLOR = {"ROJO": "Rojo", "VERDE": "Verde", "AZUL": "Azul"}
 
 # Tono de referencia de cada color en la rueda de OpenCV (H de 0 a 179).
-# Sirve para dos cosas: decidir a que color se parece una pieza medida
-# cuando los rangos configurados no la agarran --que es justo el caso que
-# hay que arreglar-- y ordenar los grupos del ajuste automatico.
+# Sirve para PONERLE UN NOMBRE a una pieza medida cuando los rangos
+# configurados no la agarran --que es justo el caso que hay que arreglar--,
+# y es solo para mostrar: el ajuste automatico no lo usa para decidir nada
+# (ver `ORDEN_CALIBRACION`), porque es exactamente lo que se equivoca bajo
+# una luz nueva.
 #
 # El rojo esta partido: se compara contra los DOS y se toma el mas cercano,
 # porque la rueda de Hue da la vuelta y el rojo vive en las dos puntas.
 TONO_REFERENCIA = {"ROJO": (0, 179), "VERDE": (60,), "AZUL": (105,)}
+
+# En que orden se apoyan las piezas para el ajuste automatico, de ARRIBA
+# hacia ABAJO de la imagen y sobre la linea de deteccion.
+#
+# Es la pieza central de todo el ajuste automatico y conviene entender por
+# que existe. La version anterior adivinaba de que color era cada pieza por
+# su tono (`_color_mas_parecido`) y recien despues media. Eso funciona
+# mientras la calibracion ya sea mas o menos buena, o sea justo cuando no
+# hace falta: bajo una luz nueva el verde se mide en H=80, que esta mas
+# cerca del azul (105) que del verde (60), y entonces el ajuste informaba
+# "falta ver: Verde" con la pieza verde apoyada delante de la camara. No
+# habia forma de salir de ahi -- para calibrar hacia falta reconocer las
+# piezas, y para reconocerlas hacia falta estar calibrado.
+#
+# Con el orden de colocacion no hay nada que adivinar: la de arriba es la
+# roja porque el operador la puso ahi, y lo que se mide de ella ES el rojo
+# de esta sala, mida lo que mida. La posicion la sabe el operador; el color
+# es justamente lo que se esta tratando de averiguar.
+ORDEN_CALIBRACION = ("ROJO", "AZUL", "VERDE")
 
 
 # ======================================================================
@@ -232,9 +253,6 @@ class Rango:
             return list(range(self.h0, self.h1 + 1))
 
         return list(range(self.h0, H_MAX + 1)) + list(range(0, self.h1 + 1))
-
-    def ancho_h(self) -> int:
-        return len(self.tonos())
 
     # ------------------------------------------------------------------
     def a_tramos(self) -> tuple:
@@ -737,6 +755,26 @@ class Memoria:
 
         return habitacion
 
+    def coincide(self, nombre: str, ajustes: Ajustes) -> bool:
+        """Si lo que hay puesto es EXACTAMENTE lo guardado con ese nombre.
+
+        Es lo que decide el asterisco de la pantalla ("Pieza arriba *"), o
+        sea la unica forma de saber, mirando, si lo que se esta viendo por
+        la camara ya quedo guardado o se va a perder al cambiar de
+        habitacion. Sin esto el nombre miente: dice de donde salio la
+        calibracion, no cual es.
+
+        La comparacion es la de los dataclass --campo por campo, y los
+        `Rango` tambien son dataclass-- contra la copia EN MEMORIA, que es
+        la misma que se escribio en disco. No se relee el archivo: ahi los
+        numeros pasaron por JSON y compararlos seria comparar contra el
+        redondeo, no contra lo guardado.
+        """
+
+        habitacion = self.habitaciones.get(nombre)
+
+        return habitacion is not None and habitacion.ajustes == ajustes
+
     def cargar_habitacion(self, nombre: str) -> Optional[Ajustes]:
         habitacion = self.habitaciones.get(nombre)
 
@@ -1033,47 +1071,73 @@ MARGEN_V = 70
 SEPARACION_MINIMA_H = 5
 
 
+def ordenar_para_calibrar(muestras: list[Muestra]) -> tuple[list[Muestra], str]:
+    """Las piezas de arriba hacia abajo, o el motivo por el que no se puede.
+
+    Devuelve `(ordenadas, "")` cuando la escena sirve para calibrar, y
+    `([], motivo)` cuando no. Es la MISMA funcion que usa el dialogo para
+    decir en vivo lo que ve y la que usa `calibrar()` para decidir: si
+    fueran dos, la pantalla podria estar en verde y el boton contestar que
+    falta algo.
+
+    Se piden exactamente tres y en columna. Las dos condiciones son por lo
+    mismo: el color de cada pieza sale de su POSICION, asi que cualquier
+    escena en la que el orden sea dudoso hay que rechazarla en vez de
+    calibrar con una asignacion inventada -- un rojo calibrado con la
+    medicion del verde no da error, da un robot que clasifica todo al reves.
+    """
+
+    if not muestras:
+        return [], ("No se ve ninguna pieza. Pone los tres hexagonos sobre "
+                    "la linea de deteccion, uno debajo del otro.")
+
+    if len(muestras) != len(ORDEN_CALIBRACION):
+        return [], (f"Se ven {len(muestras)} pieza(s) y tienen que ser "
+                    f"{len(ORDEN_CALIBRACION)}, una debajo de la otra sobre "
+                    "la linea. Saca de la cinta lo que sobre.")
+
+    ordenadas = sorted(muestras, key=lambda m: m.centro[1])
+
+    xs = [m.centro[0] for m in ordenadas]
+    ys = [m.centro[1] for m in ordenadas]
+
+    # En columna y no en fila. Es la unica forma de que "la de arriba" tenga
+    # sentido: tres piezas puestas a lo largo de la cinta se ordenarian por
+    # el ruido del centroide y cada calibracion asignaria los colores en un
+    # orden distinto.
+    if (ys[-1] - ys[0]) <= (max(xs) - min(xs)):
+        return [], ("Las tres piezas tienen que estar UNA DEBAJO DE LA OTRA "
+                    "sobre la linea de deteccion, no una al lado de la otra.")
+
+    return ordenadas, ""
+
+
 def calibrar(frame: np.ndarray, base: Optional[Ajustes] = None) -> Resultado:
     """Propone rangos de color a partir de un fotograma con las tres piezas.
 
-    La receta es la misma que se uso a mano para elegir los rangos que estan
-    en config.py, y esta escrita ahi con las mediciones al lado: se mide el
-    NUCLEO de cada pieza (no el borde, que es una franja mezclada con la
-    cinta), se toman percentiles en vez de minimos y maximos (una cola de
-    tres pixeles no puede decidir un umbral), y se abre el rango con margen
-    -- distinto por canal, porque cada canal falla distinto.
+    Las piezas se identifican por DONDE ESTAN y no por el color que
+    aparentan: de arriba hacia abajo, `ORDEN_CALIBRACION` (ver el comentario
+    de esa constante, que es el motivo de ser de todo esto).
+
+    Medido eso, la receta es la misma que se uso a mano para elegir los
+    rangos que estan en config.py, y esta escrita ahi con las mediciones al
+    lado: se mide el NUCLEO de cada pieza (no el borde, que es una franja
+    mezclada con la cinta), se toman percentiles en vez de minimos y maximos
+    (una cola de tres pixeles no puede decidir un umbral), y se abre el
+    rango con margen -- distinto por canal, porque cada canal falla
+    distinto.
 
     No aplica nada: devuelve la propuesta. Aplicarla o no es de la interfaz,
     que es la que puede mostrar antes/despues y dejar deshacer.
     """
 
     muestras = muestrear(frame)
+    ordenadas, motivo = ordenar_para_calibrar(muestras)
 
-    if not muestras:
-        return Resultado(False, "No se ve ninguna pieza. Pone una de cada "
-                                "color sobre la cinta, con la cinta parada.")
+    if motivo:
+        return Resultado(False, motivo, muestras=muestras)
 
-    # Una por color: si hay dos del mismo, se queda la mas grande (que es la
-    # que esta mas entera dentro del cuadro). Mezclar dos piezas del mismo
-    # color en una sola medicion ensancharia el rango con la diferencia
-    # entre ellas, que es justo lo que no se quiere medir.
-    por_color: dict[str, Muestra] = {}
-
-    for muestra in muestras:
-        if muestra.color not in por_color:
-            por_color[muestra.color] = muestra
-
-    faltan = [NOMBRE_COLOR[c] for c in _colores_conocidos() if c not in por_color]
-
-    if faltan:
-        vistos = ", ".join(f"{NOMBRE_COLOR[m.color]} (H={m.h})"
-                           for m in muestras[:4])
-
-        return Resultado(
-            False,
-            f"Falta ver: {', '.join(faltan)}. Se encontraron {len(muestras)} "
-            f"pieza(s): {vistos}.",
-            muestras=muestras)
+    por_color = dict(zip(ORDEN_CALIBRACION, ordenadas))
 
     # El fondo: todo lo que no es ninguna de las piezas. Es la mitad que no
     # se puede saltear -- un rango se elige por donde NO tiene que llegar, y
@@ -1090,6 +1154,18 @@ def calibrar(frame: np.ndarray, base: Optional[Ajustes] = None) -> Resultado:
         if aviso:
             avisos.append(f"{NOMBRE_COLOR[color]}: {aviso}")
 
+    # Dos rangos que se pisan es la firma de haber puesto dos piezas del
+    # mismo color, o de haberlas puesto en otro orden. No se rechaza -- los
+    # tres colores se midieron y la calibracion es utilizable -- pero se
+    # dice, porque el sintoma en produccion es una pieza que sale
+    # clasificada distinto en cada vuelta y eso no se deduce mirando la
+    # pantalla.
+    solapados = _colores_solapados(propuesta.colores)
+
+    if solapados:
+        avisos.append(f"{solapados} comparten tono; revisa el orden en que "
+                      "quedaron las piezas")
+
     # La calibracion la decidieron las piezas, no un preset: dejar puesto el
     # nombre de la temperatura anterior haria creer que este resultado sale
     # de ese boton.
@@ -1101,6 +1177,27 @@ def calibrar(frame: np.ndarray, base: Optional[Ajustes] = None) -> Resultado:
         mensaje += " Ojo: " + "; ".join(avisos)
 
     return Resultado(True, mensaje, ajustes=propuesta, muestras=muestras)
+
+
+def _colores_solapados(colores: dict[str, Rango]) -> str:
+    """Que pares de rangos comparten tono, como texto para el aviso."""
+
+    pares = []
+
+    for i, uno in enumerate(ORDEN_CALIBRACION):
+        for otro in ORDEN_CALIBRACION[i + 1:]:
+            a, b = colores.get(uno), colores.get(otro)
+
+            if a is None or b is None:
+                continue
+
+            # Alcanza con mirar el tono: los tres rangos comparten el techo
+            # de S y de V, asi que si los arcos de H no se tocan, no hay
+            # ningun pixel que pueda caer en los dos.
+            if set(a.tonos()) & set(b.tonos()):
+                pares.append(f"{NOMBRE_COLOR[uno]} y {NOMBRE_COLOR[otro]}")
+
+    return "; ".join(pares)
 
 
 def _medir_fondo(frame: np.ndarray) -> dict[str, float]:

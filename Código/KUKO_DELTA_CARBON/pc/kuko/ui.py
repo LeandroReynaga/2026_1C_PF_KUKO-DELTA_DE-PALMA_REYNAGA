@@ -40,6 +40,17 @@ COLOR_ESTADO = {VERDE: "#3DD68C", AMBAR: "#F5B942", ROJO: "#FF5C5C", GRIS: "#4B5
 
 COLOR_PIEZA = {"R": "#E5484D", "G": "#3DD68C", "B": "#3B82F6"}
 
+# Los mismos tres, indexados por el nombre que usa la calibracion en vez de
+# por la letra que viaja por serie. Se usan para dibujar el orden en que hay
+# que apoyar las piezas en el ajuste automatico.
+COLOR_MUESTRA = {"ROJO": COLOR_PIEZA["R"], "VERDE": COLOR_PIEZA["G"],
+                 "AZUL": COLOR_PIEZA["B"]}
+
+# El amarillo con que `draw_detection_line()` pinta la linea de deteccion
+# sobre el video. La guia del ajuste automatico la dibuja del mismo color
+# para que se entienda de que linea habla sin tener que decirlo.
+COLOR_LINEA = "#FFE04D"
+
 # Cuanto se corre el recorte por click. 4 px es fino para recentrar sin
 # volverse eterno manteniendo apretado.
 PASO_RECORTE = 4
@@ -1117,6 +1128,11 @@ class Interfaz:
         #: la tira de tono sin rearmar la tarjeta debajo del cursor.
         self._vis_color_ctrl: dict[str, dict] = {}
 
+        #: Lo ultimo que se le escribio al selector de habitaciones, para no
+        #: reescribirselo dos veces por segundo sin motivo. None = todavia
+        #: no se escribio nada.
+        self._vis_opciones: Optional[dict] = None
+
         # Marca de "lo estoy moviendo yo": `set_value()` dispara el mismo
         # on_change que mover el control a mano, asi que sin esto reflejar
         # unos ajustes nuevos los volveria a aplicar de a uno.
@@ -1200,6 +1216,15 @@ class Interfaz:
                    line-height: 1.55; }}
           .titulo {{ color: {APAGADO}; font-size: 15px; font-weight: 600;
                      letter-spacing: .07em; text-transform: uppercase; }}
+
+          /* La habitacion de la memoria de luces cuando lo que hay puesto
+             ya no es lo que se guardo con ese nombre ("Pieza arriba *").
+             Va por CSS y no con .style() porque el texto que muestra un
+             q-select no es del elemento: lo dibuja Quasar adentro, en
+             .q-field__native, y ahi no llega el color heredado. */
+          .habitacion-modificada .q-field__native,
+          .habitacion-modificada .q-field__native span {{
+              color: {COLOR_ESTADO[AMBAR]} !important; font-weight: 600; }}
         </style>""")
 
         with ui.row().classes("w-full items-center gap-4 px-4").style("height:38px") \
@@ -4113,14 +4138,21 @@ class Interfaz:
         self.ctrl_exposicion["caja"].set_visibility(manual)
 
     def _vis_memoria(self) -> None:
-        """Las habitaciones guardadas: la 'memoria de luces'."""
+        """Las habitaciones guardadas: la 'memoria de luces'.
+
+        El asterisco del selector es todo el punto: los controles de abajo
+        cambian la calibracion en vivo, sin guardar nada, asi que sin el, el
+        nombre de la habitacion dice de donde salio esto -- no lo que es --,
+        y la forma de enterarse de que habia cambios sin guardar era
+        perderlos al elegir otra de la lista.
+
+        Va en el propio selector y no en un cartel aparte porque es lo mismo
+        que se esta mirando: el nombre y su estado en un solo lugar, donde
+        ya esta puesta la vista para cambiar de habitacion.
+        """
 
         with ui.column().classes("panel p-3 gap-2").style("flex:0 0 auto"):
-            with ui.row().classes("w-full items-center no-wrap"):
-                ui.label("Memoria de luces").classes("titulo")
-                ui.space()
-                self.etiqueta_habitacion = ui.label("").style(
-                    f"color:{APAGADO};font-size:11.5px")
+            ui.label("Memoria de luces").classes("titulo")
 
             with ui.row().classes("w-full items-center gap-2 no-wrap"):
                 self.select_habitacion = ui.select(
@@ -4130,9 +4162,20 @@ class Interfaz:
                     on_change=lambda e: self._vis_cargar(e.value)) \
                     .props("dense outlined").style("flex:1 1 0")
 
-                ui.button(icon="save", on_click=self._vis_guardar) \
+                ui.button(icon="add", on_click=self._vis_nueva) \
                     .props("flat dense round").style(f"color:{CELESTE}") \
-                    .tooltip("Guardar los ajustes de ahora con un nombre")
+                    .tooltip("Guardar los ajustes de ahora como una "
+                             "habitacion NUEVA")
+
+                self.boton_guardar_hab = ui.button(
+                    icon="save", on_click=self._vis_guardar) \
+                    .props("flat dense round").style(f"color:{CELESTE}") \
+                    .tooltip("Guardar los cambios en la habitacion cargada")
+
+                self.boton_revertir_hab = ui.button(
+                    icon="undo", on_click=self._vis_revertir) \
+                    .props("flat dense round").style(f"color:{APAGADO}") \
+                    .tooltip("Descartar los cambios y volver a lo guardado")
 
                 ui.button(icon="delete_outline", on_click=self._vis_borrar) \
                     .props("flat dense round").style(f"color:{APAGADO}") \
@@ -4140,11 +4183,66 @@ class Interfaz:
 
             ui.label("Una habitacion guarda TODO: los tres colores, la "
                      "geometria y la exposicion. Calibrar en la pieza, "
-                     "guardarla, calibrar en el aula y guardarla con otro "
-                     "nombre; despues cambiar de lugar es elegirla de la "
-                     "lista.") \
+                     "guardarla con (+), calibrar en el aula y guardarla con "
+                     "otro nombre; despues cambiar de lugar es elegirla de "
+                     "la lista. El * avisa que lo que hay puesto todavia no "
+                     "se guardo.") \
                 .style(f"color:{APAGADO};font-size:11.5px;line-height:1.35;"
                        "white-space:normal")
+
+            self._vis_pintar_memoria()
+
+    def _vis_modificado(self) -> bool:
+        """Hay una habitacion cargada y lo que hay puesto ya no es la suya."""
+
+        activa = self.memoria_luces.activa
+
+        return bool(activa) and not self.memoria_luces.coincide(
+            activa, self.ajustes_vision)
+
+    def _vis_opciones_memoria(self) -> dict:
+        """Las habitaciones para el selector: valor -> texto que se muestra.
+
+        La CLAVE es siempre el nombre guardado y el asterisco vive solo en
+        la etiqueta. Es lo que permite marcar la habitacion cargada sin que
+        `_vis_cargar()` reciba un nombre con adornos que despues no
+        encontraria en la memoria.
+        """
+
+        activa = self.memoria_luces.activa
+        modificado = self._vis_modificado()
+
+        return {nombre: f"{nombre} *" if modificado and nombre == activa else nombre
+                for nombre in self.memoria_luces.nombres()}
+
+    def _vis_pintar_memoria(self) -> None:
+        """El asterisco del selector y que botones tienen sentido ahora."""
+
+        modificado = self._vis_modificado()
+        opciones = self._vis_opciones_memoria()
+
+        # Solo si de verdad cambio: esto corre dos veces por segundo, y
+        # reescribirle las opciones a un `select` abierto le cierra la
+        # lista desplegada en la cara del operador.
+        if opciones != self._vis_opciones:
+            self._vis_opciones = opciones
+            self.select_habitacion.set_options(
+                opciones, value=self.memoria_luces.activa or None)
+
+        # El ambar del nombre. Es una clase y no un `.style()` porque el
+        # texto que muestra un q-select lo dibuja Quasar en un hijo
+        # (.q-field__native), donde el color puesto en el elemento no llega.
+        if modificado:
+            self.select_habitacion.classes(add="habitacion-modificada")
+        else:
+            self.select_habitacion.classes(remove="habitacion-modificada")
+
+        # Guardar sin habitacion cargada pide un nombre, asi que ese caso
+        # tambien va habilitado; lo que no tiene sentido es guardar o
+        # revertir cuando no hay ni un cambio que guardar ni uno que
+        # descartar.
+        self.boton_guardar_hab.set_enabled(modificado or not self.memoria_luces.activa)
+        self.boton_revertir_hab.set_enabled(modificado)
 
     # ------------------------------------------------------------------
     def _vis_rearmar(self) -> None:
@@ -4478,16 +4576,49 @@ class Interfaz:
         ui.notify(f"Ajustes de «{nombre}»", color="info")
 
     def _vis_guardar(self) -> None:
-        with ui.dialog() as dialogo, ui.card().style(f"background:{PANEL};color:{TEXTO}"):
-            ui.label("Guardar los ajustes de ahora").classes("text-lg")
+        """Guarda los cambios EN la habitacion cargada, sin preguntar nada.
 
-            ui.label("Con el nombre del lugar: «Pieza», «Aula facultad». "
-                     "Si ya existe, se pisa.") \
+        Sin habitacion cargada no hay donde guardar, y ahi si hace falta un
+        nombre: es el mismo caso que el boton (+).
+
+        Pisar la habitacion sin confirmar es deliberado --es lo que hace que
+        el asterisco se apague de un click-- y se apoya en dos cosas: el
+        boton esta apagado mientras no haya nada que guardar, asi que no se
+        puede pisar una calibracion buena "sin querer" estando todo igual, y
+        lo que se guarda es exactamente lo que se esta viendo por la camara
+        en ese momento.
+        """
+
+        activa = self.memoria_luces.activa
+
+        if not activa:
+            self._vis_nueva()
+            return
+
+        self.memoria_luces.guardar(activa, self.ajustes_vision)
+        self._vis_pintar_memoria()
+
+        ui.notify(f"Guardado en «{activa}»", color="positive")
+
+    def _vis_nueva(self) -> None:
+        """Guarda lo que hay puesto con un nombre nuevo."""
+
+        with ui.dialog() as dialogo, ui.card().style(f"background:{PANEL};color:{TEXTO}"):
+            ui.label("Habitacion nueva").classes("text-lg")
+
+            ui.label("Se guardan los ajustes que hay puestos ahora, con el "
+                     "nombre del lugar: «Pieza», «Aula facultad». Si ya "
+                     "existe una con ese nombre, se pisa.") \
                 .style(f"color:{APAGADO};font-size:12px;white-space:normal;"
                        "max-width:320px")
 
-            campo = ui.input(value=self.memoria_luces.activa or "") \
+            campo = ui.input(placeholder="Nombre del lugar") \
                 .props("dense outlined autofocus").classes("w-full")
+
+            # Enter guarda: se acaba de tipear el nombre y el cursor ya esta
+            # ahi, ir hasta el boton con el mouse sobra.
+            campo.on("keydown.enter",
+                     lambda _: self._vis_guardar_ya(dialogo, campo.value))
 
             with ui.row().classes("w-full justify-end gap-2"):
                 ui.button("Cancelar", on_click=dialogo.close) \
@@ -4509,10 +4640,35 @@ class Interfaz:
         self.memoria_luces.guardar(nombre, self.ajustes_vision)
         dialogo.close()
 
-        self.select_habitacion.set_options(self.memoria_luces.nombres())
-        self.select_habitacion.set_value(nombre)
+        # La lista del selector y cual queda elegida las rehace `_vis_pintar_
+        # memoria()`, que es la unica que le escribe opciones: son las mismas
+        # que llevan el asterisco, y escribirlas desde dos lados dejaba una
+        # de las dos versiones pisando a la otra segun quien corriera ultimo.
+        self._vis_pintar_memoria()
 
         ui.notify(f"Guardado como «{nombre}»", color="positive")
+
+    def _vis_revertir(self) -> None:
+        """Descarta los cambios y vuelve a la habitacion tal como se guardo.
+
+        No pasa por `_vis_cargar()` a proposito: esa se saltea la carga
+        cuando el nombre elegido ya es el activo --es lo que evita que
+        `set_value()` vuelva a cargar la habitacion recien guardada-- y
+        revertir es justamente recargar la que ya esta.
+        """
+
+        activa = self.memoria_luces.activa
+        habitacion = self.memoria_luces.habitaciones.get(activa)
+
+        if habitacion is None:
+            ui.notify("No hay ninguna habitacion cargada", color="warning")
+            return
+
+        self._vis_aplicar(habitacion.ajustes.copia(), rearmar=True)
+        self._vis_pintar_memoria()
+
+        ui.notify(f"Se descartaron los cambios: «{activa}» como estaba "
+                  "guardada", color="info")
 
     def _vis_borrar(self) -> None:
         nombre = self.memoria_luces.activa
@@ -4543,8 +4699,7 @@ class Interfaz:
         self.memoria_luces.borrar(nombre)
         dialogo.close()
 
-        self.select_habitacion.set_options(self.memoria_luces.nombres())
-        self.select_habitacion.set_value(None)
+        self._vis_pintar_memoria()
 
         ui.notify(f"Borrada «{nombre}»", color="warning")
 
@@ -4552,11 +4707,17 @@ class Interfaz:
     #  VISION: ajuste automatico
     # ==================================================================
     #
-    #  El robot llega a una sala nueva: se frena la cinta, se pone un
-    #  hexagono de cada color bajo la camara y la calibracion sale de medir
-    #  esas tres piezas contra el fondo. Es la misma receta que se uso a
-    #  mano para elegir los rangos que estan escritos en config.py, y esta
-    #  explicada con las mediciones al lado en `calibracion.calibrar()`.
+    #  El robot llega a una sala nueva: se frena la cinta, se apoyan los tres
+    #  hexagonos EN UN ORDEN CONOCIDO sobre la linea de deteccion y la
+    #  calibracion sale de medir esas tres piezas contra el fondo. Es la
+    #  misma receta que se uso a mano para elegir los rangos que estan
+    #  escritos en config.py, y esta explicada con las mediciones al lado en
+    #  `calibracion.calibrar()`.
+    #
+    #  El orden es lo que hace que esto funcione DESCALIBRADO, que es la
+    #  unica situacion en la que se usa: el color de cada pieza sale de
+    #  donde la puso el operador y no de su tono, asi que no hace falta
+    #  reconocerla para poder medirla (ver `cal.ORDEN_CALIBRACION`).
     #
     #  El dialogo FRENA EL ROBOT al abrirse --no solo la cinta-- y va
     #  diciendo que ve mientras esta abierto. Ese renglon en vivo es la mitad
@@ -4565,6 +4726,13 @@ class Interfaz:
     #  del fondo. Y encabezandolo esta lo primero que hay que mirar: si el
     #  brazo ya se quedo quieto, porque para poner las tres piezas hay que
     #  meter las manos en la cinta.
+    #
+    #  Lo que NO hace el boton es esperar a ver las tres antes de dejarse
+    #  apretar. La medicion en vivo es una ayuda, no un permiso: el operador
+    #  ve las piezas apoyadas y confirma, y si algo no cierra el que lo dice
+    #  es el resultado, con el motivo. Un boton que se habilita solo cuando
+    #  el programa cree entender la escena es justamente lo que dejaba al
+    #  operador encerrado afuera.
 
     def _vis_abrir_auto(self) -> None:
         if not self.vision:
@@ -4584,10 +4752,17 @@ class Interfaz:
 
             ui.label("Se frenan el robot y la cinta solos. ESPERA a que el "
                      "primer renglon este en verde --el brazo puede estar "
-                     "terminando una maniobra-- y recien ahi pone un "
-                     "hexagono de cada color sobre la cinta, separados y "
-                     "enteros dentro del cuadro. Cuando el resto de los "
-                     "renglones diga que ve los tres, dale a Calibrar.") \
+                     "terminando una maniobra-- y recien ahi apoya los tres "
+                     "hexagonos SOBRE LA LINEA DE DETECCION, uno debajo del "
+                     "otro y en este orden:") \
+                .style(f"color:{APAGADO};font-size:12.5px;line-height:1.4;"
+                       "white-space:normal;max-width:420px")
+
+            self._vis_orden_esperado()
+
+            ui.label("No hace falta que se detecten: se miden por donde "
+                     "estan, no por el color que aparentan. Cuando esten "
+                     "puestos, dale a Confirmar.") \
                 .style(f"color:{APAGADO};font-size:12.5px;line-height:1.4;"
                        "white-space:normal;max-width:420px")
 
@@ -4598,7 +4773,7 @@ class Interfaz:
                     .props("flat dense no-caps").style(f"color:{APAGADO}")
 
                 self.boton_calibrar = ui.button(
-                    "Calibrar", on_click=self._vis_calibrar) \
+                    "Confirmar", on_click=self._vis_calibrar) \
                     .props("unelevated dense no-caps") \
                     .style(f"background:{CELESTE};color:#0B1015")
 
@@ -4606,6 +4781,40 @@ class Interfaz:
         self._vis_pintar_auto()
 
         dialogo.open()
+
+    def _vis_orden_esperado(self) -> None:
+        """El dibujito del orden en que van las piezas sobre la linea.
+
+        Es texto y no una imagen a proposito: "rojo, azul, verde" escrito en
+        un renglon se lee mal y se equivoca facil, y una foto habria que
+        rehacerla cada vez que se cambien las piezas. Tres cuadraditos
+        apilados contra una linea amarilla --la misma que se ve en el
+        video-- dicen las dos cosas que importan: cual va arriba y sobre que.
+        """
+
+        filas = []
+
+        for i, color in enumerate(cal.ORDEN_CALIBRACION, start=1):
+            extremo = ("arriba" if i == 1 else
+                       "abajo" if i == len(cal.ORDEN_CALIBRACION) else "")
+
+            filas.append(
+                '<div style="display:flex;align-items:center;gap:8px">'
+                f'<span style="color:{APAGADO};font-size:12px;width:12px">{i}</span>'
+                f'{_muestra_color(COLOR_MUESTRA[color], 15)}'
+                f'<span style="font-size:13px">{cal.NOMBRE_COLOR[color]}</span>'
+                f'<span style="color:{APAGADO};font-size:11.5px">{extremo}</span>'
+                '</div>')
+
+        ui.html(
+            '<div style="display:flex;gap:12px;align-items:stretch;'
+            f'border:1px solid {BORDE};border-radius:6px;padding:10px 12px;'
+            'margin:8px 0">'
+            f'<div style="width:3px;background:{COLOR_LINEA};border-radius:2px;'
+            'flex:0 0 auto"></div>'
+            '<div style="display:flex;flex-direction:column;gap:7px">'
+            + "".join(filas) +
+            '</div></div>').classes("w-full")
 
     def _vis_cerrar_auto(self, dialogo) -> None:
         self._dialogo_auto = None
@@ -4618,10 +4827,6 @@ class Interfaz:
             return
 
         muestras = self.vision.muestras
-        vistos = {}
-
-        for muestra in muestras:
-            vistos.setdefault(muestra.color, muestra)
 
         # El primer renglon es el unico que puede lastimar a alguien, asi
         # que va primero y no al final: para poner las tres piezas hay que
@@ -4645,29 +4850,27 @@ class Interfaz:
         # llegar hasta ahi implica haber puesto tres piezas a mano.
         self.boton_calibrar.set_enabled(seguro)
 
-        for color in cal.COLORES:
-            muestra = vistos.get(color)
+        # Lo mismo que va a mirar el boton, para que la pantalla y el
+        # resultado no puedan decir cosas distintas.
+        ordenadas, motivo = cal.ordenar_para_calibrar(muestras)
 
-            if muestra is None:
+        if motivo:
+            filas.append(f'{_punto(AMBAR)}<span style="font-size:12.5px;'
+                         f'color:{COLOR_ESTADO[AMBAR]}">{motivo}</span>')
+        else:
+            # De arriba hacia abajo y con el color que le va a tocar a cada
+            # una: es lo que permite ver ANTES de confirmar que el orden
+            # quedo como se pidio. El cuadradito de la izquierda es el color
+            # asignado y el de la derecha el medido; si no se parecen, la
+            # pieza esta en el lugar equivocado.
+            for color, muestra in zip(cal.ORDEN_CALIBRACION, ordenadas):
                 filas.append(
-                    f'{_punto(ROJO)}<span style="color:{APAGADO};font-size:12.5px">'
-                    f'{cal.NOMBRE_COLOR[color]}: no se ve</span>')
-                continue
-
-            filas.append(
-                f'{_punto(VERDE)}<span style="font-size:12.5px">'
-                f'{cal.NOMBRE_COLOR[color]}</span>'
-                f'<span style="color:{APAGADO};font-size:12px"> — H={muestra.h} '
-                f'S={muestra.s} V={muestra.v}, {muestra.area:.0f} px2</span>'
-                f'{_muestra_color(muestra.hex(), 13)}')
-
-        sobran = len(muestras) - len(vistos)
-
-        if sobran > 0:
-            filas.append(
-                f'<span style="color:{COLOR_ESTADO[AMBAR]};font-size:12px">'
-                f'Hay {sobran} pieza(s) de mas en el cuadro: se mide la mas '
-                'grande de cada color.</span>')
+                    f'{_muestra_color(COLOR_MUESTRA[color], 13)}'
+                    f'<span style="font-size:12.5px">'
+                    f'{cal.NOMBRE_COLOR[color]}</span>'
+                    f'<span style="color:{APAGADO};font-size:12px"> — H={muestra.h} '
+                    f'S={muestra.s} V={muestra.v}, {muestra.area:.0f} px2</span>'
+                    f'{_muestra_color(muestra.hex(), 13)}')
 
         self.html_auto.content = (
             '<div style="display:flex;flex-direction:column;gap:5px;'
@@ -4703,9 +4906,9 @@ class Interfaz:
         self._vis_aplicar(resultado.ajustes, rearmar=True)
         self._vis_cerrar_auto(self._dialogo_auto)
 
-        ui.notify(resultado.mensaje + " Guardala con el nombre del lugar si "
-                  "quedo bien.", color="positive", multi_line=True,
-                  classes="max-w-md")
+        ui.notify(resultado.mensaje + " Si quedo bien, guardala en la "
+                  "habitacion cargada o con (+) si es un lugar nuevo.",
+                  color="positive", multi_line=True, classes="max-w-md")
 
     # ==================================================================
     #  VISION: refresco
@@ -4729,17 +4932,14 @@ class Interfaz:
             self.etiqueta_recorte_vis.text = f"recorte {self.vision.offset_recorte:+d} px"
 
         ajustes = self.ajustes_vision
-        activa = self.memoria_luces.activa
 
         for clave, boton in self.botones_temperatura.items():
             boton.props(f'color={"cyan-9" if ajustes.temperatura == clave else "grey-9"}')
 
-        if ajustes.temperatura:
-            self.etiqueta_habitacion.text = cal.NOMBRE_TEMPERATURA[ajustes.temperatura]
-        elif activa:
-            self.etiqueta_habitacion.text = f"cargada: {activa}"
-        else:
-            self.etiqueta_habitacion.text = "sin guardar"
+        # Se repinta en cada refresco y no solo al tocar un control: los
+        # ajustes tambien cambian desde el ajuste automatico y desde los
+        # presets de luz, y el asterisco tiene que aparecer igual.
+        self._vis_pintar_memoria()
 
     def _vis_pintar_comparacion(self) -> None:
         muestras = self.vision.muestras if self.vision else []

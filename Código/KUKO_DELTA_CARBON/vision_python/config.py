@@ -100,8 +100,6 @@ CAMERA_AUTO_EXPOSURE = True
 # seguro en ese sentido.
 CAMERA_EXPOSURE = -9
 
-WINDOW_NAME = "KUKO - Vision artificial"
-
 # Rotación aplicada a cada fotograma apenas se captura. Usar si la
 # cámara queda montada girada respecto a la cinta: lo que buscamos
 # es que la cinta se vea horizontal en pantalla.
@@ -138,7 +136,8 @@ CAMERA_ROTATION = "90_CLOCKWISE"
 #
 #   escala   21,5 / 597 = 0,036 cm/px  ->  27,8 px/cm
 #   0,5 cm   = 13,9 px
-#   main.py usa int(598 * ratio): 0.60 -> 358 px, 0.576 -> 344 px
+#   la linea se calcula con int(598 * ratio): 0.60 -> 358 px,
+#            0.576 -> 344 px
 #   corrimiento real = 14 px = 0,504 cm
 #
 # A 6,75 cm/s de cinta, eso adelanta el aviso unos 74 ms.
@@ -588,60 +587,16 @@ WATERSHED_MIN_PEAK_HEIGHT = 5
 # (el disco). El costo es un 1 % de área.
 SPLIT_CLEANUP_KERNEL_SIZE = 13
 
-# ----------------------------
-# Diagnóstico temporal de formas
-# ----------------------------
-
-# TEMPORAL (agosto 2026) — PONER EN False Y BORRAR AL TERMINAR.
+# NOTA sobre lo que YA NO está acá: la ventana de OpenCV, la bandera para
+# mostrar las máscaras y la configuración del puerto serie. Vivían en este
+# archivo cuando la visión era un programa suelto (`main.py`) que abría su
+# propia ventana y le hablaba al ESP32 por su cuenta. Hoy el bucle de visión
+# es `pc/kuko/vision.py`: no dibuja ninguna ventana --deja el fotograma
+# anotado en memoria y lo sirve como MJPEG-- y no toca el puerto, que es del
+# enlace (`pc/kuko/enlace.py`, donde también viven el puerto y los baudios).
 #
-# Con esto en True, cada contorno que pasa el filtro de área deja una línea
-# en un CSV con los tres números que mira classify_shape(): cuántos vértices
-# sobrevivieron a approxPolyDP, qué fracción del círculo envolvente llena la
-# figura, y la circularidad.
-#
-# Existe porque falta EL dato desde siempre: la ventana del hexágono
-# (HEXAGON_FILL_RATIO_MIN/MAX) se eligió con piezas cuadradas y redondas más
-# el valor teórico de un hexágono regular, sin ninguna pieza hexagonal real
-# medida. Ajustarla a ciegas no es gratis: los círculos verdes tienen
-# llenado 0,918 y el techo del hexágono está en 0,90, o sea 0,018 de margen.
-# Subir el techo para agarrar hexágonos empieza a comerse los círculos.
-#
-# Se mide con la cinta ANDANDO, a propósito: el error aparece en producción,
-# y una pieza quieta no tiene el desenfoque de movimiento que ablanda el
-# borde de la máscara, que es lo que sospechamos que corre estos números.
-LOG_FORMAS = False
-
-# Dónde se escribe, relativo a la raíz del repositorio.
-LOG_FORMAS_ARCHIVO = "formas_medidas.csv"
-
-# ----------------------------
-# Visualización
-# ----------------------------
-
-# Cada ventana extra cuesta unos milisegundos por fotograma. Para
-# mirar las máscaras conviene hsv_calibrator.py, que además deja
-# tocar los rangos en vivo.
-SHOW_COLOR_MASKS = False
-
-# ----------------------------
-# Comunicación serial
-# ----------------------------
-
-# Con esto en True, cada pieza que cruza la línea se le manda sola
-# al ESP32. Poner en False para probar únicamente la cámara, sin
-# robot conectado: la visión sigue funcionando igual.
-SERIAL_ENABLED = True
-
-# "AUTO" busca el puerto del ESP32 por el chip USB-serie de la placa
-# (CP210x, CH340, FTDI). Conviene dejarlo así: Windows le cambia el
-# número de COM según el puerto USB donde se enchufe, y además
-# descarta solo los COM de Bluetooth, que también aparecen listados.
-#
-# Si hubiera más de una placa conectada, poner el puerto a mano
-# ("COM5", "COM7", ...).
-SERIAL_PORT = "AUTO"
-
-SERIAL_BAUDRATE = 115200
+# Para mirar las máscaras está `hsv_calibrator.py`, que además deja mover
+# los rangos en vivo.
 
 # ============================================================
 # RECORTE DE LA CINTA
@@ -702,7 +657,7 @@ LINE_X_CM = -23.0
 
 # Ancla del eje Y: en qué Y del robot cae el borde INFERIOR de la
 # imagen. El borde superior queda entonces en
-# IMAGE_BOTTOM_Y_CM + IMAGE_HEIGHT_CM = 11.2 cm.
+# IMAGE_BOTTOM_Y_CM + IMAGE_HEIGHT_CM = 12.05 cm.
 # Calibrado contra el robot: con -2.8 el gripper agarraba 0,85 cm corrido,
 # y habia que compensarlo moviendo el recorte 24 px (que ademas desencuadraba
 # la imagen). El encuadre no era el problema: lo que estaba mal medido era
@@ -713,4 +668,10 @@ LINE_X_CM = -23.0
 # OJO: este valor tiene su par en el firmware (BELT_MIN_Y en Robot.cpp) y los
 # dos tienen que moverse juntos, o el firmware empieza a rechazar piezas de
 # un borde de la cinta por creerlas fuera de rango.
+#
+# Y POR ESO NO SE TOCA MAS PARA RECENTRAR EL AGARRE: el desencuadre de cada
+# vez que se mueve la camara o se vuelve a armar la cinta se corrige con el
+# parametro 'vis_dy' de la ventana de Servicio, que corre la Y informada sin
+# mover ninguno de estos dos numeros duplicados ni la ventana de recorte.
+# Esto es la MEDICION de donde esta el borde; aquello es el ajuste fino.
 IMAGE_BOTTOM_Y_CM = -1.95

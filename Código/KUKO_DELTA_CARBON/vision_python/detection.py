@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import time                       # TEMPORAL: solo para LOG_FORMAS
 from dataclasses import dataclass
 from math import pi
-from pathlib import Path          # TEMPORAL: solo para LOG_FORMAS
 
 import cv2
 import numpy as np
@@ -221,68 +219,6 @@ def classify_shape(
     return None, circularity
 
 
-# ======================================================================
-#  DIAGNOSTICO TEMPORAL DE FORMAS  --  BORRAR JUNTO CON LOG_FORMAS
-# ======================================================================
-
-_registro = {"archivo": None, "sin_volcar": 0}
-
-
-def _registrar_forma(color, contour, shape) -> None:
-    """Deja en un CSV los números con los que se decidió esta forma.
-
-    Rehace la cuenta de classify_shape() en vez de que classify_shape la
-    devuelva: es código temporal y no vale la pena cambiarle la firma a una
-    función que anda. Se borra junto con LOG_FORMAS, así que no hay riesgo
-    de que las dos cuentas se separen con el tiempo.
-    """
-
-    hull = cv2.convexHull(contour)
-
-    area = cv2.contourArea(hull)
-    perimeter = cv2.arcLength(hull, True)
-
-    if perimeter <= 0:
-        return
-
-    circularity = (4.0 * pi * area) / (perimeter * perimeter)
-
-    vertices = len(cv2.approxPolyDP(
-        hull, config.SHAPE_APPROX_EPSILON_RATIO * perimeter, True))
-
-    _, enclosing_radius = cv2.minEnclosingCircle(hull)
-    fill_ratio = (area / (pi * enclosing_radius * enclosing_radius)
-                  if enclosing_radius > 0 else 0.0)
-
-    if _registro["archivo"] is None:
-        ruta = Path(__file__).resolve().parents[1] / config.LOG_FORMAS_ARCHIVO
-        nuevo = not ruta.exists()
-
-        _registro["archivo"] = open(ruta, "a", encoding="utf-8")
-
-        if nuevo:
-            _registro["archivo"].write(
-                "hora,color,forma,vertices,llenado,circularidad,area\n")
-
-        print(f"[FORMAS] midiendo en {ruta}")
-
-    _registro["archivo"].write(
-        f"{time.time():.3f},{color},{shape or 'NINGUNA'},{vertices},"
-        f"{fill_ratio:.4f},{circularity:.4f},{area:.0f}\n")
-
-    # Volcado cada tanto y no en cada linea: son ~90 detecciones por segundo
-    # con tres piezas en el cuadro. Cada 50 se pierde medio segundo si
-    # alguien mata el programa, que no importa para esto.
-    _registro["sin_volcar"] += 1
-
-    if _registro["sin_volcar"] >= 50:
-        _registro["archivo"].flush()
-        _registro["sin_volcar"] = 0
-
-
-# ======================================================================
-
-
 def split_touching_blob(
     mask: np.ndarray,
     contour: np.ndarray,
@@ -471,7 +407,8 @@ def find_piece_contours(
 def detect_objects(
     frame: np.ndarray,
 ) -> tuple[list[Detection], dict[str, np.ndarray]]:
-    """Detecta círculos y cuadrados rojos o azules.
+    """Detecta las piezas: cuadrado, hexágono o círculo, en rojo,
+    verde o azul.
 
     El fotograma que llega ya viene recortado a la cinta por
     Camera.read(), así que no hace falta enmascarar nada: todo lo
@@ -506,12 +443,6 @@ def detect_objects(
                 continue
 
             shape, circularity = classify_shape(contour)
-
-            # TEMPORAL (ver LOG_FORMAS en config.py). Va ANTES del descarte
-            # a proposito: la pieza que no clasifica es justamente la que
-            # hay que medir.
-            if config.LOG_FORMAS:
-                _registrar_forma(color, contour, shape)
 
             if shape is None:
                 continue

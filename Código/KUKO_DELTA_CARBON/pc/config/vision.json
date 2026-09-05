@@ -1,5 +1,5 @@
 {
-  "activa": "Aula Mecatrónica",
+  "activa": "Pieza arriba",
   "habitaciones": {
     "Comedor casa": {
       "guardada": 1788223015.985485,
@@ -51,30 +51,30 @@
       "temperatura": ""
     },
     "Pieza arriba": {
-      "guardada": 1788392498.5099535,
+      "guardada": 1788638957.0265145,
       "colores": {
         "ROJO": [
-          158,
-          18,
+          161,
+          16,
           0,
-          243,
-          181,
+          255,
+          107,
           255
         ],
         "VERDE": [
           44,
-          84,
-          29,
-          112,
-          90,
+          69,
+          0,
+          184,
+          70,
           255
         ],
         "AZUL": [
           88,
           123,
-          92,
-          232,
-          135,
+          72,
+          255,
+          120,
           255
         ]
       },
@@ -96,7 +96,7 @@
       },
       "exposicion_modo": "auto",
       "exposicion_valor": -9,
-      "correccion_pct": -11,
+      "correccion_pct": -7,
       "temperatura": ""
     },
     "Aula Mecatrónica": {

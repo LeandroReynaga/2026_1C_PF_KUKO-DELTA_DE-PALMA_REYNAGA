@@ -108,7 +108,13 @@ private:
 
     // Tope de parametros. Con el ESP32 no hay motivo para reservar memoria
     // dinamica por 40 punteros: entra en la RAM estatica y se acabo.
-    static const uint8_t CAPACIDAD = 64;
+    //
+    // Subido de 64 a 70 al agregar 'vis_dy', que dejaba la tabla en 63 de
+    // 64. Quedarse sin lugar no rompe nada ruidosamente --`registrar()`
+    // avisa por Serial y sigue--, pero el parametro simplemente no aparece
+    // en la interfaz, y eso es facil de no ver. Cada entrada son 28 bytes
+    // sobre 320 KB de RAM, asi que el margen no cuesta nada.
+    static const uint8_t CAPACIDAD = 70;
 
     // La NVS limita las claves a 15 caracteres. Se valida al registrar, asi
     // el problema aparece en el arranque del banco de pruebas y no la

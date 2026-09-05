@@ -1,4 +1,9 @@
+# Lo que necesitan los modulos de vision de este directorio por si se los
+# usa sueltos (hsv_calibrator.py, crop_calibrator.py, test_benchmark_camera.py).
+#
+# La aplicacion completa se instala con pc/requirements.txt, que ademas trae
+# el servidor de la interfaz y el puerto serie: el hilo de vision es
+# pc/kuko/vision.py y de ahi salen las piezas hacia el ESP32. Aca no hay ni
+# comunicacion serie ni interfaz grafica propia.
 opencv-python
 numpy
-pyserial
-PySide6

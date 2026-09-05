@@ -54,6 +54,11 @@ CINTA_HSV = (95, 34, 150)
 
 ALTO, ANCHO = 397, 598
 
+# Dónde cae la línea de detección en ese recorte, con los mismos números que
+# usa el hilo de visión (`int(ancho * config.LINE_X_RATIO)`). Las piezas de
+# las escenas se apoyan ahí, que es donde el procedimiento pide ponerlas.
+LINEA_X = int(ANCHO * config.LINE_X_RATIO)
+
 
 def _escena(piezas: dict[str, tuple[int, int, int]]) -> np.ndarray:
     """Una cinta gris con un hexágono por cada color pedido.
@@ -61,16 +66,22 @@ def _escena(piezas: dict[str, tuple[int, int, int]]) -> np.ndarray:
     El hexágono y no el círculo porque es la pieza con la que se hace el
     ajuste automático de verdad: tiene el llenado más lejos de los otros dos
     y es la que menos se confunde de forma.
+
+    Las piezas quedan EN COLUMNA sobre la línea de detección y en el orden
+    del diccionario, que es como el ajuste automático pide que se apoyen:
+    de ahí saca de qué color es cada una (ver `cal.ORDEN_CALIBRACION`). Con
+    ellas puestas en fila —como estaban acá antes— el orden no significaría
+    nada y `calibrar()` se negaría, con razón.
     """
 
     hsv = np.zeros((ALTO, ANCHO, 3), dtype=np.uint8)
     hsv[:, :] = CINTA_HSV
 
     for indice, color_hsv in enumerate(piezas.values()):
-        centro_x = 110 + indice * 175
+        centro_y = 70 + indice * 128
 
         puntos = np.array(
-            [[int(centro_x + 46 * np.cos(a)), int(200 + 46 * np.sin(a))]
+            [[int(LINEA_X + 46 * np.cos(a)), int(centro_y + 46 * np.sin(a))]
              for a in np.linspace(0, 2 * np.pi, 7)[:-1]], dtype=np.int32)
 
         cv2.fillPoly(hsv, [puntos], color_hsv)
@@ -87,13 +98,19 @@ def _escena(piezas: dict[str, tuple[int, int, int]]) -> np.ndarray:
 
 # Las tres piezas "de fábrica": caen dentro de los rangos que hay escritos
 # en config.py, así que la escena se detecta entera sin tocar nada.
-PIEZAS_OK = {"ROJO": (170, 200, 190), "VERDE": (66, 90, 185),
-             "AZUL": (105, 180, 200)}
+#
+# Van en el orden en que hay que apoyarlas para calibrar, porque `_escena()`
+# las apila de arriba hacia abajo en el orden del diccionario.
+PIEZAS_OK = {"ROJO": (170, 200, 190), "AZUL": (105, 180, 200),
+             "VERDE": (66, 90, 185)}
 
 # La misma escena bajo otra luz: los tonos corridos y el verde fuera de su
-# rango (H=80 contra un techo de 74). Es el caso que motivó toda la pestaña.
-PIEZAS_CORRIDAS = {"ROJO": (166, 190, 200), "VERDE": (80, 84, 175),
-                   "AZUL": (114, 150, 205)}
+# rango (H=80 contra un techo de 74). Es el caso que motivó toda la pestaña,
+# y el que además rompía el ajuste automático viejo: en H=80 el verde está
+# más cerca del azul (105) que del verde (60), así que la pieza verde se
+# informaba como "no se ve" con la pieza verde apoyada delante.
+PIEZAS_CORRIDAS = {"ROJO": (166, 190, 200), "AZUL": (114, 150, 205),
+                   "VERDE": (80, 84, 175)}
 
 
 def _detectados(frame: np.ndarray) -> dict[str, str]:
@@ -334,11 +351,12 @@ def test_el_ajuste_automatico_recupera_una_escena_corrida():
 
 
 def test_el_ajuste_automatico_no_toca_nada_si_faltan_piezas():
-    """Con dos piezas no se calibra, y se dice cuál falta.
+    """Con dos piezas no se calibra, y se dice cuántas se ven.
 
     Aplicar una calibración a medias sería peor que no hacer nada: dejaría
     dos colores buenos y uno con el rango de otra sala, y no habría forma de
-    saber cuál es cuál mirando la pantalla.
+    saber cuál es cuál mirando la pantalla. Y con los colores asignados por
+    posición, además, faltar una corre a las otras dos de lugar.
     """
 
     with _Fabrica():
@@ -346,13 +364,101 @@ def test_el_ajuste_automatico_no_toca_nada_si_faltan_piezas():
                                           "AZUL": (105, 180, 200)}))
 
         assert not resultado.ok
-        assert "Verde" in resultado.mensaje, resultado.mensaje
+        assert "2" in resultado.mensaje and "3" in resultado.mensaje, \
+            resultado.mensaje
         assert resultado.ajustes is None
 
         # Y lo que sí vio va igual en el resultado: es lo que le permite a
-        # la pantalla decir "veo un rojo y un azul" en vez de "faltan
-        # piezas" a secas.
-        assert {m.color for m in resultado.muestras} == {"ROJO", "AZUL"}
+        # la pantalla decir "veo dos piezas" en vez de "faltan piezas" a
+        # secas.
+        assert len(resultado.muestras) == 2
+
+
+# Una sala en la que el reconocimiento por tono se equivoca de verdad: el
+# verde mide H=88, que está más cerca del azul de referencia (105) que del
+# verde (60). El método viejo veía dos azules y ningún verde, y contestaba
+# "falta ver: Verde" con la pieza verde apoyada delante de la cámara — el
+# problema que este procedimiento vino a resolver.
+PIEZAS_IRRECONOCIBLES = {"ROJO": (166, 190, 200), "AZUL": (118, 150, 205),
+                         "VERDE": (88, 84, 175)}
+
+
+def test_el_ajuste_automatico_asigna_los_colores_por_posicion():
+    """El punto de todo el cambio: se calibra SIN reconocer las piezas.
+
+    Sobre una escena que el reconocimiento por tono no puede resolver, cada
+    pieza tiene que terminar calibrada con el color que le toca por dónde
+    está apoyada.
+    """
+
+    with _Fabrica():
+        frame = _escena(PIEZAS_IRRECONOCIBLES)
+
+        # La trampa que rompía el método viejo, escrita como aserción: por
+        # tono, la pieza de abajo (la verde, porque es donde `_escena()` la
+        # puso) no es verde, y ningún color queda representado tres veces.
+        muestras = cal.muestrear(frame)
+        abajo = max(muestras, key=lambda m: m.centro[1])
+
+        assert abajo.color != "VERDE", \
+            "esta escena ya no ejercita el caso que motivó el cambio"
+        assert len({m.color for m in muestras}) < 3
+
+        resultado = cal.calibrar(frame)
+
+        assert resultado.ok, resultado.mensaje
+
+        # Cada rango tiene que haber quedado alrededor de la pieza que el
+        # operador puso en ese lugar, no de la que el tono habría elegido.
+        for color, pieza in PIEZAS_IRRECONOCIBLES.items():
+            assert resultado.ajustes.colores[color].contiene(*pieza), color
+
+        # Y con eso puesto, la escena se detecta entera: es lo que el
+        # operador ve al cerrar el diálogo.
+        cal.aplicar(resultado.ajustes)
+
+        assert set(_detectados(frame)) == {"ROJO", "VERDE", "AZUL"}
+
+
+def test_el_ajuste_automatico_rechaza_las_piezas_en_fila():
+    """Puestas una al lado de la otra, el orden no significa nada.
+
+    Es el modo de fallar que hay que evitar a toda costa: calibrar igual
+    asignaría los colores por el ruido del centroide y dejaría un robot que
+    clasifica todo al revés, sin ningún error a la vista.
+    """
+
+    with _Fabrica():
+        hsv = np.zeros((ALTO, ANCHO, 3), dtype=np.uint8)
+        hsv[:, :] = CINTA_HSV
+
+        for indice, color_hsv in enumerate(PIEZAS_OK.values()):
+            centro_x = 110 + indice * 175
+
+            puntos = np.array(
+                [[int(centro_x + 46 * np.cos(a)), int(200 + 46 * np.sin(a))]
+                 for a in np.linspace(0, 2 * np.pi, 7)[:-1]], dtype=np.int32)
+
+            cv2.fillPoly(hsv, [puntos], color_hsv)
+
+        resultado = cal.calibrar(cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR))
+
+        assert not resultado.ok
+        assert "DEBAJO" in resultado.mensaje, resultado.mensaje
+        assert resultado.ajustes is None
+
+
+def test_el_orden_de_colocacion_cubre_todos_los_colores():
+    """Un color en `COLORES` que no esté en `ORDEN_CALIBRACION` no se calibra.
+
+    Las dos listas se escriben a mano y en lugares distintos, así que la
+    única defensa contra agregar un color en una y olvidarlo en la otra es
+    compararlas. El síntoma sería mudo: el color nuevo aparecería con sus
+    sliders en la pantalla y el ajuste automático nunca lo tocaría.
+    """
+
+    assert set(cal.ORDEN_CALIBRACION) == set(cal.COLORES)
+    assert len(cal.ORDEN_CALIBRACION) == len(cal.COLORES)
 
 
 def test_el_ajuste_automatico_avisa_sin_piezas():
@@ -688,6 +794,30 @@ class VisionFalsa:
         return self.offset_recorte
 
 
+def _mostrado(interfaz, nombre: str) -> str:
+    """Con qué texto aparece esa habitación en el selector.
+
+    La CLAVE de la opción es siempre el nombre guardado y el asterisco vive
+    sólo en la etiqueta: si se colara en la clave, elegir esa habitación de
+    la lista buscaría «Pieza arriba *» en la memoria y no la encontraría.
+    Por eso se lee acá el diccionario y no el texto suelto.
+    """
+
+    return interfaz.select_habitacion.options[nombre]
+
+
+class _DialogoFalso:
+    """El diálogo de "poné un nombre", ya contestado.
+
+    Las pruebas entran por `_vis_guardar_ya()` en vez de abrir el diálogo y
+    tipear adentro: lo que hay que verificar es qué se guarda y qué queda
+    cargado, no que Quasar sepa cerrar una ventana.
+    """
+
+    def close(self) -> None:
+        pass
+
+
 def _estado_con_cinta(andando: bool, calibrando: bool = False,
                       en_reposo: bool = True) -> EstadoSistema:
     estado = EstadoSistema()
@@ -996,6 +1126,7 @@ def test_el_ajuste_automatico_desde_la_pantalla_frena_la_cinta_y_calibra():
             interfaz._vis_pintar_auto()
 
             assert interfaz.boton_calibrar.enabled
+            assert interfaz.boton_calibrar.text == "Confirmar"
 
             # Y dice qué está viendo, con los tres colores nombrados.
             interfaz._vis_pintar_auto()
@@ -1093,15 +1224,23 @@ def test_un_preset_mueve_los_controles_sin_volver_a_aplicarse():
 
 def test_cargar_una_habitacion_rearma_los_sliders_de_color():
     """Un color puede pasar de un tramo a dos, y ahí no hay slider al que
-    ponerle un valor: las tarjetas se rehacen enteras."""
+    ponerle un valor: las tarjetas se rehacen enteras.
+
+    Y de paso, que al volver a una habitación se aplique también SU
+    exposición y no la que estaba puesta. Es la mitad de la calibración que
+    no está en los rangos: la misma pieza bajo la misma luz, con la cámara
+    expuesta distinto, cae en otro lado del espacio HSV. Una habitación que
+    devolviera los colores pero no la exposición no devolvería nada.
+    """
 
     import pagina
 
     from kuko import ui as interfaz_ui
 
     with _Fabrica():
+        vision = VisionFalsa()
         interfaz = interfaz_ui.Interfaz(EstadoSistema(), lambda linea: True,
-                                        VisionFalsa())
+                                        vision)
 
         def cuerpo():
             interfaz.construir()
@@ -1110,14 +1249,22 @@ def test_cargar_una_habitacion_rearma_los_sliders_de_color():
 
             ajustes = cal.de_fabrica()
             ajustes.colores["ROJO"] = cal.Rango(0, 8, 60, 255, 90, 255)
+            ajustes.exposicion_modo = cal.MODO_MANUAL
+            ajustes.exposicion_valor = -8
+            ajustes.correccion_pct = -10
             interfaz.memoria_luces.guardar("Aula facultad", ajustes)
 
             # `activa` queda puesta al guardar; se limpia para que la carga
             # no se saltee por "ya estás en esa".
             interfaz.memoria_luces.activa = ""
+            vision.pedidos.clear()
             interfaz._vis_cargar("Aula facultad")
 
             assert config.COLOR_HSV_RANGES["ROJO"] == (((0, 60, 90), (8, 255, 255)),)
+
+            # (automatica, exposicion, correccion) — lo que el hilo de
+            # visión le va a pedir al dispositivo entre dos fotogramas.
+            assert vision.pedidos[-1] == (False, -8, -10)
 
         assert pagina.pedir(cuerpo).status_code == 200
 
@@ -1147,6 +1294,108 @@ def test_la_exposicion_se_le_pide_al_hilo_de_vision():
 
         assert pagina.pedir(cuerpo).status_code == 200
         assert vision.pedidos[-1] == (False, -11, -15)
+
+
+def test_el_asterisco_marca_los_cambios_sin_guardar():
+    """El ciclo entero de la memoria de luces: cargada → * → guardar / revertir.
+
+    Sin el asterisco, el nombre de la habitación dice de dónde salió la
+    calibración, no cuál es: los sliders la cambian en vivo y sin guardar
+    nada, así que la única forma de enterarse de que había cambios pendientes
+    era perderlos al elegir otra habitación de la lista.
+    """
+
+    import pagina
+
+    from kuko import ui as interfaz_ui
+
+    with _Fabrica():
+        interfaz = interfaz_ui.Interfaz(EstadoSistema(), lambda linea: True,
+                                        VisionFalsa())
+
+        def cuerpo():
+            interfaz.construir()
+            interfaz.memoria_luces = _memoria_temporal()
+
+            # Recién guardada: lo que hay puesto ES la habitación.
+            interfaz._vis_guardar_ya(_DialogoFalso(), "Pieza arriba")
+
+            assert _mostrado(interfaz, "Pieza arriba") == "Pieza arriba"
+            assert not interfaz._vis_modificado()
+            assert not interfaz.boton_revertir_hab.enabled
+
+            guardado = interfaz.memoria_luces.habitaciones[
+                "Pieza arriba"].ajustes.colores["AZUL"].h0
+
+            # Se mueve un umbral: mismo nombre, pero ya no es lo guardado.
+            interfaz._vis_color_cambio("AZUL", "h0", guardado + 5)
+            interfaz._vis_pintar_memoria()
+
+            assert _mostrado(interfaz, "Pieza arriba") == "Pieza arriba *"
+            assert interfaz.boton_revertir_hab.enabled
+            assert config.COLOR_HSV_RANGES["AZUL"][0][0][0] == guardado + 5
+
+            # Y el nombre se pinta en ámbar. La clase es lo único que se
+            # puede verificar sin un navegador; que pinte lo que tiene que
+            # pintar es la regla CSS de `construir()`.
+            assert "habitacion-modificada" in interfaz.select_habitacion.classes
+
+            # Revertir: vuelve lo guardado, y vuelve a la DETECCIÓN, no sólo
+            # a la etiqueta.
+            interfaz._vis_revertir()
+
+            assert _mostrado(interfaz, "Pieza arriba") == "Pieza arriba"
+            assert config.COLOR_HSV_RANGES["AZUL"][0][0][0] == guardado
+            assert "habitacion-modificada" not in interfaz.select_habitacion.classes
+
+            # Y ahora al revés: se cambia y se guarda. El * se apaga porque
+            # la habitación pasó a valer lo nuevo.
+            interfaz._vis_color_cambio("AZUL", "h0", guardado + 9)
+            interfaz._vis_pintar_memoria()
+
+            assert _mostrado(interfaz, "Pieza arriba") == "Pieza arriba *"
+
+            interfaz._vis_guardar()
+
+            assert _mostrado(interfaz, "Pieza arriba") == "Pieza arriba"
+            assert interfaz.memoria_luces.habitaciones[
+                "Pieza arriba"].ajustes.colores["AZUL"].h0 == guardado + 9
+
+        assert pagina.pedir(cuerpo).status_code == 200
+
+
+def test_una_habitacion_nueva_no_pisa_la_cargada():
+    """El (+) guarda con otro nombre; la anterior queda como estaba."""
+
+    import pagina
+
+    from kuko import ui as interfaz_ui
+
+    with _Fabrica():
+        interfaz = interfaz_ui.Interfaz(EstadoSistema(), lambda linea: True,
+                                        VisionFalsa())
+
+        def cuerpo():
+            interfaz.construir()
+            interfaz.memoria_luces = _memoria_temporal()
+
+            interfaz._vis_guardar_ya(_DialogoFalso(), "Pieza arriba")
+            original = interfaz.memoria_luces.habitaciones[
+                "Pieza arriba"].ajustes.colores["AZUL"].h0
+
+            interfaz._vis_color_cambio("AZUL", "h0", original + 7)
+            interfaz._vis_guardar_ya(_DialogoFalso(), "Aula facultad")
+
+            habitaciones = interfaz.memoria_luces.habitaciones
+
+            assert set(habitaciones) == {"Pieza arriba", "Aula facultad"}
+            assert habitaciones["Pieza arriba"].ajustes.colores["AZUL"].h0 == original
+            assert habitaciones["Aula facultad"].ajustes.colores["AZUL"].h0 == original + 7
+
+            # La nueva queda cargada y sin cambios pendientes.
+            assert _mostrado(interfaz, "Aula facultad") == "Aula facultad"
+
+        assert pagina.pedir(cuerpo).status_code == 200
 
 
 if __name__ == "__main__":

@@ -29,17 +29,16 @@ Hay dos entornos en `platformio.ini`, ambos apuntando a
   No es un setup de PlatformIO Unit Testing (no hay `pio test`), sino un
   build alternativo de un solo archivo para bring-up de placa/código de prueba.
 
-`pruebas/` y `otros_codigos/` contienen archivos `.bak` de prueba/referencia
-(sketches independientes viejos para motores, encoders, cinemática, etc.) —
-no forman parte del build `main`, útiles como referencia histórica al
-depurar un subsistema específico de forma aislada.
+`pruebas/` contiene, además de `test.cpp`, archivos `.bak` de
+prueba/referencia (sketches independientes viejos para motores, encoders,
+cinemática, etc.) — no forman parte de ningún build, útiles como referencia
+histórica al depurar un subsistema específico de forma aislada.
 
 ## Arquitectura
 
 Todo corre en un único loop de core del ESP32 (`src/main.cpp`) más ISRs de
-timer de hardware para la generación de pulsos de paso. Todavía no hay uso
-de RTOS tasks (`src/tasks/TaskManager.*` existe como header vacío —
-placeholder para trabajo futuro, no conectado actualmente).
+timer de hardware para la generación de pulsos de paso. No hay uso de RTOS
+tasks.
 
 **Máquina de estados del robot** (`src/robot/Robot.h/.cpp`) es el
 orquestador. Antes del `switch`, cada `update()` corre `supervisarColision()`
@@ -73,13 +72,6 @@ anteriormente. Float solo se usa fuera de la ISR (en
 límites de rampa antes de que empiecen las secciones críticas. El estado
 compartido entre `loop()` y la ISR es `volatile` y está protegido por
 `portENTER_CRITICAL`/`portEXIT_CRITICAL` con un mutex por instancia.
-
-`src/robot/StepperISR.h` / `SteppeprISR.cpp` (notar el typo en el nombre
-del archivo) es una **implementación alternativa/legacy del stepper** que
-usa escritura directa a registros GPIO y un único timer compartido para
-todos los ejes. No está incluida por `Robot.cpp` ni `main.cpp` —
-`Stepper.h/.cpp` es la que realmente está en uso. No asumas que ambas están
-activas; revisá los `#include` antes de editar cualquiera de las dos.
 
 **Supervisión de colisiones** (`src/robot/CollisionGuard.h/.cpp`) es la
 única parte del sistema que usa los encoders en marcha. NO es control de
@@ -283,13 +275,11 @@ fin de carrera por motor, usadas solo durante el homing), `Pneumatics`
 **Asignación de pines** vive en `include/Pinout.h` — el único lugar donde
 deben definirse números de pin; el código de hardware/robot debería
 referenciar estas macros en lugar de hardcodear números de GPIO.
-`include/Config.h`, `include/Types.h` e `include/Constants.h` existen
-actualmente pero están vacíos.
+Es el único header de `include/`: el resto de las constantes vive al
+principio del módulo que las usa, junto a la medición que las eligió.
 
 ## Estado WIP conocido
 
-- `src/vision/Vision.*` y `src/tasks/TaskManager.*` son archivos stub
-  vacíos — todavía sin implementación.
 - `MovimientoLineal` (movL) está implementado y probado, pero **sólo
   conectado al modo teach** (`JL`). Los tres lugares del ciclo normal donde
   serviría —la bajada sobre la pieza, la entrada a una celda de la caja y la
@@ -438,9 +428,22 @@ actualmente pero están vacíos.
     veces. Sus corrimientos **no están medidos** contra las lámparas de la
     facultad —son la dirección correcta con una magnitud razonable—; el que
     da el número bueno es el ajuste automático con las piezas delante.
-  - **El ajuste automático no calibra a medias.** Si no ve las tres piezas
-    no cambia nada y dice cuál falta: dejar dos colores buenos y uno con el
-    rango de otra sala no se puede distinguir mirando la pantalla.
+  - **El ajuste automático identifica las piezas por dónde están, no por
+    el color que aparentan.** Se apoyan las tres sobre la línea de
+    detección, una debajo de la otra y en el orden de
+    `cal.ORDEN_CALIBRACION` (rojo, azul, verde de arriba hacia abajo), y
+    recién al confirmar se mide. Antes se adivinaba el color por el tono, y
+    eso sólo funciona con la calibración ya más o menos buena — o sea justo
+    cuando no hace falta: bajo una luz nueva el verde mide H≈80-88, más
+    cerca del azul de referencia (105) que del verde (60), y la pantalla
+    contestaba «falta ver: Verde» con la pieza verde apoyada delante de la
+    cámara, sin forma de salir de ahí. La posición la sabe el operador; el
+    color es lo que se está tratando de averiguar.
+  - **El ajuste automático no calibra a medias.** Si no ve exactamente tres
+    piezas, o si no están en columna, no cambia nada y dice por qué: dejar
+    dos colores buenos y uno con el rango de otra sala no se puede
+    distinguir mirando la pantalla, y con los colores asignados por
+    posición una pieza de más corre a las otras de lugar.
 
   Las habitaciones ("Pieza", "Aula facultad") viven en `pc/config/vision.json`
   y **sí** van al repositorio, igual que las secuencias de teach: una

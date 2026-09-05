@@ -15,18 +15,15 @@ Hojas de datos de los componentes principales del KUKO Delta Carbon.
 | Motorreductor 60RPM | `motorreductor.pdf` | Torque a tensión nominal, rpm |
 | Switch Final de Carrera | `final-de-carrera.pdf` | Dimensiones, NO y NC|
 
+---
 
 > **Los aspectos más importantes**
 
 > - La **placa ESP32** debe tener suficiente capacidad de procesamiento y cantidad de pines para todos los componentes del robot.
-
 > - La selección del modelo de **motores paso a paso** es fundamental para garantizar **torque sostenido a altas RPM** ya que una caída
 >   del torque genera pérdida de pasos.
-
 > - El **circuito neumático** debe ser capaz de generar vacío y liberar el sistema **a alta velocidad**.
-
 > - La **cámara** debe tener suficiente resolución y contraste.
-
 > - La **cinta transportadora** no debe trabarse durante el funcionamiento.
 
 Nombres de archivo sin espacios, sin acentos y en minúscula.

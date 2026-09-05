@@ -785,12 +785,19 @@ Estos valores existen **en los dos lados** y tienen que valer lo mismo. Si se
 editan de un solo lado, el robot le empieza a errar a las piezas sin que nada
 avise, y es de las fallas más caras de encontrar.
 
-| Visión (`config.py`) | Firmware (`Robot.cpp`) | Valor |
+| PC | Firmware (`Robot.cpp`) | Valor |
 |---|---|---|
-| `LINE_X_CM` | `DETECTION_LINE_X` | −23,0 cm |
-| `IMAGE_BOTTOM_Y_CM` | `BELT_MIN_Y` | −2,8 cm |
-| `IMAGE_BOTTOM_Y_CM + IMAGE_HEIGHT_CM` | `BELT_MAX_Y` | 11,2 cm |
-| `SERIAL_BAUDRATE` | `Serial.begin()` | 115200 |
+| `LINE_X_CM` (`config.py`) | `DETECTION_LINE_X` | −23,0 cm |
+| `IMAGE_BOTTOM_Y_CM` (`config.py`) | `BELT_MIN_Y` | −1,95 cm |
+| `IMAGE_BOTTOM_Y_CM + IMAGE_HEIGHT_CM` (`config.py`) | `BELT_MAX_Y` | 12,05 cm |
+| `Enlace(baudios=…)` (`kuko/enlace.py`) | `Serial.begin()` | 115200 |
+
+El ajuste fino de esos dos anclajes **no** se hace editándolos: para eso
+están `vis_lat` (a lo largo de la cinta, nivel operación) y `vis_dy` (a lo
+ancho, nivel servicio), que corrigen la posición informada sin tocar ningún
+número duplicado. `vis_dy` se suma **antes** de validar la pieza contra
+`BELT_MIN_Y`/`BELT_MAX_Y`, así que todo lo que viene después —la cola, el
+log y el registro de fallos— habla de la Y corregida.
 
 La geometría del brazo es el otro caso, y es más peligroso porque no da
 ningún síntoma: `pc/kuko/cinematica.py` repite las constantes de
@@ -907,16 +914,48 @@ que contiene la pieza de verdad, así que el sector donde el rojo realmente vive
 
 ### 8.6 El ajuste automático
 
-Se frena la cinta, se pone un hexágono de cada color y se mide. La receta es
-la misma que se usó a mano para elegir los rangos de `config.py`: percentiles
-y no mínimos y máximos (una cola de tres píxeles no puede decidir un umbral),
-y margen distinto por canal, porque cada canal falla distinto. Los tres
-márgenes salen de comparar el rango elegido a mano contra la pieza que lo
-originó, y la cuenta está escrita en el código.
+El procedimiento, tal como lo hace el operador:
 
-Si no ve las tres piezas **no cambia nada** y dice cuál falta: una calibración
-a medias dejaría dos colores buenos y uno con el rango de otra sala, sin forma
-de saber cuál es cuál mirando la pantalla.
+1. Botón **Ajuste automático**. Se frenan solos el robot y la cinta (§1.2.1),
+   y el diálogo espera a que el brazo esté de verdad quieto antes de dejar
+   confirmar: para apoyar las piezas hay que meter las manos en la cinta.
+2. Se apoyan los tres hexágonos **sobre la línea de detección, uno debajo del
+   otro**, en el orden de `cal.ORDEN_CALIBRACION`: rojo arriba, azul al
+   medio, verde abajo.
+3. **Confirmar.** Recién ahí se mide y se propone la calibración.
+
+**El color de cada pieza sale de su posición, no de su tono**, y ése es el
+punto entero. Antes se adivinaba por el tono, con `_color_mas_parecido()`, y
+eso funciona mientras la calibración ya sea más o menos buena — o sea justo
+cuando no hace falta. Bajo una luz nueva el verde mide H≈80-88, que está más
+cerca del azul de referencia (105) que del verde (60): el sistema informaba
+«falta ver: Verde» con la pieza verde apoyada delante de la cámara, y no
+había manera de salir de ahí, porque para calibrar hacía falta reconocer las
+piezas y para reconocerlas hacía falta estar calibrado. Con el orden de
+colocación no hay nada que adivinar: la de arriba es la roja porque el
+operador la puso ahí, y lo que se mide de ella **es** el rojo de esta sala,
+mida lo que mida.
+
+Medido eso, la receta es la misma que se usó a mano para elegir los rangos de
+`config.py`: percentiles y no mínimos y máximos (una cola de tres píxeles no
+puede decidir un umbral), y margen distinto por canal, porque cada canal falla
+distinto. Los tres márgenes salen de comparar el rango elegido a mano contra
+la pieza que lo originó, y la cuenta está escrita en el código.
+
+Se rechaza —sin cambiar nada, diciendo el motivo— si no se ven exactamente
+tres piezas o si no están en columna. Las dos condiciones son por lo mismo:
+con los colores asignados por posición, cualquier escena en la que el orden
+sea dudoso terminaría en una asignación inventada, y un rojo calibrado con la
+medición del verde no da ningún error — da un robot que clasifica todo al
+revés. Que dos de los rangos propuestos compartan tono sí se avisa pero no
+frena: es la firma de haber puesto dos piezas del mismo color, o de haberlas
+puesto en otro orden.
+
+El botón **no** espera a ver las tres piezas para habilitarse. La medición en
+vivo del diálogo es una ayuda, no un permiso: lo único que lo bloquea es que
+el brazo todavía se esté moviendo. Un botón que se habilita sólo cuando el
+programa cree entender la escena es justamente lo que dejaba al operador
+encerrado afuera.
 
 ### 8.7 Los presets de luz son un lugar, no un empujón
 

@@ -90,7 +90,7 @@ def read_trackbars() -> tuple[tuple[int, int, int], tuple[int, int, int]]:
 
 
 def main() -> None:
-    # Se usa la misma clase Camera que main.py para calibrar sobre
+    # Se usa la misma clase Camera que el bucle de vision, para calibrar
     # exactamente la misma imagen: ya rotada y recortada a la cinta.
     camera = Camera()
 

@@ -91,9 +91,9 @@ def main() -> None:
         else:
             print(
                 "La camara entrega bastante mas de lo que se ve en "
-                "pantalla durante main.py. Ahi el cuello de botella "
-                "esta en otra parte del pipeline (dibujo, ventanas "
-                "de mascara, etc), no en la captura."
+                "pantalla con la interfaz andando. Ahi el cuello de "
+                "botella esta en otra parte del pipeline (deteccion, "
+                "dibujo, codificacion a JPEG), no en la captura."
             )
 
 
