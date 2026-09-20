@@ -1,8 +1,8 @@
 {
-  "activa": "Pieza arriba",
+  "activa": "Comedor casa",
   "habitaciones": {
     "Comedor casa": {
-      "guardada": 1788223015.985485,
+      "guardada": 1789768781.1001728,
       "colores": {
         "ROJO": [
           167,
@@ -13,9 +13,9 @@
           255
         ],
         "VERDE": [
-          60,
+          43,
           78,
-          59,
+          31,
           255,
           103,
           255
@@ -146,6 +146,55 @@
       "exposicion_modo": "auto",
       "exposicion_valor": -9,
       "correccion_pct": 11,
+      "temperatura": ""
+    },
+    "Aula Magna": {
+      "guardada": 1789430533.0092714,
+      "colores": {
+        "ROJO": [
+          145,
+          15,
+          33,
+          200,
+          155,
+          255
+        ],
+        "VERDE": [
+          33,
+          79,
+          25,
+          195,
+          158,
+          255
+        ],
+        "AZUL": [
+          88,
+          119,
+          81,
+          255,
+          125,
+          255
+        ]
+      },
+      "geometria": {
+        "MIN_CONTOUR_AREA": 3600,
+        "MAX_CONTOUR_AREA": 43000,
+        "MORPH_KERNEL_SIZE": 5,
+        "MASK_SMOOTHING_KERNEL_SIZE": 7,
+        "SHAPE_APPROX_EPSILON_RATIO": 0.035,
+        "SQUARE_ASPECT_RATIO_MIN": 0.75,
+        "SQUARE_ASPECT_RATIO_MAX": 1.25,
+        "HEXAGON_FILL_RATIO_MIN": 0.73,
+        "HEXAGON_FILL_RATIO_MAX": 0.9,
+        "HEXAGON_CIRCULARITY_MAX": 0.962,
+        "CIRCLE_CIRCULARITY_MIN": 0.92,
+        "WATERSHED_MIN_PEAK_DISTANCE": 18,
+        "WATERSHED_MIN_PEAK_HEIGHT": 5,
+        "SPLIT_CLEANUP_KERNEL_SIZE": 13
+      },
+      "exposicion_modo": "auto",
+      "exposicion_valor": -9,
+      "correccion_pct": -10,
       "temperatura": ""
     }
   }
