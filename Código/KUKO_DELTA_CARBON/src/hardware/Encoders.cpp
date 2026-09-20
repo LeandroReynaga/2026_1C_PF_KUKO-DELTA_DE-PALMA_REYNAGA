@@ -1,4 +1,5 @@
 #include "Encoders.h"
+#include "Pinout.h"
 
 constexpr float Encoders::ALFA_FILTRO;
 constexpr float Encoders::SALTO_MAX_DEG_POR_CICLO;
@@ -6,7 +7,7 @@ constexpr float Encoders::VCC_ALIMENTACION_ENCODERS;
 constexpr float Encoders::VCC_REFERENCIA_ADC;
 constexpr float Encoders::RAW_MAX_EFECTIVO;
 
-const uint8_t Encoders::pinesADC[NUM_ENCODERS] = {35, 34, 39};
+const uint8_t Encoders::pinesADC[NUM_ENCODERS] = {ENC1, ENC2, ENC3};
 
 Encoders encoders;
 

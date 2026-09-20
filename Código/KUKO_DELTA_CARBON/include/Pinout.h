@@ -24,9 +24,11 @@
 // CINTA TRANSPORTADORA
 #define CINTAPWM 19
 
-// I2C
-#define I2C_SDA 21
-#define I2C_SCL 22
+// ENCODERS AS5600 (salida analogica, entrada ADC)
+// Solo de entrada: no admiten pinMode(OUTPUT).
+#define ENC1 35
+#define ENC2 34
+#define ENC3 39
 
 // BOMBA HIDRÁULICA
 #define BOMBA 23
