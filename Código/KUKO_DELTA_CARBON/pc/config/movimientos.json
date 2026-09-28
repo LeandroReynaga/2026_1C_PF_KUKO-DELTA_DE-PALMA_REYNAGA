@@ -177,7 +177,7 @@
       ]
     },
     {
-      "nombre": "Papi",
+      "nombre": "Prueba 2",
       "verificado": 100,
       "creado": "2026-08-19 14:24",
       "duracion_s": 28.99,
@@ -3346,6 +3346,28 @@
           "x": -0.0,
           "y": 0.75,
           "z": -29.6,
+          "bomba": false,
+          "espera_ms": 0
+        }
+      ]
+    },
+    {
+      "nombre": "Home",
+      "verificado": 100,
+      "creado": "2026-09-21 21:09",
+      "duracion_s": 0.71,
+      "puntos": [
+        {
+          "x": 0.0,
+          "y": 0.0,
+          "z": -26.6,
+          "bomba": false,
+          "espera_ms": 710
+        },
+        {
+          "x": 0.0,
+          "y": 0.0,
+          "z": -26.6,
           "bomba": false,
           "espera_ms": 0
         }
