@@ -1,24 +1,13 @@
-# Informes
+# Documentación
 
-Documentación formal del proyecto: informes, cronogramas y manuales.
+Documentación formal del proyecto: el informe técnico, las propuestas y los diagramas de Gantt.
 
-| Documento | Archivo esperado | Estado |
-| :--- | :--- | :---: |
-| Informe final del Proyecto Final | `informe-final.pdf` | ⏳ |
-| Manual de usuario / operación | `manual-de-usuario.pdf` | ⏳ |
-| Manual de mantenimiento y calibración | `manual-mantenimiento.pdf` | ⏳ |
-| Cronograma de avance | `cronograma.pdf` | ⏳ |
-| Presentación de la defensa | `presentacion-defensa.pdf` | ⏳ |
+## Contenido
 
-## Documentos que ya existen en el repositorio
-
-| Documento | Ubicación |
-| :--- | :--- |
-| Diagrama de Gantt | [`../Diagrama de Gantt/`](../Diagrama%20de%20Gantt/) |
-| Propuesta Inicial | [`../Propuesta Inicial/`](../Propuesta%20Inicial/) |
-| Propuesta Final | [`../Propuesta Final/`](../Propuesta%20Final/) |
-
-Si se decide unificar todo acá, mover esos PDF a esta carpeta y revisar que el
-[README principal](../README.md) no quede apuntando a las rutas viejas.
-
-Nombres de archivo sin espacios, sin acentos y en minúscula.
+| Documento | Archivo | Descripción |
+|---|---|---|
+| **Informe Técnico** | [`Informe_Técnico.pdf`](Informe_T%C3%A9cnico.pdf) | Documento de desarrollo y operación del robot. |
+| **Propuesta inicial** | [`Propuesta_inicial.pdf`](Propuesta/Propuesta_inicial.pdf) | Primera propuesta del proyecto, presentado como *KUKO Delta S-1500*. |
+| **Propuesta final** | [`Propuesta_final.pdf`](Propuesta/Propuesta_final.pdf) | Propuesta definitiva del *KUKO Delta Carbon*. |
+| **Diagrama de Gantt inicial** | `Diagrama_de_Gantt_inicial` · [`.pdf`](Diagrama%20de%20Gantt/Diagrama_de_Gantt_inicial.pdf) · [`.docx`](Diagrama%20de%20Gantt/Diagrama_de_Gantt_inicial.docx) · [`.xlsx`](Diagrama%20de%20Gantt/Diagrama_de_Gantt_inicial.xlsx) | Planificación de tareas al inicio del proyecto. |
+| **Diagrama de Gantt final** | `Diagrama_de_Gantt_final` · [`.pdf`](Diagrama%20de%20Gantt/Diagrama_de_Gantt_final.pdf) · [`.docx`](Diagrama%20de%20Gantt/Diagrama_de_Gantt_final.docx) · [`.xlsx`](Diagrama%20de%20Gantt/Diagrama_de_Gantt_final.xlsx) | Tareas a lo largo del tiempo, en su versión final. |
