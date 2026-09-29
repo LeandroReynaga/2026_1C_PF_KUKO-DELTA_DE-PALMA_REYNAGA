@@ -1,29 +1,24 @@
-# Planos y esquemáticos
+# Planos
 
-Acá van los planos exportados que referencia el [README principal](../README.md).
+Planos eléctricos y mecánicos del robot.
 
-Los archivos **editables** de Fritzing viven en [`../Electrónica/`](../Electr%C3%B3nica/).
-Esta carpeta es para las **exportaciones** que se pueden ver sin instalar nada:
-un `.fzz` en GitHub no se previsualiza, un `.png` sí.
+## Diagrama eléctrico
 
-## Archivos esperados
+| Archivo | Descripción |
+|---|---|
+| `Diagrama_de_conexión` · [`.pdf`](Diagrama%20el%C3%A9ctrico/Diagrama_de_conexi%C3%B3n.pdf) · [`.png`](Diagrama%20el%C3%A9ctrico/Diagrama_de_conexi%C3%B3n.png) | Diagrama de conexión completo del robot. |
+| [`Diagrama_de_conexión.fzz`](Diagrama%20el%C3%A9ctrico/Diagrama_de_conexi%C3%B3n.fzz) | Archivo editable de Fritzing. |
+| [`Fritzing_Parts/`](Diagrama%20el%C3%A9ctrico/Fritzing_Parts/) | Piezas que no vienen incluidas en Fritzing, necesarias para abrir el `.fzz`. |
 
-| Archivo | Qué es | Cómo se genera |
-| :--- | :--- | :--- |
-| `diagrama-conexion.png` | Diagrama de conexión completo | Abrir `Electrónica/Diagrama_de_Conexión_KUKO_DELTA_rev4.fzz` en Fritzing → *Archivo* → *Exportar* → *como imagen* → *PNG* |
-| `diagrama-bloques.png` | Diagrama de bloques del sistema, con alimentaciones y niveles de tensión | A mano (draw.io, Visio, Inkscape) |
-| `plano-mecanico.pdf` | Plano mecánico del robot delta acotado | Export desde el CAD |
-| `espacio-trabajo.png` | Volumen de trabajo alcanzable, en corte | Opcional |
+## Plano mecánico
 
-## Nombres de archivo
+| Archivo | Descripción |
+|---|---|
+| [`Plano_mecánico.pdf`](Plano%20mec%C3%A1nico/Plano_mec%C3%A1nico.pdf) | Plano mecánico del robot, 3 hojas. |
+| [`Plano_mecánico_Página_1.jpg`](Plano%20mec%C3%A1nico/Plano_mec%C3%A1nico_P%C3%A1gina_1.jpg) | **Conjunto general:** vistas, dimensiones generales y lista de componentes. |
+| [`Plano_mecánico_Página_2.jpg`](Plano%20mec%C3%A1nico/Plano_mec%C3%A1nico_P%C3%A1gina_2.jpg) | **Mecanismo delta:** geometría de las piernas, ubicación respecto de la cinta y parámetros geométricos. |
+| [`Plano_mecánico_Página_3.jpg`](Plano%20mec%C3%A1nico/Plano_mec%C3%A1nico_P%C3%A1gina_3.jpg) | **Vista explosionada** de la celda, con la referencia de cada conjunto. |
 
-Sin espacios, sin acentos, en minúscula y separados con `-`. Un archivo con espacios
-obliga a escribir la ruta codificada (`%20`) en el README, y cualquier error ahí deja
-la imagen rota sin ningún aviso.
+---
 
-## Dato
 
-La única fuente de verdad del **pinout** en el código es
-[`include/Pinout.h`](../C%C3%B3digo/KUKO_DELTA_CARBON/include/Pinout.h): ahí se definen todos los
-números de GPIO y ningún otro archivo debería hardcodearlos. Si se recablea algo, hay que tocar
-ese header **y** el diagrama de Fritzing, o los dos empiezan a decir cosas distintas.
