@@ -1,5 +1,5 @@
 <div align="center">
-<img width="100%" alt="Banner_KUKO_Delta_Carbon" src="https://github.com/user-attachments/assets/2829f572-5a24-47ca-a411-afe40c28fb28" />
+<img width="100%" alt="Banner_KUKO_Delta_Carbon" src="https://github.com/user-attachments/assets/3c6adcc1-a618-4cc2-b73e-77055bdcb245" />
 <br>
 
 
