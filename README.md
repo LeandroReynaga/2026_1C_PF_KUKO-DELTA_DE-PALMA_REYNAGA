@@ -1,4 +1,4 @@
-<p align="center">
+<div align="center">
 <img width="100%" alt="Banner_KUKO_Delta_Carbon" src="https://github.com/user-attachments/assets/2829f572-5a24-47ca-a411-afe40c28fb28" />
 <br>
 
@@ -170,12 +170,10 @@ tanto el protocolo de comunicación como la matemática del movimiento.
 
 </td><td valign="top">
 
-- Paro de emergencia certificado (hoy: corte de alimentación de drivers)
--  Vacuostato (confirmación **física** del vacío)
-- Comunicación con PLC / SCADA de planta
-- Clasificación por tamaño o por código impreso
+
 - Alimentador automático de piezas
-- Redes neuronales: la visión es clásica y determinística
+- Vacuostato (confirmación física del vacío)
+- Vision Artificial con Redes neuronales
 
 </td></tr>
 </table>
@@ -241,7 +239,7 @@ tanto el protocolo de comunicación como la matemática del movimiento.
 
 ## 4 · Descripción técnica
 
-El sistema se reparte entre **dos computadoras** con responsabilidades bien separadas: el ESP32 hace
+El sistema se reparte responsabilidades: el ESP32 hace
 lo que **no puede esperar** (generar pasos, leer encoders, decidir cuándo bajar el brazo) y la PC hace
 lo que **necesita memoria y potencia** (procesar imagen, dibujar, recordar sucesos).
 
@@ -430,7 +428,7 @@ Cronograma del proyecto de marzo a octubre de 2026, en seis etapas. El detalle d
 
 ## 7 · Autores
 
-<table>
+<table align="center">
 <tr><td width="50%" align="center">
 
 ### DE PALMA, Marcos Agustín
