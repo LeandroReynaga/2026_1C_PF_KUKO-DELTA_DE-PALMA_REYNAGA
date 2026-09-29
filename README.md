@@ -3,9 +3,6 @@
 <br>
 
 
-<div align="center">
-<img src="C%C3%B3digo/KUKO_DELTA_CARBON/pc/assets/portada.png" alt="KUKO Delta Carbon — FI-UNLZ" width="100%">
-<br>
 
 # KUKO DELTA CARBON
 
@@ -51,14 +48,11 @@
 
 ---
 
-<div align="center">
-
-> 🖼️ **`IMAGEN PENDIENTE`** · `Multimedia/01-robot-completo.jpg`<br>
-> **Qué mostrar:** el robot delta completo de frente, con la cinta transportadora en primer plano,
-> los tres tachos de destino y el gabinete de electrónica a la vista.<br>
-> <sub>Al subirla, reemplazar este bloque por `<img src="Multimedia/01-robot-completo.jpg" width="760">`</sub>
-
-</div>
+<p align="center">
+  <img src="Multimedia/01_Robot_completo.jpg" alt="KUKO Delta Carbon" width="760">
+  <br>
+  <em>Imagen 1: KUKO Delta Carbon</em>
+</p>
 
 ---
 
@@ -70,10 +64,11 @@
 | :-: | :------------------------------------------- | :------------------------------------- |
 |  1  | [Introducción y objetivos](#introduccion)     | Contexto, problema y objetivos         |
 |  2  | [Brief](#brief)                               | Pitch, solución, alcance y estado      |
-|  3  | [Descripción técnica](#descripcion-tecnica)   | Cómo funciona por dentro               |
-|  4  | [Instrucciones de uso](#uso)                  | Puesta en marcha reproducible          |
-|  5  | [Desarrollo del proyecto](#desarrollo)        | Cronología e hitos                     |
-|  6  | [Autores](#autores)                           | Contacto                               |
+|  3  | [Multimedia](#multimedia)                     | GIF de funcionamiento y videos         |
+|  4  | [Descripción técnica](#descripcion-tecnica)   | Cómo funciona por dentro               |
+|  5  | [Instrucciones de uso](#uso)                  | Puesta en marcha reproducible          |
+|  6  | [Desarrollo del proyecto](#desarrollo)        | Diagrama de Gantt                      |
+|  7  | [Autores](#autores)                           | Contacto                               |
 
 ---
 
@@ -195,25 +190,62 @@ tanto el protocolo de comunicación como la matemática del movimiento.
 | **Seguridad**        | ✅ Supervisión de colisión activa, con recuperación automática                             |
 | **Interfaz**         | ✅ 6 pestañas operativas (Operación, Teach, Rendimiento, Visión, Proceso, Servicio)          |
 
-> 🎬 **`VIDEO PENDIENTE`** · `Multimedia/09-video-demo.mp4`<br>
-> **Qué mostrar:** un ciclo completo de clasificación por color, en tiempo real, con la interfaz visible.<br>
-> <sub>Si el archivo es pesado, subirlo a YouTube/Drive y dejar acá el enlace.</sub>
+---
 
-> 🖼️ **`GIF PENDIENTE`** · `Multimedia/02-celda-en-marcha.gif`<br>
-> **Qué mostrar:** 5–8 segundos en bucle del brazo tomando una pieza de la cinta en movimiento.
-> Es la imagen que resume el proyecto entero.
+<a id="multimedia"></a>
+
+## 3 · Multimedia
+
+<p align="center">
+  <img src="Multimedia/10_Render_giratorio.gif" alt="Render giratorio" width="760">
+  <br>
+  <em>Figura 1: Render giratorio del modelo 3D</em>
+</p>
+
+<p align="center">
+  <img src="Multimedia/11_Clasificaci%C3%B3n_por_Color.gif" alt="Clasificación por color" width="760">
+  <br>
+  <em>Figura 2: Clasificación por color</em>
+</p>
+
+<p align="center">
+  <img src="Multimedia/12_Clasificaci%C3%B3n_por_Forma.gif" alt="Clasificación por forma" width="760">
+  <br>
+  <em>Figura 3: Clasificación por forma</em>
+</p>
+
+<p align="center">
+  <img src="Multimedia/13_Modo_Box.gif" alt="Modo Box" width="760">
+  <br>
+  <em>Figura 4: Modo Box</em>
+</p>
+
+<p align="center">
+  <img src="Multimedia/14_Modo_Teach.gif" alt="Modo Teach" width="760">
+  <br>
+  <em>Figura 5: Modo Teach</em>
+</p>
+
+<p align="center">
+  <a href="https://youtube.com/playlist?list=PLV_DUMoOxinw&amp;si=bVj7ZXU2DtyZ1oJc">
+    <img width="760" alt="Playlist de videos del KUKO Delta Carbon" src="Multimedia/15_Portada_playlist.png" />
+  </a>
+</p>
+<p align="center">
+  <em>Enlace 1: Haz clic en la imagen para ver la playlist con los videos de los modos.</em>
+</p>
 
 ---
 
 <a id="descripcion-tecnica"></a>
 
-## 3 · Descripción técnica
+## 4 · Descripción técnica
 
 El sistema se reparte entre **dos computadoras** con responsabilidades bien separadas: el ESP32 hace
 lo que **no puede esperar** (generar pasos, leer encoders, decidir cuándo bajar el brazo) y la PC hace
 lo que **necesita memoria y potencia** (procesar imagen, dibujar, recordar sucesos).
 
-### 3.1 · Ciclo de clasificación
+### 4.1 · Ciclo de clasificación
 
 ```mermaid
 stateDiagram-v2
@@ -240,7 +272,9 @@ stateDiagram-v2
     TEACH --> WAIT_PIECE
 ```
 
-### 3.2 · Modos de clasificación
+<p align="center"><em>Figura 6: Máquina de estados del ciclo de clasificación</em></p>
+
+### 4.2 · Modos de clasificación
 
 | Modo | Comando | Qué hace |
 | :--- | :-----: | :------- |
@@ -248,7 +282,7 @@ stateDiagram-v2
 | **Forma** | `F` | Tacho 1 cuadrado · Tacho 2 hexágono · Tacho 3 círculo |
 | **Box** | `A` | Llena una caja de 6 celdas (2 filas × 3 columnas) con una disposición de colores configurable; máximo 3 piezas por color. El resto de las piezas siguen de largo |
 
-### 3.3 · Visión artificial
+### 4.3 · Visión artificial
 
 La detección corre en la PC sobre **OpenCV**, con procesamiento clásico (sin redes neuronales): es
 determinístico, se calibra a mano.
@@ -257,13 +291,13 @@ determinístico, se calibra a mano.
  línea de detección, la `X` es siempre la misma y es conocida por las dos partes. Solo viajan
  `Y`, color y forma — tres campos, dos comas, una línea.
 
-### 3.4 · Cinemática
+### 4.4 · Cinemática
 
 `DeltaKinematics` es un espacio de nombres puramente matemático —sin entrada/salida ni llamadas a
 motores— que resuelve la **cinemática inversa** del delta. La **cinemática directa** vive del lado de
 Python (`cinematica.py`), y la necesita para dibujar el brazo en pantalla.
 
-### 3.5 · Generación de pasos y perfiles de movimiento
+### 4.5 · Generación de pasos y perfiles de movimiento
 
 Cada eje se maneja con un **timer de hardware dedicado** del ESP32 y una rampa trapezoidal calculada
 con el **algoritmo de Austin (2004)**.
@@ -272,7 +306,7 @@ con el **algoritmo de Austin (2004)**.
 proporción a su recorrido, de modo que los tres motores **arrancan y llegan juntos** aunque recorran
 distancias distintas.
 
-### 3.6 · Supervisión de colisiones
+### 4.6 · Supervisión de colisiones
 
 **No es control de posición** — la posición sigue siendo lazo abierto por micropasos. Es un
  **detector de discrepancia**: en cada vuelta del loop compara el ángulo medido contra el que dicen
@@ -288,12 +322,12 @@ umbral_efectivo = UMBRAL_DEG + MARGEN_VELOCIDAD_MS × velocidad
 **Reacción ante colisión:** frena los 3 ejes → suelta la pieza → espera 3 s → rehomea conservando la
 cola de piezas. Tras 3 colisiones seguidas, pasa a `ERROR`.
 
-### 3.7 · Modo Teach
+### 4.7 · Modo Teach
 
 Un modo aparte del ciclo de clasificación: el operador maneja el brazo a mano desde la interfaz, graba
 secuencias y las reproduce. Incluye verificación por etapas.
 
-### 3.8 · Interfaz de operación
+### 4.8 · Interfaz de operación
 
 Aplicación web local hecha con **NiceGUI**, en un solo proceso y tres hilos: visión, enlace serie y
 servidor web. Sirve para controlar el proceso, modificar variables, enterarse de errores y verificar componentes. 
@@ -302,9 +336,9 @@ servidor web. Sirve para controlar el proceso, modificar variables, enterarse de
 
 <a id="uso"></a>
 
-## 4 · Instrucciones de uso
+## 5 · Instrucciones de uso
 
-### 4.1 · Requisitos previos
+### 5.1 · Requisitos previos
 
 | Categoría | Requisito |
 | :--- | :--- |
@@ -314,7 +348,7 @@ servidor web. Sirve para controlar el proceso, modificar variables, enterarse de
 | **Driver USB** | CP2102 — incluido en [`Código/Driver USB CP2102/`](C%C3%B3digo/Driver%20USB%20CP2102/) |
 | **Hardware** | Robot Kuko Delta Carbon |
 
-### 4.2 · Instalación
+### 5.2 · Instalación
 
 **a) Clonar el repositorio**
 
@@ -354,19 +388,7 @@ python -m venv pc/.venv
 pc\.venv\Scripts\pip install -r pc/requirements.txt
 ```
 
-**e) Configurar la máquina** (opcional)
-
-Copiar `pc/config/local.ejemplo.json` a `pc/config/local.json` y ajustar el puerto COM y el puerto web.
-Ese archivo **no va al repositorio**: cada PC tiene el suyo.
-
-```json
-{
-  "puerto": "AUTO",
-  "puerto_web": 8080
-}
-```
-
-### 4.3 · Puesta en marcha
+### 5.3 · Puesta en marcha
 
 ```bash
 pc\.venv\Scripts\python pc/kuko_app.py
@@ -386,28 +408,27 @@ La interfaz queda en **`http://localhost:8080`**.
 
 <a id="desarrollo"></a>
 
-## 5 · Desarrollo del proyecto
+## 6 · Desarrollo del proyecto
 
 El proyecto se construyó **de abajo hacia arriba**: primero cada subsistema por separado y verificado
 en aislamiento, después la integración. Cada capa nueva se apoyó en una que ya estaba medida.
 
-### Hitos
+### Diagrama de Gantt
 
-```mermaid
-timeline
-    title Cronología del desarrollo — 2026
-    Abril : Propuesta inicial y final : Diagrama de Gantt
-    Mayo : Estructura del código en módulos : Pinout y control de cinta : Diagrama de conexión (Fritzing)
-    Junio : Primeras pruebas con NEMA 23 : Encoders AS5600 funcionando : Homing y diagnóstico de ruido eléctrico
-    Julio : Generación de pasos independiente del loop : Encoders calibrados (ganancia y offset) : Cinemática inversa terminada : Sincronización de los 3 ejes
-    Agosto : Visión artificial e integración con el robot : Detector de colisiones : Modo Box : Interfaz NiceGUI : Modo Teach : Movimiento lineal (movL)
-```
+Cronograma del proyecto de marzo a octubre de 2026, en seis etapas. El detalle de cada tarea está en el
+[Diagrama de Gantt final](Documentaci%C3%B3n/Diagrama%20de%20Gantt/Diagrama_de_Gantt_final.pdf).
+
+<p align="center">
+  <img src="Multimedia/09_Diagrama_de_Gantt.png" alt="Diagrama de Gantt final" width="760">
+  <br>
+  <em>Figura 7: Diagrama de Gantt final</em>
+</p>
 
 ---
 
 <a id="autores"></a>
 
-## 6 · Autores
+## 7 · Autores
 
 <table>
 <tr><td width="50%" align="center">
