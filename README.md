@@ -1,7 +1,10 @@
+<p align="center">
+<img width="100%" alt="Banner_KUKO_Delta_Carbon" src="https://github.com/user-attachments/assets/2829f572-5a24-47ca-a411-afe40c28fb28" />
+<br>
+
+
 <div align="center">
-
 <img src="C%C3%B3digo/KUKO_DELTA_CARBON/pc/assets/portada.png" alt="KUKO Delta Carbon — FI-UNLZ" width="100%">
-
 <br>
 
 # KUKO DELTA CARBON
