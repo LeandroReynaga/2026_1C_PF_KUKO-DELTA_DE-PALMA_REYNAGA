@@ -431,7 +431,7 @@ Cronograma del proyecto de marzo a octubre de 2026, en seis etapas. El detalle d
 <table align="center">
 <tr><td width="50%" align="center">
 
-### DE PALMA, Marcos Agustín
+### DE PALMA<br>Marcos Agustín
 
 Ingeniería Mecatrónica — FI-UNLZ
 
@@ -441,7 +441,7 @@ Ingeniería Mecatrónica — FI-UNLZ
 
 </td><td width="50%" align="center">
 
-### REYNAGA RÍOS, Leandro Joel
+### REYNAGA RÍOS<br>Leandro Joel
 
 Ingeniería Mecatrónica — FI-UNLZ
 
