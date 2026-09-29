@@ -233,6 +233,16 @@ tanto el protocolo de comunicación como la matemática del movimiento.
   <em>Enlace 1: Haz clic en la imagen para ver la playlist con los videos de los modos.</em>
 </p>
 
+<p align="center">
+  <a href="https://drive.google.com/drive/folders/15TBgdvEbJJ4iwdDsnXzpPRDG5-t90HLm?usp=drive_link">
+    <img width="320" alt="Google Drive_Logo" src="https://github.com/user-attachments/assets/b0655d57-e569-428e-a687-4a39b1f1422e" />
+
+  </a>
+</p>
+<p align="center">
+  <em>Enlace 2: Haz clic en la imagen para descargar el modelo 3D y los videos.</em>
+</p>
+
 ---
 
 <a id="descripcion-tecnica"></a>
