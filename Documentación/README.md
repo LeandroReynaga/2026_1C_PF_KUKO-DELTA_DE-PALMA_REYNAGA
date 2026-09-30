@@ -1,11 +1,12 @@
 # Documentación
 
-Documentación formal del proyecto: el informe técnico, las propuestas y los diagramas de Gantt.
+Documentación formal del proyecto: el brief, el informe técnico, las propuestas y los diagramas de Gantt.
 
 ## Contenido
 
 | Documento | Archivo | Descripción |
 |---|---|---|
+| **Brief** | [`Brief.pdf`](Brief/Brief.pdf) | Presentación del proyecto en lenguaje simple, para lectores sin conocimientos técnicos. |
 | **Informe Técnico** | [`Informe_Técnico.pdf`](Informe_T%C3%A9cnico.pdf) | Documento de desarrollo y operación del robot. |
 | **Propuesta inicial** | [`Propuesta_inicial.pdf`](Propuesta/Propuesta_inicial.pdf) | Primera propuesta del proyecto, presentado como *KUKO Delta S-1500*. |
 | **Propuesta final** | [`Propuesta_final.pdf`](Propuesta/Propuesta_final.pdf) | Propuesta definitiva del *KUKO Delta Carbon*. |
