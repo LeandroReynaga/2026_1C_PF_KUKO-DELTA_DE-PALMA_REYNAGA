@@ -1,6 +1,6 @@
 # Multimedia
 
-Fotos del robot, renders del modelo 3D, la asignación de pines de la placa y los GIF de funcionamiento.
+Fotos del robot, renders del modelo 3D, la asignación de pines de la placa, los GIF de funcionamiento y los videos de cada modo.
 
 ## Contenido
 
@@ -28,3 +28,12 @@ Fotos del robot, renders del modelo 3D, la asignación de pines de la placa y lo
 | `12_Clasificación_por_Forma.gif` | Modo Forma: el robot clasifica las piezas según su forma. |
 | `13_Modo_Box.gif` | Modo Box: el robot llena la caja de 6 celdas con la disposición de colores configurada. |
 | `14_Modo_Teach.gif` | Modo Teach: el brazo se maneja desde la interfaz para grabar y reproducir secuencias. |
+
+### Videos
+
+| Archivo | Descripción |
+|---|---|
+| `16_Clasificación_por_Color.mp4` | Modo Color en video completo (23 s). |
+| `17_Clasificación_por_Forma.mp4` | Modo Forma en video completo (22 s). |
+| `18_Modo_Box.mp4` | Modo Box en video completo (25 s). |
+| `19_Modo_Teach.mp4` | Modo Teach en video completo (2 min 26 s). |

@@ -353,7 +353,7 @@ servidor web. Sirve para controlar el proceso, modificar variables, enterarse de
 | **Sistema operativo** | Windows 10/11  |
 | **Firmware** | [PlatformIO](https://platformio.org/) (CLI `pio` o la extensión de VS Code) |
 | **PC** | Python **3.13** o superior |
-| **Driver USB** | CP2102 — incluido en [`Código/Driver USB CP2102/`](C%C3%B3digo/Driver%20USB%20CP2102/) |
+| **Driver USB** | CP2102 — incluido en [`Código/Driver_USB_CP2102/`](C%C3%B3digo/Driver_USB_CP2102/) |
 | **Hardware** | Robot Kuko Delta Carbon |
 
 ### 5.2 · Instalación
@@ -367,7 +367,7 @@ cd "2026_1C_PF_KUKO-DELTA_DE-PALMA_REYNAGA/Código/KUKO_DELTA_CARBON"
 
 **b) Instalar el driver USB** (solo la primera vez)
 
-Ejecutar el instalador de `Código/Driver USB CP2102/CP210x_Universal_Windows_Driver/` según la
+Ejecutar el instalador de `Código/Driver_USB_CP2102/CP210x_Universal_Windows_Driver/` según la
 arquitectura de la PC. Sin esto, el ESP32 no aparece como puerto COM.
 
 **c) Compilar y cargar el firmware**
