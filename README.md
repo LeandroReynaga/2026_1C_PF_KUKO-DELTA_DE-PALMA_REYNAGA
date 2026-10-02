@@ -64,7 +64,7 @@
 | :-: | :------------------------------------------- | :------------------------------------- |
 |  1  | [Introducción y objetivos](#introduccion)     | Contexto, problema y objetivos         |
 |  2  | [Brief](#brief)                               | Pitch, solución, alcance y estado      |
-|  3  | [Multimedia](#multimedia)                     | GIF de funcionamiento y videos         |
+|  3  | [Multimedia](#multimedia)                     | GIF, videos y visor 3D con AR          |
 |  4  | [Descripción técnica](#descripcion-tecnica)   | Cómo funciona por dentro               |
 |  5  | [Instrucciones de uso](#uso)                  | Puesta en marcha reproducible          |
 |  6  | [Desarrollo del proyecto](#desarrollo)        | Diagrama de Gantt                      |
@@ -195,9 +195,20 @@ tanto el protocolo de comunicación como la matemática del movimiento.
 ## 3 · Multimedia
 
 <p align="center">
-  <img src="Multimedia/10_Render_giratorio.gif" alt="Render giratorio" width="760">
+  <a href="https://leandroreynaga.github.io/2026_1C_PF_KUKO-DELTA_DE-PALMA_REYNAGA/Multimedia/KUKO_AR/">
+    <img src="Multimedia/10_Render_giratorio.gif" alt="Render giratorio: clic para ver el robot en 3D y realidad aumentada" width="760">
+  </a>
   <br>
   <em>Figura 1: Render giratorio del modelo 3D</em>
+</p>
+
+<p align="center">
+  <a href="https://leandroreynaga.github.io/2026_1C_PF_KUKO-DELTA_DE-PALMA_REYNAGA/Multimedia/KUKO_AR/"><b>🔍 Ver en 3D y Realidad Aumentada</b></a>
+</p>
+<p align="center">
+  <img src="Multimedia/qr_ar.png" alt="Código QR para ver el robot en realidad aumentada" width="160">
+  <br>
+  <em>Enlace 1: Haz clic en el render o escanea el QR con el celular para ver el robot en 3D y en realidad aumentada.</em>
 </p>
 
 <p align="center">
@@ -230,7 +241,7 @@ tanto el protocolo de comunicación como la matemática del movimiento.
   </a>
 </p>
 <p align="center">
-  <em>Enlace 1: Haz clic en la imagen para ver la playlist con los videos de los modos.</em>
+  <em>Enlace 2: Haz clic en la imagen para ver la playlist con los videos de los modos.</em>
 </p>
 
 <p align="center">
@@ -240,7 +251,7 @@ tanto el protocolo de comunicación como la matemática del movimiento.
   </a>
 </p>
 <p align="center">
-  <em>Enlace 2: Haz clic en la imagen para descargar el modelo 3D y los videos.</em>
+  <em>Enlace 3: Haz clic en la imagen para descargar el modelo 3D y los videos.</em>
 </p>
 
 ---

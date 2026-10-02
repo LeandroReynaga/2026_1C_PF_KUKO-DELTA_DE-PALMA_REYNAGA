@@ -37,3 +37,10 @@ Fotos del robot, renders del modelo 3D, la asignación de pines de la placa, los
 | `17_Clasificación_por_Forma.mp4` | Modo Forma en video completo (22 s). |
 | `18_Modo_Box.mp4` | Modo Box en video completo (25 s). |
 | `19_Modo_Teach.mp4` | Modo Teach en video completo (2 min 26 s). |
+
+### Realidad aumentada
+
+| Archivo | Descripción |
+|---|---|
+| `KUKO_AR/` | Página con el visor 3D y la realidad aumentada, publicada en GitHub Pages: [abrir](https://leandroreynaga.github.io/2026_1C_PF_KUKO-DELTA_DE-PALMA_REYNAGA/Multimedia/KUKO_AR/). |
+| `qr_ar.png` | Código QR que abre esa página en el celular. |
