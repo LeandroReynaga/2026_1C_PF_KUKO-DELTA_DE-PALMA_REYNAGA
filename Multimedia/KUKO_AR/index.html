@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#181B1D">
+  <title>KUKO DELTA CARBON · Realidad aumentada</title>
+  <meta name="description" content="Robot delta de clasificación automática de piezas. Miralo en 3D o en realidad aumentada desde tu celular.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Saira:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <link rel="preload" as="image" href="Kuko_Delta_Carbon_Reynaga_De_Palma_poster.webp">
+
+  <script>
+    // En computadoras con mouse no hay AR: se decide antes de dibujar para evitar parpadeos
+    if (window.matchMedia && matchMedia('(pointer: fine)').matches && !('ontouchstart' in window)) {
+      document.documentElement.classList.add('no-ar');
+    }
+  </script>
+
+  <!-- Librería model-viewer de Google (gratis, open source), versión fija -->
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@4.3.1/dist/model-viewer.min.js"></script>
+
+  <style>
+    /* ==========================================================================
+       Todas las medidas salen de las propuestas en SVG.
+       "u" es un píxel del diseño: la página entera se agranda o achica
+       en proporción, igual que el SVG en el navegador.
+         Celular:    diseño de 390 x 844
+         Escritorio: diseño de 1536 x 700
+       ========================================================================== */
+
+    :root {
+      --dark: #181B1D;
+      --grid: #1F2428;
+      --raise: #23272B;
+      --edge: #2F343A;
+      --cyan: #39BEF0;
+      --carbon: #83C4F2;
+      --paper: #E9EDF0;
+      --card: #F6F8F9;
+      --card-edge: #D5DCE3;
+      --ring: #C7CFD7;
+      --gray-1: #A3ADB8;
+      --gray-2: #C9D1D9;
+      --gray-3: #5B6570;
+      --gray-4: #67707A;
+      --ink: #2F343A;
+      --font: "Saira", "Segoe UI", system-ui, -apple-system, sans-serif;
+
+      /* celular: el ancho de pantalla equivale a 390 del diseño */
+      --u: min(calc(100vw / 390), 1.5px);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html, body { margin: 0; }
+
+    body {
+      font-family: var(--font);
+      background: var(--paper);
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    button { font: inherit; color: inherit; cursor: pointer; }
+
+    :focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+
+    /* ---------- Sistema de posicionamiento ---------- */
+
+    .viewport { position: relative; overflow: hidden; }
+
+    .frame {
+      position: relative;
+      width: calc(390 * var(--u));
+      height: calc(856 * var(--u));
+      margin: 0 auto;
+    }
+
+    /* caja: --x --y --w --h */
+    .p {
+      position: absolute;
+      left: calc(var(--x) * var(--u));
+      top: calc(var(--y) * var(--u));
+      width: calc(var(--w) * var(--u));
+      height: calc(var(--h) * var(--u));
+    }
+
+    /* texto: --x y --y (línea base, igual que en el SVG), --fs tamaño, --lh interlineado */
+    .t {
+      --lh: 1.2;
+      --ls: 0;
+      position: absolute;
+      left: calc(var(--x) * var(--u));
+      top: calc((var(--y) - var(--fs) * (var(--lh) / 2 + 0.348)) * var(--u));
+      margin: 0;
+      font-size: calc(var(--fs) * var(--u));
+      line-height: var(--lh);
+      letter-spacing: calc(var(--ls) * var(--u));
+      white-space: nowrap;
+    }
+    /* texto centrado en --x */
+    .t.c { left: calc((var(--x) - 300) * var(--u)); width: calc(600 * var(--u)); text-align: center; }
+
+    @media (max-width: 1151.98px), (max-height: 524.98px) {
+      .only-d { display: none !important; }
+    }
+
+    /* ---------- Fondo oscuro con cuadrícula ---------- */
+
+    .panel-bg {
+      position: absolute;
+      top: 0;
+      left: -100vw;
+      right: -100vw;
+      height: calc(250 * var(--u));
+      background-color: var(--dark);
+      background-image:
+        linear-gradient(to right, var(--grid) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
+      background-size: calc(32 * var(--u)) calc(32 * var(--u));
+      background-position: 100vw 0;
+    }
+
+    .deco { position: absolute; pointer-events: none; overflow: visible; }
+
+    /* ---------- Textos del encabezado ---------- */
+
+    h1 { margin: 0; font-weight: 500; }
+
+    .eyebrow { --x: 20; --y: 76; --fs: 11; --ls: 1.6; font-weight: 600; color: var(--gray-1); text-transform: uppercase; }
+    .h1a { --x: 20; --y: 122; --fs: 40; color: #fff; }
+    .h1b { --x: 20; --y: 164; --fs: 40; color: var(--carbon); }
+    .tagline { --x: 20; --y: 194; --fs: 13.5; color: var(--gray-2); }
+
+    .label { --fs: 12; --ls: 2; font-weight: 600; text-transform: uppercase; }
+
+    /* ---------- Tarjeta del visor ---------- */
+
+    .card {
+      --x: 16; --y: 214; --w: 358; --h: 372;
+      overflow: hidden;
+      background: var(--card);
+      border: calc(1.5 * var(--u)) solid var(--card-edge);
+      border-radius: calc(20 * var(--u));
+      box-shadow: 0 calc(6 * var(--u)) calc(20 * var(--u)) rgba(24, 27, 29, 0.12);
+    }
+
+    .target { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+    .target circle { fill: none; stroke: var(--ring); stroke-width: 1.5; }
+    .target line { stroke: #CBD3DB; stroke-width: 1.2; }
+
+    model-viewer {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+      background: transparent;
+      --poster-color: transparent;
+      opacity: 0;
+      transition: opacity 0.8s ease;
+    }
+    .is-ready model-viewer { opacity: 1; }
+
+    /* chip "Modelo 3D" */
+    .chip3d {
+      position: absolute;
+      z-index: 3;
+      left: calc(246 * var(--u));
+      top: calc(14 * var(--u));
+      height: calc(24 * var(--u));
+      display: flex;
+      align-items: center;
+      gap: calc(8 * var(--u));
+      margin: 0;
+      padding: 0 calc(12 * var(--u)) 0 calc(11 * var(--u));
+      font-size: calc(10 * var(--u));
+      font-weight: 600;
+      letter-spacing: calc(1 * var(--u));
+      color: var(--gray-3);
+      background: #fff;
+      border: calc(1.1 * var(--u)) solid var(--card-edge);
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    .chip3d::before {
+      content: "";
+      width: calc(6.4 * var(--u));
+      height: calc(6.4 * var(--u));
+      border-radius: 50%;
+      background: var(--cyan);
+    }
+
+    /* píldora de ayuda */
+    .hint {
+      position: absolute;
+      z-index: 3;
+      left: calc(34 * var(--u));
+      top: calc(338 * var(--u));
+      width: calc(290 * var(--u));
+      height: calc(26 * var(--u));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: calc(8 * var(--u));
+      margin: 0;
+      font-size: calc(11.5 * var(--u));
+      color: var(--gray-3);
+      background: #fff;
+      border: calc(1.1 * var(--u)) solid var(--card-edge);
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    .hint svg { width: calc(14 * var(--u)); height: calc(14 * var(--u)); flex: none; }
+    .hint-touch { display: none; }
+    @media (pointer: coarse) {
+      .hint-mouse { display: none; }
+      .hint-touch { display: inline; }
+    }
+
+    /* ---------- Pantalla de carga ---------- */
+
+    .loader {
+      position: absolute;
+      inset: 0;
+      z-index: 2 !important;
+      transition: opacity 0.8s ease, visibility 0s linear 0.8s;
+    }
+    .is-ready .loader { opacity: 0; visibility: hidden; }
+
+    .poster {
+      --x: 36.5; --y: 16; --w: 285; --h: 310;
+      object-fit: contain;
+      filter: grayscale(1);
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+
+    .lc-wrap {
+      --x: 29; --y: 88; --w: 300; --h: 180;
+      display: grid;
+      place-items: center;
+    }
+
+    .loader-card {
+      width: calc(200 * var(--u));
+      padding: calc(13 * var(--u)) calc(16 * var(--u)) calc(11 * var(--u));
+      text-align: center;
+      color: #fff;
+      background: rgba(24, 27, 29, 0.86);
+      -webkit-backdrop-filter: blur(8px);
+      backdrop-filter: blur(8px);
+      border-radius: calc(14 * var(--u));
+      box-shadow: 0 calc(14 * var(--u)) calc(30 * var(--u)) calc(-16 * var(--u)) rgba(24, 27, 29, 0.6);
+    }
+    .loader-title { margin: 0; font-size: calc(15 * var(--u)); font-weight: 600; line-height: 1.2; }
+    .dots { display: inline-block; width: 1.2em; text-align: left; }
+    .bar {
+      height: calc(5 * var(--u));
+      margin: calc(10 * var(--u)) 0 calc(6 * var(--u));
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.14);
+    }
+    .bar i { display: block; width: 0%; height: 100%; border-radius: inherit; background: var(--cyan); }
+    .pct {
+      margin: 0;
+      font-size: calc(12 * var(--u));
+      font-weight: 500;
+      line-height: 1.2;
+      color: var(--gray-1);
+      font-variant-numeric: tabular-nums;
+    }
+    .loader-note { margin: calc(8 * var(--u)) 0 0; font-size: calc(11.5 * var(--u)); line-height: 1.45; color: var(--gray-2); }
+    .loader-note:empty { display: none; }
+
+    /* ---------- Bloque inferior del celular ---------- */
+
+    .m-label { --x: 20; --y: 612; --fs: 11; --ls: 1.6; color: var(--gray-3); }
+
+    .steps { margin: 0; padding: 0; list-style: none; }
+    .step {
+      --y: 624; --w: 112; --h: 92;
+      background: #fff;
+      border: calc(1.1 * var(--u)) solid var(--card-edge);
+      border-radius: calc(12 * var(--u));
+    }
+    .step b {
+      position: absolute;
+      left: calc(12 * var(--u));
+      top: calc(15 * var(--u));
+      width: calc(22 * var(--u));
+      height: calc(22 * var(--u));
+      display: grid;
+      place-items: center;
+      font-size: calc(12 * var(--u));
+      font-weight: 700;
+      color: var(--dark);
+      background: var(--cyan);
+      border-radius: 50%;
+    }
+    .step span { --x: 11; --y: 62; --fs: 11.5; --lh: 1.391; color: var(--ink); }
+
+    .ar-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: calc(12 * var(--u));
+      padding: 0;
+      border: 0;
+      font-size: calc(17 * var(--u));
+      font-weight: 600;
+      color: var(--dark);
+      background: var(--cyan);
+      border-radius: calc(16 * var(--u));
+      transition: filter 0.15s ease, transform 0.15s ease;
+    }
+    .ar-btn:hover { filter: brightness(1.06); }
+    .ar-btn:active { transform: scale(0.98); }
+    .ar-btn svg { width: calc(20 * var(--u)); height: calc(20 * var(--u)); flex: none; }
+
+    .m-credit { --x: 195; --y: 818; --fs: 11; --lh: 1.4545; color: var(--gray-4); }
+
+    /* sin realidad aumentada */
+    .noar {
+      --x: 16; --y: 624; --w: 358; --h: 168;
+      display: none;
+      background: #fff;
+      border: calc(1.1 * var(--u)) solid var(--card-edge);
+      border-radius: calc(14 * var(--u));
+    }
+    .noar-touch {
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: calc(14 * var(--u));
+      padding: 0 calc(22 * var(--u));
+      text-align: center;
+    }
+    .noar-touch p { margin: 0; font-size: calc(13.5 * var(--u)); line-height: 1.5; color: var(--ink); }
+    .copy-link {
+      padding: calc(9 * var(--u)) calc(18 * var(--u));
+      font-size: calc(13 * var(--u));
+      font-weight: 600;
+      color: var(--ink);
+      background: #fff;
+      border: calc(1.1 * var(--u)) solid var(--card-edge);
+      border-radius: 999px;
+    }
+    .noar-qr {
+      align-items: center;
+      gap: calc(18 * var(--u));
+      padding: 0 calc(18 * var(--u));
+    }
+    .noar-qr .qr-box { width: calc(132 * var(--u)); padding: calc(8 * var(--u)); flex: none; border: calc(1.1 * var(--u)) solid var(--card-edge); border-radius: calc(6 * var(--u)); }
+    .noar-qr strong { display: block; font-size: calc(15 * var(--u)); font-weight: 600; color: var(--dark); }
+    .noar-qr p { margin: calc(6 * var(--u)) 0 0; font-size: calc(12.5 * var(--u)); line-height: 1.45; color: var(--gray-3); }
+
+    .no-ar .ar-steps { display: none; }
+    .no-ar .noar-touch { display: flex; }
+    @media (pointer: fine) {
+      .no-ar .noar-touch { display: none; }
+      .no-ar .noar-qr { display: flex; }
+    }
+
+    .qr-box { background: #fff; line-height: 0; }
+    .qr-box svg { width: 100%; height: auto; display: block; }
+
+    /* ==========================================================================
+       Escritorio: diseño de 1536 x 700 que entra completo en la ventana
+       ========================================================================== */
+    @media (min-width: 1152px) and (min-height: 525px) {
+      :root { --u: min(calc(100vw / 1536), calc(100vh / 700)); }
+      @supports (height: 100dvh) {
+        :root { --u: min(calc(100vw / 1536), calc(100dvh / 700)); }
+      }
+
+      .only-m { display: none !important; }
+
+      .viewport { position: fixed; inset: 0; }
+
+      .frame {
+        position: absolute;
+        left: calc(50% - 768 * var(--u));
+        top: calc(50% - 350 * var(--u));
+        width: calc(1536 * var(--u));
+        height: calc(700 * var(--u));
+        margin: 0;
+      }
+
+      .panel-bg {
+        top: -100vh;
+        bottom: -100vh;
+        left: -100vw;
+        right: auto;
+        width: calc(100vw + 640 * var(--u));
+        height: auto;
+        background-size: calc(48 * var(--u)) calc(48 * var(--u));
+        background-position: 100vw 100vh;
+      }
+
+      .eyebrow { --x: 64; --y: 56; --fs: 12; --ls: 2; }
+      .h1a { --x: 64; --y: 122; --fs: 56; }
+      .h1b { --x: 64; --y: 184; --fs: 56; }
+      .tagline { --x: 64; --y: 222; --fs: 18; }
+
+      .rule { background: var(--cyan); }
+
+      .d-h2 { font-weight: 600; color: #fff; }
+      .d-lead { color: var(--gray-1); }
+
+      .qr-card { background: var(--raise); border: calc(1.5 * var(--u)) solid var(--edge); border-radius: calc(14 * var(--u)); }
+      .qr-tile { padding: calc(10 * var(--u)); border-radius: calc(6 * var(--u)); }
+      .qr-h { font-weight: 600; color: #fff; }
+      .qr-p { color: var(--gray-1); }
+      .dot { border-radius: 50%; background: var(--cyan); }
+      .plat { color: var(--gray-2); }
+
+      .ar-group { display: none; }
+      .can-ar .ar-group { display: block; }
+      .can-ar .qr-group { display: none; }
+      .ar-group .ar-btn { font-size: calc(18 * var(--u)); }
+      .ar-note { color: var(--gray-1); }
+
+      .chips { margin: 0; padding: 0; list-style: none; }
+      .chip {
+        --w: 250; --h: 30;
+        display: grid;
+        place-items: center;
+        font-size: calc(12.5 * var(--u));
+        font-weight: 600;
+        color: var(--gray-2);
+        background: var(--raise);
+        border: calc(1.2 * var(--u)) solid var(--edge);
+        border-radius: 999px;
+        white-space: nowrap;
+      }
+
+      .credit { color: var(--gray-4); }
+
+      .card { --x: 680; --y: 36; --w: 808; --h: 628; }
+
+      .chip3d {
+        left: calc(28 * var(--u));
+        top: calc(24 * var(--u));
+        height: calc(32 * var(--u));
+        gap: calc(10 * var(--u));
+        padding: 0 calc(18 * var(--u)) 0 calc(16 * var(--u));
+        font-size: calc(12 * var(--u));
+        letter-spacing: calc(1.2 * var(--u));
+        border-width: calc(1.2 * var(--u));
+      }
+      .chip3d::before { width: calc(8 * var(--u)); height: calc(8 * var(--u)); }
+
+      .cam {
+        --y: 21; --w: 38; --h: 38;
+        z-index: 3;
+        display: grid;
+        place-items: center;
+        padding: 0;
+        color: var(--ink);
+        background: #fff;
+        border: calc(1.2 * var(--u)) solid var(--card-edge);
+        border-radius: 50%;
+        transition: border-color 0.15s ease;
+      }
+      .cam:hover { border-color: var(--cyan); }
+      .cam svg { width: calc(20 * var(--u)); height: calc(20 * var(--u)); }
+
+      .hint {
+        left: calc(244 * var(--u));
+        top: calc(576 * var(--u));
+        width: calc(320 * var(--u));
+        height: calc(34 * var(--u));
+        gap: calc(10 * var(--u));
+        font-size: calc(13 * var(--u));
+        border-width: calc(1.2 * var(--u));
+      }
+      .hint svg { width: calc(17 * var(--u)); height: calc(17 * var(--u)); }
+
+      .poster { --x: 174; --y: 60; --w: 460; --h: 500; }
+      .lc-wrap { --x: 204; --y: 200; --w: 400; --h: 200; }
+      .loader-card { width: calc(250 * var(--u)); padding: calc(18 * var(--u)) calc(22 * var(--u)) calc(16 * var(--u)); border-radius: calc(16 * var(--u)); }
+      .loader-title { font-size: calc(18 * var(--u)); }
+      .bar { height: calc(6 * var(--u)); margin: calc(14 * var(--u)) 0 calc(8 * var(--u)); }
+      .pct { font-size: calc(13 * var(--u)); }
+      .loader-note { font-size: calc(12.5 * var(--u)); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      model-viewer, .loader, .ar-btn { transition-duration: 0.01ms; }
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px; height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="viewport">
+    <div class="frame">
+
+      <div class="panel-bg" aria-hidden="true"></div>
+
+      <!-- líneas decorativas -->
+      <svg class="deco p only-d" style="--x:0;--y:0;--w:640;--h:700" viewBox="0 0 640 700" aria-hidden="true">
+        <polyline points="440,22 540,22 566,46 640,46" fill="none" stroke="#39BEF0" stroke-width="1.5" opacity="0.45"/>
+        <polyline points="470,86 560,86 586,112 640,112" fill="none" stroke="#39BEF0" stroke-width="1.5" opacity="0.45"/>
+      </svg>
+      <svg class="deco p only-m" style="--x:0;--y:0;--w:390;--h:250" viewBox="0 0 390 250" aria-hidden="true">
+        <polyline points="250,52 322,52 344,74 390,74" fill="none" stroke="#39BEF0" stroke-width="1.4" opacity="0.45"/>
+      </svg>
+
+      <!-- encabezado (compartido) -->
+      <header>
+        <p class="t eyebrow">
+          <span class="only-d">Proyecto final · Ingeniería Mecatrónica · FI-UNLZ</span>
+          <span class="only-m">Proyecto final · FI-UNLZ</span>
+        </p>
+        <h1>
+          <span class="t h1a">KUKO DELTA</span>
+          <span class="t h1b">CARBON</span>
+        </h1>
+        <p class="t tagline">Clasificación automática de piezas en movimiento</p>
+      </header>
+
+      <!-- ================= Panel de escritorio ================= -->
+      <section class="only-d" aria-labelledby="ar-title">
+        <span class="p rule" style="--x:64;--y:246.5;--w:48;--h:3"></span>
+
+        <p class="t label" style="--x:64;--y:292;color:#39BEF0">Realidad aumentada</p>
+        <h2 class="t d-h2" id="ar-title" style="--x:64;--y:326;--fs:28">Miralo en tu espacio</h2>
+        <p class="t d-lead" style="--x:64;--y:358;--fs:15;--lh:1.4667">Girá el modelo 3D con el mouse, o escaneá el código<br>con tu celular para verlo en realidad aumentada.</p>
+
+        <div class="qr-group">
+          <div class="p qr-card" style="--x:64;--y:402;--w:512;--h:160"></div>
+          <div class="p qr-box qr-tile" style="--x:80;--y:410;--w:145;--h:145"><svg viewBox="0 0 41 41" shape-rendering="crispEdges" role="img" aria-label="Código QR que abre esta página en el celular"><path fill="#181B1D" d="M0 0h1v1h-1zM1 0h1v1h-1zM2 0h1v1h-1zM3 0h1v1h-1zM4 0h1v1h-1zM5 0h1v1h-1zM6 0h1v1h-1zM8 0h1v1h-1zM11 0h1v1h-1zM12 0h1v1h-1zM13 0h1v1h-1zM14 0h1v1h-1zM15 0h1v1h-1zM18 0h1v1h-1zM21 0h1v1h-1zM22 0h1v1h-1zM23 0h1v1h-1zM26 0h1v1h-1zM27 0h1v1h-1zM29 0h1v1h-1zM30 0h1v1h-1zM31 0h1v1h-1zM34 0h1v1h-1zM35 0h1v1h-1zM36 0h1v1h-1zM37 0h1v1h-1zM38 0h1v1h-1zM39 0h1v1h-1zM40 0h1v1h-1zM0 1h1v1h-1zM6 1h1v1h-1zM9 1h1v1h-1zM12 1h1v1h-1zM14 1h1v1h-1zM17 1h1v1h-1zM18 1h1v1h-1zM20 1h1v1h-1zM24 1h1v1h-1zM25 1h1v1h-1zM26 1h1v1h-1zM28 1h1v1h-1zM32 1h1v1h-1zM34 1h1v1h-1zM40 1h1v1h-1zM0 2h1v1h-1zM2 2h1v1h-1zM3 2h1v1h-1zM4 2h1v1h-1zM6 2h1v1h-1zM8 2h1v1h-1zM11 2h1v1h-1zM12 2h1v1h-1zM15 2h1v1h-1zM16 2h1v1h-1zM18 2h1v1h-1zM19 2h1v1h-1zM20 2h1v1h-1zM21 2h1v1h-1zM26 2h1v1h-1zM27 2h1v1h-1zM28 2h1v1h-1zM29 2h1v1h-1zM31 2h1v1h-1zM34 2h1v1h-1zM36 2h1v1h-1zM37 2h1v1h-1zM38 2h1v1h-1zM40 2h1v1h-1zM0 3h1v1h-1zM2 3h1v1h-1zM3 3h1v1h-1zM4 3h1v1h-1zM6 3h1v1h-1zM12 3h1v1h-1zM13 3h1v1h-1zM14 3h1v1h-1zM15 3h1v1h-1zM18 3h1v1h-1zM19 3h1v1h-1zM23 3h1v1h-1zM24 3h1v1h-1zM26 3h1v1h-1zM27 3h1v1h-1zM28 3h1v1h-1zM30 3h1v1h-1zM31 3h1v1h-1zM32 3h1v1h-1zM34 3h1v1h-1zM36 3h1v1h-1zM37 3h1v1h-1zM38 3h1v1h-1zM40 3h1v1h-1zM0 4h1v1h-1zM2 4h1v1h-1zM3 4h1v1h-1zM4 4h1v1h-1zM6 4h1v1h-1zM9 4h1v1h-1zM10 4h1v1h-1zM11 4h1v1h-1zM12 4h1v1h-1zM13 4h1v1h-1zM14 4h1v1h-1zM15 4h1v1h-1zM17 4h1v1h-1zM18 4h1v1h-1zM19 4h1v1h-1zM23 4h1v1h-1zM25 4h1v1h-1zM26 4h1v1h-1zM27 4h1v1h-1zM32 4h1v1h-1zM34 4h1v1h-1zM36 4h1v1h-1zM37 4h1v1h-1zM38 4h1v1h-1zM40 4h1v1h-1zM0 5h1v1h-1zM6 5h1v1h-1zM8 5h1v1h-1zM10 5h1v1h-1zM13 5h1v1h-1zM14 5h1v1h-1zM15 5h1v1h-1zM17 5h1v1h-1zM18 5h1v1h-1zM21 5h1v1h-1zM22 5h1v1h-1zM24 5h1v1h-1zM25 5h1v1h-1zM28 5h1v1h-1zM30 5h1v1h-1zM34 5h1v1h-1zM40 5h1v1h-1zM0 6h1v1h-1zM1 6h1v1h-1zM2 6h1v1h-1zM3 6h1v1h-1zM4 6h1v1h-1zM5 6h1v1h-1zM6 6h1v1h-1zM8 6h1v1h-1zM10 6h1v1h-1zM12 6h1v1h-1zM14 6h1v1h-1zM16 6h1v1h-1zM18 6h1v1h-1zM20 6h1v1h-1zM22 6h1v1h-1zM24 6h1v1h-1zM26 6h1v1h-1zM28 6h1v1h-1zM30 6h1v1h-1zM32 6h1v1h-1zM34 6h1v1h-1zM35 6h1v1h-1zM36 6h1v1h-1zM37 6h1v1h-1zM38 6h1v1h-1zM39 6h1v1h-1zM40 6h1v1h-1zM10 7h1v1h-1zM11 7h1v1h-1zM14 7h1v1h-1zM15 7h1v1h-1zM16 7h1v1h-1zM18 7h1v1h-1zM20 7h1v1h-1zM23 7h1v1h-1zM27 7h1v1h-1zM0 8h1v1h-1zM2 8h1v1h-1zM6 8h1v1h-1zM7 8h1v1h-1zM10 8h1v1h-1zM11 8h1v1h-1zM13 8h1v1h-1zM14 8h1v1h-1zM19 8h1v1h-1zM20 8h1v1h-1zM24 8h1v1h-1zM27 8h1v1h-1zM31 8h1v1h-1zM32 8h1v1h-1zM35 8h1v1h-1zM38 8h1v1h-1zM40 8h1v1h-1zM1 9h1v1h-1zM4 9h1v1h-1zM7 9h1v1h-1zM8 9h1v1h-1zM9 9h1v1h-1zM11 9h1v1h-1zM12 9h1v1h-1zM13 9h1v1h-1zM14 9h1v1h-1zM16 9h1v1h-1zM19 9h1v1h-1zM20 9h1v1h-1zM23 9h1v1h-1zM24 9h1v1h-1zM25 9h1v1h-1zM27 9h1v1h-1zM28 9h1v1h-1zM31 9h1v1h-1zM32 9h1v1h-1zM33 9h1v1h-1zM35 9h1v1h-1zM38 9h1v1h-1zM40 9h1v1h-1zM0 10h1v1h-1zM3 10h1v1h-1zM6 10h1v1h-1zM12 10h1v1h-1zM13 10h1v1h-1zM16 10h1v1h-1zM17 10h1v1h-1zM19 10h1v1h-1zM20 10h1v1h-1zM21 10h1v1h-1zM23 10h1v1h-1zM27 10h1v1h-1zM28 10h1v1h-1zM30 10h1v1h-1zM31 10h1v1h-1zM34 10h1v1h-1zM36 10h1v1h-1zM37 10h1v1h-1zM38 10h1v1h-1zM40 10h1v1h-1zM0 11h1v1h-1zM2 11h1v1h-1zM3 11h1v1h-1zM8 11h1v1h-1zM10 11h1v1h-1zM12 11h1v1h-1zM13 11h1v1h-1zM14 11h1v1h-1zM16 11h1v1h-1zM18 11h1v1h-1zM19 11h1v1h-1zM20 11h1v1h-1zM22 11h1v1h-1zM26 11h1v1h-1zM28 11h1v1h-1zM31 11h1v1h-1zM32 11h1v1h-1zM33 11h1v1h-1zM35 11h1v1h-1zM36 11h1v1h-1zM37 11h1v1h-1zM39 11h1v1h-1zM0 12h1v1h-1zM2 12h1v1h-1zM5 12h1v1h-1zM6 12h1v1h-1zM9 12h1v1h-1zM10 12h1v1h-1zM12 12h1v1h-1zM14 12h1v1h-1zM15 12h1v1h-1zM16 12h1v1h-1zM17 12h1v1h-1zM21 12h1v1h-1zM24 12h1v1h-1zM25 12h1v1h-1zM27 12h1v1h-1zM30 12h1v1h-1zM32 12h1v1h-1zM34 12h1v1h-1zM35 12h1v1h-1zM39 12h1v1h-1zM0 13h1v1h-1zM1 13h1v1h-1zM2 13h1v1h-1zM3 13h1v1h-1zM4 13h1v1h-1zM8 13h1v1h-1zM11 13h1v1h-1zM12 13h1v1h-1zM17 13h1v1h-1zM21 13h1v1h-1zM24 13h1v1h-1zM25 13h1v1h-1zM26 13h1v1h-1zM30 13h1v1h-1zM32 13h1v1h-1zM35 13h1v1h-1zM37 13h1v1h-1zM39 13h1v1h-1zM0 14h1v1h-1zM3 14h1v1h-1zM5 14h1v1h-1zM6 14h1v1h-1zM7 14h1v1h-1zM9 14h1v1h-1zM11 14h1v1h-1zM12 14h1v1h-1zM14 14h1v1h-1zM15 14h1v1h-1zM17 14h1v1h-1zM19 14h1v1h-1zM21 14h1v1h-1zM24 14h1v1h-1zM27 14h1v1h-1zM29 14h1v1h-1zM30 14h1v1h-1zM31 14h1v1h-1zM33 14h1v1h-1zM34 14h1v1h-1zM36 14h1v1h-1zM38 14h1v1h-1zM40 14h1v1h-1zM0 15h1v1h-1zM2 15h1v1h-1zM3 15h1v1h-1zM5 15h1v1h-1zM7 15h1v1h-1zM8 15h1v1h-1zM12 15h1v1h-1zM13 15h1v1h-1zM15 15h1v1h-1zM16 15h1v1h-1zM18 15h1v1h-1zM22 15h1v1h-1zM23 15h1v1h-1zM24 15h1v1h-1zM30 15h1v1h-1zM31 15h1v1h-1zM32 15h1v1h-1zM33 15h1v1h-1zM34 15h1v1h-1zM36 15h1v1h-1zM37 15h1v1h-1zM39 15h1v1h-1zM1 16h1v1h-1zM2 16h1v1h-1zM4 16h1v1h-1zM5 16h1v1h-1zM6 16h1v1h-1zM7 16h1v1h-1zM8 16h1v1h-1zM9 16h1v1h-1zM11 16h1v1h-1zM14 16h1v1h-1zM19 16h1v1h-1zM20 16h1v1h-1zM24 16h1v1h-1zM25 16h1v1h-1zM27 16h1v1h-1zM29 16h1v1h-1zM32 16h1v1h-1zM33 16h1v1h-1zM34 16h1v1h-1zM37 16h1v1h-1zM39 16h1v1h-1zM40 16h1v1h-1zM1 17h1v1h-1zM4 17h1v1h-1zM5 17h1v1h-1zM7 17h1v1h-1zM9 17h1v1h-1zM11 17h1v1h-1zM12 17h1v1h-1zM14 17h1v1h-1zM15 17h1v1h-1zM19 17h1v1h-1zM20 17h1v1h-1zM21 17h1v1h-1zM22 17h1v1h-1zM23 17h1v1h-1zM28 17h1v1h-1zM30 17h1v1h-1zM32 17h1v1h-1zM33 17h1v1h-1zM34 17h1v1h-1zM35 17h1v1h-1zM37 17h1v1h-1zM38 17h1v1h-1zM39 17h1v1h-1zM40 17h1v1h-1zM2 18h1v1h-1zM5 18h1v1h-1zM6 18h1v1h-1zM8 18h1v1h-1zM13 18h1v1h-1zM17 18h1v1h-1zM18 18h1v1h-1zM19 18h1v1h-1zM20 18h1v1h-1zM23 18h1v1h-1zM25 18h1v1h-1zM26 18h1v1h-1zM27 18h1v1h-1zM30 18h1v1h-1zM31 18h1v1h-1zM32 18h1v1h-1zM35 18h1v1h-1zM36 18h1v1h-1zM40 18h1v1h-1zM0 19h1v1h-1zM2 19h1v1h-1zM7 19h1v1h-1zM8 19h1v1h-1zM9 19h1v1h-1zM14 19h1v1h-1zM18 19h1v1h-1zM20 19h1v1h-1zM21 19h1v1h-1zM26 19h1v1h-1zM28 19h1v1h-1zM32 19h1v1h-1zM33 19h1v1h-1zM34 19h1v1h-1zM37 19h1v1h-1zM0 20h1v1h-1zM2 20h1v1h-1zM3 20h1v1h-1zM4 20h1v1h-1zM6 20h1v1h-1zM9 20h1v1h-1zM10 20h1v1h-1zM13 20h1v1h-1zM15 20h1v1h-1zM16 20h1v1h-1zM17 20h1v1h-1zM18 20h1v1h-1zM19 20h1v1h-1zM20 20h1v1h-1zM21 20h1v1h-1zM23 20h1v1h-1zM24 20h1v1h-1zM25 20h1v1h-1zM26 20h1v1h-1zM27 20h1v1h-1zM28 20h1v1h-1zM30 20h1v1h-1zM33 20h1v1h-1zM34 20h1v1h-1zM36 20h1v1h-1zM37 20h1v1h-1zM38 20h1v1h-1zM39 20h1v1h-1zM3 21h1v1h-1zM4 21h1v1h-1zM7 21h1v1h-1zM9 21h1v1h-1zM13 21h1v1h-1zM16 21h1v1h-1zM17 21h1v1h-1zM18 21h1v1h-1zM20 21h1v1h-1zM24 21h1v1h-1zM25 21h1v1h-1zM26 21h1v1h-1zM28 21h1v1h-1zM31 21h1v1h-1zM34 21h1v1h-1zM35 21h1v1h-1zM40 21h1v1h-1zM0 22h1v1h-1zM1 22h1v1h-1zM2 22h1v1h-1zM4 22h1v1h-1zM6 22h1v1h-1zM9 22h1v1h-1zM11 22h1v1h-1zM13 22h1v1h-1zM16 22h1v1h-1zM17 22h1v1h-1zM18 22h1v1h-1zM19 22h1v1h-1zM21 22h1v1h-1zM22 22h1v1h-1zM23 22h1v1h-1zM27 22h1v1h-1zM29 22h1v1h-1zM31 22h1v1h-1zM32 22h1v1h-1zM33 22h1v1h-1zM34 22h1v1h-1zM38 22h1v1h-1zM40 22h1v1h-1zM0 23h1v1h-1zM1 23h1v1h-1zM3 23h1v1h-1zM8 23h1v1h-1zM10 23h1v1h-1zM13 23h1v1h-1zM14 23h1v1h-1zM18 23h1v1h-1zM20 23h1v1h-1zM22 23h1v1h-1zM23 23h1v1h-1zM24 23h1v1h-1zM26 23h1v1h-1zM30 23h1v1h-1zM31 23h1v1h-1zM36 23h1v1h-1zM39 23h1v1h-1zM40 23h1v1h-1zM1 24h1v1h-1zM5 24h1v1h-1zM6 24h1v1h-1zM7 24h1v1h-1zM9 24h1v1h-1zM14 24h1v1h-1zM15 24h1v1h-1zM20 24h1v1h-1zM27 24h1v1h-1zM28 24h1v1h-1zM31 24h1v1h-1zM32 24h1v1h-1zM34 24h1v1h-1zM35 24h1v1h-1zM37 24h1v1h-1zM39 24h1v1h-1zM0 25h1v1h-1zM2 25h1v1h-1zM3 25h1v1h-1zM4 25h1v1h-1zM5 25h1v1h-1zM9 25h1v1h-1zM10 25h1v1h-1zM13 25h1v1h-1zM15 25h1v1h-1zM17 25h1v1h-1zM18 25h1v1h-1zM19 25h1v1h-1zM21 25h1v1h-1zM23 25h1v1h-1zM24 25h1v1h-1zM26 25h1v1h-1zM27 25h1v1h-1zM28 25h1v1h-1zM31 25h1v1h-1zM37 25h1v1h-1zM40 25h1v1h-1zM0 26h1v1h-1zM1 26h1v1h-1zM2 26h1v1h-1zM4 26h1v1h-1zM6 26h1v1h-1zM8 26h1v1h-1zM10 26h1v1h-1zM11 26h1v1h-1zM14 26h1v1h-1zM15 26h1v1h-1zM16 26h1v1h-1zM17 26h1v1h-1zM19 26h1v1h-1zM22 26h1v1h-1zM23 26h1v1h-1zM25 26h1v1h-1zM26 26h1v1h-1zM27 26h1v1h-1zM28 26h1v1h-1zM31 26h1v1h-1zM33 26h1v1h-1zM36 26h1v1h-1zM37 26h1v1h-1zM38 26h1v1h-1zM40 26h1v1h-1zM0 27h1v1h-1zM2 27h1v1h-1zM3 27h1v1h-1zM8 27h1v1h-1zM9 27h1v1h-1zM12 27h1v1h-1zM13 27h1v1h-1zM22 27h1v1h-1zM24 27h1v1h-1zM27 27h1v1h-1zM28 27h1v1h-1zM31 27h1v1h-1zM32 27h1v1h-1zM33 27h1v1h-1zM34 27h1v1h-1zM35 27h1v1h-1zM37 27h1v1h-1zM3 28h1v1h-1zM4 28h1v1h-1zM6 28h1v1h-1zM8 28h1v1h-1zM9 28h1v1h-1zM12 28h1v1h-1zM13 28h1v1h-1zM14 28h1v1h-1zM16 28h1v1h-1zM17 28h1v1h-1zM19 28h1v1h-1zM20 28h1v1h-1zM21 28h1v1h-1zM23 28h1v1h-1zM25 28h1v1h-1zM28 28h1v1h-1zM29 28h1v1h-1zM34 28h1v1h-1zM35 28h1v1h-1zM40 28h1v1h-1zM1 29h1v1h-1zM2 29h1v1h-1zM4 29h1v1h-1zM9 29h1v1h-1zM12 29h1v1h-1zM16 29h1v1h-1zM18 29h1v1h-1zM20 29h1v1h-1zM28 29h1v1h-1zM29 29h1v1h-1zM30 29h1v1h-1zM32 29h1v1h-1zM35 29h1v1h-1zM0 30h1v1h-1zM1 30h1v1h-1zM2 30h1v1h-1zM5 30h1v1h-1zM6 30h1v1h-1zM10 30h1v1h-1zM11 30h1v1h-1zM12 30h1v1h-1zM15 30h1v1h-1zM17 30h1v1h-1zM20 30h1v1h-1zM21 30h1v1h-1zM23 30h1v1h-1zM25 30h1v1h-1zM26 30h1v1h-1zM28 30h1v1h-1zM31 30h1v1h-1zM33 30h1v1h-1zM35 30h1v1h-1zM37 30h1v1h-1zM40 30h1v1h-1zM3 31h1v1h-1zM4 31h1v1h-1zM7 31h1v1h-1zM9 31h1v1h-1zM14 31h1v1h-1zM18 31h1v1h-1zM19 31h1v1h-1zM20 31h1v1h-1zM22 31h1v1h-1zM26 31h1v1h-1zM27 31h1v1h-1zM28 31h1v1h-1zM30 31h1v1h-1zM31 31h1v1h-1zM32 31h1v1h-1zM34 31h1v1h-1zM35 31h1v1h-1zM36 31h1v1h-1zM0 32h1v1h-1zM1 32h1v1h-1zM3 32h1v1h-1zM4 32h1v1h-1zM6 32h1v1h-1zM7 32h1v1h-1zM9 32h1v1h-1zM10 32h1v1h-1zM11 32h1v1h-1zM15 32h1v1h-1zM16 32h1v1h-1zM23 32h1v1h-1zM24 32h1v1h-1zM25 32h1v1h-1zM28 32h1v1h-1zM29 32h1v1h-1zM32 32h1v1h-1zM33 32h1v1h-1zM34 32h1v1h-1zM35 32h1v1h-1zM36 32h1v1h-1zM37 32h1v1h-1zM40 32h1v1h-1zM8 33h1v1h-1zM11 33h1v1h-1zM12 33h1v1h-1zM17 33h1v1h-1zM19 33h1v1h-1zM20 33h1v1h-1zM24 33h1v1h-1zM25 33h1v1h-1zM28 33h1v1h-1zM29 33h1v1h-1zM30 33h1v1h-1zM32 33h1v1h-1zM36 33h1v1h-1zM37 33h1v1h-1zM40 33h1v1h-1zM0 34h1v1h-1zM1 34h1v1h-1zM2 34h1v1h-1zM3 34h1v1h-1zM4 34h1v1h-1zM5 34h1v1h-1zM6 34h1v1h-1zM8 34h1v1h-1zM9 34h1v1h-1zM12 34h1v1h-1zM16 34h1v1h-1zM19 34h1v1h-1zM20 34h1v1h-1zM21 34h1v1h-1zM22 34h1v1h-1zM23 34h1v1h-1zM27 34h1v1h-1zM28 34h1v1h-1zM31 34h1v1h-1zM32 34h1v1h-1zM34 34h1v1h-1zM36 34h1v1h-1zM37 34h1v1h-1zM38 34h1v1h-1zM40 34h1v1h-1zM0 35h1v1h-1zM6 35h1v1h-1zM11 35h1v1h-1zM16 35h1v1h-1zM17 35h1v1h-1zM20 35h1v1h-1zM22 35h1v1h-1zM23 35h1v1h-1zM24 35h1v1h-1zM25 35h1v1h-1zM27 35h1v1h-1zM30 35h1v1h-1zM31 35h1v1h-1zM32 35h1v1h-1zM36 35h1v1h-1zM37 35h1v1h-1zM0 36h1v1h-1zM2 36h1v1h-1zM3 36h1v1h-1zM4 36h1v1h-1zM6 36h1v1h-1zM9 36h1v1h-1zM10 36h1v1h-1zM11 36h1v1h-1zM12 36h1v1h-1zM14 36h1v1h-1zM16 36h1v1h-1zM17 36h1v1h-1zM20 36h1v1h-1zM21 36h1v1h-1zM22 36h1v1h-1zM23 36h1v1h-1zM25 36h1v1h-1zM27 36h1v1h-1zM29 36h1v1h-1zM30 36h1v1h-1zM31 36h1v1h-1zM32 36h1v1h-1zM33 36h1v1h-1zM34 36h1v1h-1zM35 36h1v1h-1zM36 36h1v1h-1zM37 36h1v1h-1zM38 36h1v1h-1zM40 36h1v1h-1zM0 37h1v1h-1zM2 37h1v1h-1zM3 37h1v1h-1zM4 37h1v1h-1zM6 37h1v1h-1zM9 37h1v1h-1zM12 37h1v1h-1zM14 37h1v1h-1zM16 37h1v1h-1zM19 37h1v1h-1zM22 37h1v1h-1zM24 37h1v1h-1zM27 37h1v1h-1zM31 37h1v1h-1zM35 37h1v1h-1zM36 37h1v1h-1zM37 37h1v1h-1zM38 37h1v1h-1zM39 37h1v1h-1zM0 38h1v1h-1zM2 38h1v1h-1zM3 38h1v1h-1zM4 38h1v1h-1zM6 38h1v1h-1zM8 38h1v1h-1zM10 38h1v1h-1zM11 38h1v1h-1zM12 38h1v1h-1zM13 38h1v1h-1zM15 38h1v1h-1zM19 38h1v1h-1zM23 38h1v1h-1zM24 38h1v1h-1zM26 38h1v1h-1zM27 38h1v1h-1zM29 38h1v1h-1zM30 38h1v1h-1zM31 38h1v1h-1zM32 38h1v1h-1zM33 38h1v1h-1zM36 38h1v1h-1zM40 38h1v1h-1zM0 39h1v1h-1zM6 39h1v1h-1zM13 39h1v1h-1zM15 39h1v1h-1zM16 39h1v1h-1zM17 39h1v1h-1zM18 39h1v1h-1zM19 39h1v1h-1zM20 39h1v1h-1zM22 39h1v1h-1zM23 39h1v1h-1zM24 39h1v1h-1zM27 39h1v1h-1zM28 39h1v1h-1zM30 39h1v1h-1zM31 39h1v1h-1zM32 39h1v1h-1zM33 39h1v1h-1zM34 39h1v1h-1zM37 39h1v1h-1zM0 40h1v1h-1zM1 40h1v1h-1zM2 40h1v1h-1zM3 40h1v1h-1zM4 40h1v1h-1zM5 40h1v1h-1zM6 40h1v1h-1zM8 40h1v1h-1zM9 40h1v1h-1zM11 40h1v1h-1zM12 40h1v1h-1zM16 40h1v1h-1zM20 40h1v1h-1zM23 40h1v1h-1zM24 40h1v1h-1zM28 40h1v1h-1zM31 40h1v1h-1zM32 40h1v1h-1zM36 40h1v1h-1zM37 40h1v1h-1zM38 40h1v1h-1zM40 40h1v1h-1z"/></svg></div>
+          <h3 class="t qr-h" style="--x:254;--y:440;--fs:18">Escaneá con tu celular</h3>
+          <p class="t qr-p" style="--x:254;--y:466;--fs:13;--lh:1.3846">El modelo se abre directo<br>en realidad aumentada.</p>
+          <span class="p dot" style="--x:254.5;--y:512.5;--w:7;--h:7"></span>
+          <p class="t plat" style="--x:270;--y:521;--fs:13">Android · Scene Viewer</p>
+          <span class="p dot" style="--x:254.5;--y:536.5;--w:7;--h:7"></span>
+          <p class="t plat" style="--x:270;--y:545;--fs:13">iPhone · Quick Look</p>
+        </div>
+
+        <!-- en dispositivos con AR (por ejemplo, una tablet horizontal) reemplaza al QR -->
+        <div class="ar-group">
+          <button class="p ar-btn" style="--x:64;--y:402;--w:512;--h:56" type="button" data-ar>
+            <svg viewBox="-10 -10 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M0 -9 L8 -4.5 L8 4.5 L0 9 L-8 4.5 L-8 -4.5 Z"/><path d="M-8 -4.5 L0 0 L8 -4.5 M0 0 L0 9"/></svg>
+            Ver en tu espacio
+          </button>
+          <p class="t ar-note" style="--x:64;--y:490;--fs:13">Se abre la cámara para ubicar el robot donde quieras.</p>
+        </div>
+
+        <ul class="chips">
+          <li class="p chip" style="--x:64;--y:578">Robot delta · 3 GDL</li>
+          <li class="p chip" style="--x:326;--y:578">Visión artificial</li>
+          <li class="p chip" style="--x:64;--y:616">4 modos de trabajo</li>
+          <li class="p chip" style="--x:326;--y:616">Agarre por ventosa</li>
+        </ul>
+
+        <p class="t credit" style="--x:64;--y:684;--fs:11.5">Un producto de KUKO INDUSTRIES &nbsp;·&nbsp; De Palma · Reynaga Ríos &nbsp;·&nbsp; 2026</p>
+
+        <svg class="deco p" style="--x:528;--y:672;--w:96;--h:12" viewBox="528 672 96 12" aria-hidden="true">
+          <polygon points="528,684 538,672 552,672 542,684" fill="#2F343A"/>
+          <polygon points="552,684 562,672 576,672 566,684" fill="#2F343A"/>
+          <polygon points="576,684 586,672 600,672 590,684" fill="#2F343A"/>
+          <polygon points="600,684 610,672 624,672 614,684" fill="#2F343A"/>
+        </svg>
+      </section>
+
+      <!-- ================= Visor 3D (compartido) ================= -->
+      <main class="p card" id="viewer-card">
+        <svg class="target only-d" viewBox="0 0 808 628" preserveAspectRatio="none" aria-hidden="true">
+          <circle cx="404" cy="300" r="286"/>
+          <circle cx="404" cy="300" r="192"/>
+          <line x1="24" y1="300" x2="784" y2="300"/>
+          <line x1="404" y1="24" x2="404" y2="604"/>
+        </svg>
+        <svg class="target only-m" viewBox="0 0 358 372" preserveAspectRatio="none" aria-hidden="true">
+          <circle cx="179" cy="178" r="160"/>
+          <circle cx="179" cy="178" r="106"/>
+          <line x1="24" y1="178" x2="334" y2="178"/>
+          <line x1="179" y1="24" x2="179" y2="348"/>
+        </svg>
+
+        <model-viewer
+          id="viewer"
+          src="Kuko_Delta_Carbon_Reynaga_De_Palma.glb"
+          ios-src="Kuko_Delta_Carbon_Reynaga_De_Palma.usdz"
+          alt="Modelo 3D del robot delta KUKO DELTA CARBON"
+          ar
+          ar-modes="webxr scene-viewer quick-look"
+          camera-controls
+          touch-action="pan-y"
+          auto-rotate
+          interaction-prompt="none"
+          loading="eager"
+          shadow-intensity="1"
+          exposure="1.1"
+          environment-image="neutral"
+          tone-mapping="neutral"
+          min-camera-orbit="auto auto 105%">
+          <div slot="progress-bar"></div>
+          <button slot="ar-button" hidden></button>
+        </model-viewer>
+
+        <div class="loader" id="loader">
+          <img class="p poster" src="Kuko_Delta_Carbon_Reynaga_De_Palma_poster.webp" alt="" id="loader-img">
+          <div class="p lc-wrap">
+            <div class="loader-card" role="status">
+              <p class="loader-title" id="loader-title">Cargando<span class="dots" id="dots" aria-hidden="true">.</span></p>
+              <div class="bar" role="progressbar" aria-label="Carga del modelo 3D" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bar">
+                <i id="bar-fill"></i>
+              </div>
+              <p class="pct" id="pct" aria-hidden="true">0%</p>
+              <p class="loader-note" id="loader-note"></p>
+            </div>
+          </div>
+        </div>
+
+        <p class="chip3d">MODELO 3D</p>
+
+        <button class="p cam only-d" style="--x:665" type="button" id="cam-reset" aria-label="Volver a la vista inicial">
+          <svg viewBox="-10 -10 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 -3.5 A7 7 0 1 0 7 2"/><path d="M7 -8 L6.5 -3.5 L2 -4"/></svg>
+        </button>
+        <button class="p cam only-d" style="--x:713" type="button" id="cam-out" aria-label="Alejar">
+          <svg viewBox="-10 -10 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M-6 0 H6"/></svg>
+        </button>
+        <button class="p cam only-d" style="--x:761" type="button" id="cam-in" aria-label="Acercar">
+          <svg viewBox="-10 -10 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M-6 0 H6 M0 -6 V6"/></svg>
+        </button>
+
+        <p class="hint">
+          <svg viewBox="-10 -10 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 -3.5 A7 7 0 1 0 7 2"/><path d="M7 -8 L6.5 -3.5 L2 -4"/></svg>
+          <span class="hint-mouse">Arrastrá para girar · Rueda para acercar</span>
+          <span class="hint-touch">Deslizá para girar · Pellizcá para acercar</span>
+        </p>
+      </main>
+
+      <!-- ================= Parte inferior del celular ================= -->
+      <section class="only-m" aria-labelledby="how-title">
+        <h2 class="t label m-label" id="how-title">Cómo verlo en tu espacio</h2>
+
+        <div class="ar-steps">
+          <ol class="steps">
+            <li class="p step" style="--x:16"><b>1</b><span class="t">Tocá el<br>botón de AR</span></li>
+            <li class="p step" style="--x:139"><b>2</b><span class="t">Apuntá al piso<br>o a una mesa</span></li>
+            <li class="p step" style="--x:262"><b>3</b><span class="t">Ubicá el robot<br>y recorrelo</span></li>
+          </ol>
+
+          <button class="p ar-btn" style="--x:16;--y:736;--w:358;--h:56" type="button" data-ar>
+            <svg viewBox="-10 -10 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M0 -9 L8 -4.5 L8 4.5 L0 9 L-8 4.5 L-8 -4.5 Z"/><path d="M-8 -4.5 L0 0 L8 -4.5 M0 0 L0 9"/></svg>
+            Ver en tu espacio
+          </button>
+        </div>
+
+        <!-- navegador dentro de WhatsApp, Instagram, etc. -->
+        <div class="p noar noar-touch">
+          <p>Este navegador no puede abrir la realidad aumentada. Abrí la página en Chrome (Android) o Safari (iPhone).</p>
+          <button class="copy-link" type="button" id="copy-link">Copiar enlace</button>
+        </div>
+
+        <!-- computadora con la ventana angosta -->
+        <div class="p noar noar-qr">
+          <div class="qr-box"><svg viewBox="0 0 41 41" shape-rendering="crispEdges" role="img" aria-label="Código QR que abre esta página en el celular"><path fill="#181B1D" d="M0 0h1v1h-1zM1 0h1v1h-1zM2 0h1v1h-1zM3 0h1v1h-1zM4 0h1v1h-1zM5 0h1v1h-1zM6 0h1v1h-1zM8 0h1v1h-1zM11 0h1v1h-1zM12 0h1v1h-1zM13 0h1v1h-1zM14 0h1v1h-1zM15 0h1v1h-1zM18 0h1v1h-1zM21 0h1v1h-1zM22 0h1v1h-1zM23 0h1v1h-1zM26 0h1v1h-1zM27 0h1v1h-1zM29 0h1v1h-1zM30 0h1v1h-1zM31 0h1v1h-1zM34 0h1v1h-1zM35 0h1v1h-1zM36 0h1v1h-1zM37 0h1v1h-1zM38 0h1v1h-1zM39 0h1v1h-1zM40 0h1v1h-1zM0 1h1v1h-1zM6 1h1v1h-1zM9 1h1v1h-1zM12 1h1v1h-1zM14 1h1v1h-1zM17 1h1v1h-1zM18 1h1v1h-1zM20 1h1v1h-1zM24 1h1v1h-1zM25 1h1v1h-1zM26 1h1v1h-1zM28 1h1v1h-1zM32 1h1v1h-1zM34 1h1v1h-1zM40 1h1v1h-1zM0 2h1v1h-1zM2 2h1v1h-1zM3 2h1v1h-1zM4 2h1v1h-1zM6 2h1v1h-1zM8 2h1v1h-1zM11 2h1v1h-1zM12 2h1v1h-1zM15 2h1v1h-1zM16 2h1v1h-1zM18 2h1v1h-1zM19 2h1v1h-1zM20 2h1v1h-1zM21 2h1v1h-1zM26 2h1v1h-1zM27 2h1v1h-1zM28 2h1v1h-1zM29 2h1v1h-1zM31 2h1v1h-1zM34 2h1v1h-1zM36 2h1v1h-1zM37 2h1v1h-1zM38 2h1v1h-1zM40 2h1v1h-1zM0 3h1v1h-1zM2 3h1v1h-1zM3 3h1v1h-1zM4 3h1v1h-1zM6 3h1v1h-1zM12 3h1v1h-1zM13 3h1v1h-1zM14 3h1v1h-1zM15 3h1v1h-1zM18 3h1v1h-1zM19 3h1v1h-1zM23 3h1v1h-1zM24 3h1v1h-1zM26 3h1v1h-1zM27 3h1v1h-1zM28 3h1v1h-1zM30 3h1v1h-1zM31 3h1v1h-1zM32 3h1v1h-1zM34 3h1v1h-1zM36 3h1v1h-1zM37 3h1v1h-1zM38 3h1v1h-1zM40 3h1v1h-1zM0 4h1v1h-1zM2 4h1v1h-1zM3 4h1v1h-1zM4 4h1v1h-1zM6 4h1v1h-1zM9 4h1v1h-1zM10 4h1v1h-1zM11 4h1v1h-1zM12 4h1v1h-1zM13 4h1v1h-1zM14 4h1v1h-1zM15 4h1v1h-1zM17 4h1v1h-1zM18 4h1v1h-1zM19 4h1v1h-1zM23 4h1v1h-1zM25 4h1v1h-1zM26 4h1v1h-1zM27 4h1v1h-1zM32 4h1v1h-1zM34 4h1v1h-1zM36 4h1v1h-1zM37 4h1v1h-1zM38 4h1v1h-1zM40 4h1v1h-1zM0 5h1v1h-1zM6 5h1v1h-1zM8 5h1v1h-1zM10 5h1v1h-1zM13 5h1v1h-1zM14 5h1v1h-1zM15 5h1v1h-1zM17 5h1v1h-1zM18 5h1v1h-1zM21 5h1v1h-1zM22 5h1v1h-1zM24 5h1v1h-1zM25 5h1v1h-1zM28 5h1v1h-1zM30 5h1v1h-1zM34 5h1v1h-1zM40 5h1v1h-1zM0 6h1v1h-1zM1 6h1v1h-1zM2 6h1v1h-1zM3 6h1v1h-1zM4 6h1v1h-1zM5 6h1v1h-1zM6 6h1v1h-1zM8 6h1v1h-1zM10 6h1v1h-1zM12 6h1v1h-1zM14 6h1v1h-1zM16 6h1v1h-1zM18 6h1v1h-1zM20 6h1v1h-1zM22 6h1v1h-1zM24 6h1v1h-1zM26 6h1v1h-1zM28 6h1v1h-1zM30 6h1v1h-1zM32 6h1v1h-1zM34 6h1v1h-1zM35 6h1v1h-1zM36 6h1v1h-1zM37 6h1v1h-1zM38 6h1v1h-1zM39 6h1v1h-1zM40 6h1v1h-1zM10 7h1v1h-1zM11 7h1v1h-1zM14 7h1v1h-1zM15 7h1v1h-1zM16 7h1v1h-1zM18 7h1v1h-1zM20 7h1v1h-1zM23 7h1v1h-1zM27 7h1v1h-1zM0 8h1v1h-1zM2 8h1v1h-1zM6 8h1v1h-1zM7 8h1v1h-1zM10 8h1v1h-1zM11 8h1v1h-1zM13 8h1v1h-1zM14 8h1v1h-1zM19 8h1v1h-1zM20 8h1v1h-1zM24 8h1v1h-1zM27 8h1v1h-1zM31 8h1v1h-1zM32 8h1v1h-1zM35 8h1v1h-1zM38 8h1v1h-1zM40 8h1v1h-1zM1 9h1v1h-1zM4 9h1v1h-1zM7 9h1v1h-1zM8 9h1v1h-1zM9 9h1v1h-1zM11 9h1v1h-1zM12 9h1v1h-1zM13 9h1v1h-1zM14 9h1v1h-1zM16 9h1v1h-1zM19 9h1v1h-1zM20 9h1v1h-1zM23 9h1v1h-1zM24 9h1v1h-1zM25 9h1v1h-1zM27 9h1v1h-1zM28 9h1v1h-1zM31 9h1v1h-1zM32 9h1v1h-1zM33 9h1v1h-1zM35 9h1v1h-1zM38 9h1v1h-1zM40 9h1v1h-1zM0 10h1v1h-1zM3 10h1v1h-1zM6 10h1v1h-1zM12 10h1v1h-1zM13 10h1v1h-1zM16 10h1v1h-1zM17 10h1v1h-1zM19 10h1v1h-1zM20 10h1v1h-1zM21 10h1v1h-1zM23 10h1v1h-1zM27 10h1v1h-1zM28 10h1v1h-1zM30 10h1v1h-1zM31 10h1v1h-1zM34 10h1v1h-1zM36 10h1v1h-1zM37 10h1v1h-1zM38 10h1v1h-1zM40 10h1v1h-1zM0 11h1v1h-1zM2 11h1v1h-1zM3 11h1v1h-1zM8 11h1v1h-1zM10 11h1v1h-1zM12 11h1v1h-1zM13 11h1v1h-1zM14 11h1v1h-1zM16 11h1v1h-1zM18 11h1v1h-1zM19 11h1v1h-1zM20 11h1v1h-1zM22 11h1v1h-1zM26 11h1v1h-1zM28 11h1v1h-1zM31 11h1v1h-1zM32 11h1v1h-1zM33 11h1v1h-1zM35 11h1v1h-1zM36 11h1v1h-1zM37 11h1v1h-1zM39 11h1v1h-1zM0 12h1v1h-1zM2 12h1v1h-1zM5 12h1v1h-1zM6 12h1v1h-1zM9 12h1v1h-1zM10 12h1v1h-1zM12 12h1v1h-1zM14 12h1v1h-1zM15 12h1v1h-1zM16 12h1v1h-1zM17 12h1v1h-1zM21 12h1v1h-1zM24 12h1v1h-1zM25 12h1v1h-1zM27 12h1v1h-1zM30 12h1v1h-1zM32 12h1v1h-1zM34 12h1v1h-1zM35 12h1v1h-1zM39 12h1v1h-1zM0 13h1v1h-1zM1 13h1v1h-1zM2 13h1v1h-1zM3 13h1v1h-1zM4 13h1v1h-1zM8 13h1v1h-1zM11 13h1v1h-1zM12 13h1v1h-1zM17 13h1v1h-1zM21 13h1v1h-1zM24 13h1v1h-1zM25 13h1v1h-1zM26 13h1v1h-1zM30 13h1v1h-1zM32 13h1v1h-1zM35 13h1v1h-1zM37 13h1v1h-1zM39 13h1v1h-1zM0 14h1v1h-1zM3 14h1v1h-1zM5 14h1v1h-1zM6 14h1v1h-1zM7 14h1v1h-1zM9 14h1v1h-1zM11 14h1v1h-1zM12 14h1v1h-1zM14 14h1v1h-1zM15 14h1v1h-1zM17 14h1v1h-1zM19 14h1v1h-1zM21 14h1v1h-1zM24 14h1v1h-1zM27 14h1v1h-1zM29 14h1v1h-1zM30 14h1v1h-1zM31 14h1v1h-1zM33 14h1v1h-1zM34 14h1v1h-1zM36 14h1v1h-1zM38 14h1v1h-1zM40 14h1v1h-1zM0 15h1v1h-1zM2 15h1v1h-1zM3 15h1v1h-1zM5 15h1v1h-1zM7 15h1v1h-1zM8 15h1v1h-1zM12 15h1v1h-1zM13 15h1v1h-1zM15 15h1v1h-1zM16 15h1v1h-1zM18 15h1v1h-1zM22 15h1v1h-1zM23 15h1v1h-1zM24 15h1v1h-1zM30 15h1v1h-1zM31 15h1v1h-1zM32 15h1v1h-1zM33 15h1v1h-1zM34 15h1v1h-1zM36 15h1v1h-1zM37 15h1v1h-1zM39 15h1v1h-1zM1 16h1v1h-1zM2 16h1v1h-1zM4 16h1v1h-1zM5 16h1v1h-1zM6 16h1v1h-1zM7 16h1v1h-1zM8 16h1v1h-1zM9 16h1v1h-1zM11 16h1v1h-1zM14 16h1v1h-1zM19 16h1v1h-1zM20 16h1v1h-1zM24 16h1v1h-1zM25 16h1v1h-1zM27 16h1v1h-1zM29 16h1v1h-1zM32 16h1v1h-1zM33 16h1v1h-1zM34 16h1v1h-1zM37 16h1v1h-1zM39 16h1v1h-1zM40 16h1v1h-1zM1 17h1v1h-1zM4 17h1v1h-1zM5 17h1v1h-1zM7 17h1v1h-1zM9 17h1v1h-1zM11 17h1v1h-1zM12 17h1v1h-1zM14 17h1v1h-1zM15 17h1v1h-1zM19 17h1v1h-1zM20 17h1v1h-1zM21 17h1v1h-1zM22 17h1v1h-1zM23 17h1v1h-1zM28 17h1v1h-1zM30 17h1v1h-1zM32 17h1v1h-1zM33 17h1v1h-1zM34 17h1v1h-1zM35 17h1v1h-1zM37 17h1v1h-1zM38 17h1v1h-1zM39 17h1v1h-1zM40 17h1v1h-1zM2 18h1v1h-1zM5 18h1v1h-1zM6 18h1v1h-1zM8 18h1v1h-1zM13 18h1v1h-1zM17 18h1v1h-1zM18 18h1v1h-1zM19 18h1v1h-1zM20 18h1v1h-1zM23 18h1v1h-1zM25 18h1v1h-1zM26 18h1v1h-1zM27 18h1v1h-1zM30 18h1v1h-1zM31 18h1v1h-1zM32 18h1v1h-1zM35 18h1v1h-1zM36 18h1v1h-1zM40 18h1v1h-1zM0 19h1v1h-1zM2 19h1v1h-1zM7 19h1v1h-1zM8 19h1v1h-1zM9 19h1v1h-1zM14 19h1v1h-1zM18 19h1v1h-1zM20 19h1v1h-1zM21 19h1v1h-1zM26 19h1v1h-1zM28 19h1v1h-1zM32 19h1v1h-1zM33 19h1v1h-1zM34 19h1v1h-1zM37 19h1v1h-1zM0 20h1v1h-1zM2 20h1v1h-1zM3 20h1v1h-1zM4 20h1v1h-1zM6 20h1v1h-1zM9 20h1v1h-1zM10 20h1v1h-1zM13 20h1v1h-1zM15 20h1v1h-1zM16 20h1v1h-1zM17 20h1v1h-1zM18 20h1v1h-1zM19 20h1v1h-1zM20 20h1v1h-1zM21 20h1v1h-1zM23 20h1v1h-1zM24 20h1v1h-1zM25 20h1v1h-1zM26 20h1v1h-1zM27 20h1v1h-1zM28 20h1v1h-1zM30 20h1v1h-1zM33 20h1v1h-1zM34 20h1v1h-1zM36 20h1v1h-1zM37 20h1v1h-1zM38 20h1v1h-1zM39 20h1v1h-1zM3 21h1v1h-1zM4 21h1v1h-1zM7 21h1v1h-1zM9 21h1v1h-1zM13 21h1v1h-1zM16 21h1v1h-1zM17 21h1v1h-1zM18 21h1v1h-1zM20 21h1v1h-1zM24 21h1v1h-1zM25 21h1v1h-1zM26 21h1v1h-1zM28 21h1v1h-1zM31 21h1v1h-1zM34 21h1v1h-1zM35 21h1v1h-1zM40 21h1v1h-1zM0 22h1v1h-1zM1 22h1v1h-1zM2 22h1v1h-1zM4 22h1v1h-1zM6 22h1v1h-1zM9 22h1v1h-1zM11 22h1v1h-1zM13 22h1v1h-1zM16 22h1v1h-1zM17 22h1v1h-1zM18 22h1v1h-1zM19 22h1v1h-1zM21 22h1v1h-1zM22 22h1v1h-1zM23 22h1v1h-1zM27 22h1v1h-1zM29 22h1v1h-1zM31 22h1v1h-1zM32 22h1v1h-1zM33 22h1v1h-1zM34 22h1v1h-1zM38 22h1v1h-1zM40 22h1v1h-1zM0 23h1v1h-1zM1 23h1v1h-1zM3 23h1v1h-1zM8 23h1v1h-1zM10 23h1v1h-1zM13 23h1v1h-1zM14 23h1v1h-1zM18 23h1v1h-1zM20 23h1v1h-1zM22 23h1v1h-1zM23 23h1v1h-1zM24 23h1v1h-1zM26 23h1v1h-1zM30 23h1v1h-1zM31 23h1v1h-1zM36 23h1v1h-1zM39 23h1v1h-1zM40 23h1v1h-1zM1 24h1v1h-1zM5 24h1v1h-1zM6 24h1v1h-1zM7 24h1v1h-1zM9 24h1v1h-1zM14 24h1v1h-1zM15 24h1v1h-1zM20 24h1v1h-1zM27 24h1v1h-1zM28 24h1v1h-1zM31 24h1v1h-1zM32 24h1v1h-1zM34 24h1v1h-1zM35 24h1v1h-1zM37 24h1v1h-1zM39 24h1v1h-1zM0 25h1v1h-1zM2 25h1v1h-1zM3 25h1v1h-1zM4 25h1v1h-1zM5 25h1v1h-1zM9 25h1v1h-1zM10 25h1v1h-1zM13 25h1v1h-1zM15 25h1v1h-1zM17 25h1v1h-1zM18 25h1v1h-1zM19 25h1v1h-1zM21 25h1v1h-1zM23 25h1v1h-1zM24 25h1v1h-1zM26 25h1v1h-1zM27 25h1v1h-1zM28 25h1v1h-1zM31 25h1v1h-1zM37 25h1v1h-1zM40 25h1v1h-1zM0 26h1v1h-1zM1 26h1v1h-1zM2 26h1v1h-1zM4 26h1v1h-1zM6 26h1v1h-1zM8 26h1v1h-1zM10 26h1v1h-1zM11 26h1v1h-1zM14 26h1v1h-1zM15 26h1v1h-1zM16 26h1v1h-1zM17 26h1v1h-1zM19 26h1v1h-1zM22 26h1v1h-1zM23 26h1v1h-1zM25 26h1v1h-1zM26 26h1v1h-1zM27 26h1v1h-1zM28 26h1v1h-1zM31 26h1v1h-1zM33 26h1v1h-1zM36 26h1v1h-1zM37 26h1v1h-1zM38 26h1v1h-1zM40 26h1v1h-1zM0 27h1v1h-1zM2 27h1v1h-1zM3 27h1v1h-1zM8 27h1v1h-1zM9 27h1v1h-1zM12 27h1v1h-1zM13 27h1v1h-1zM22 27h1v1h-1zM24 27h1v1h-1zM27 27h1v1h-1zM28 27h1v1h-1zM31 27h1v1h-1zM32 27h1v1h-1zM33 27h1v1h-1zM34 27h1v1h-1zM35 27h1v1h-1zM37 27h1v1h-1zM3 28h1v1h-1zM4 28h1v1h-1zM6 28h1v1h-1zM8 28h1v1h-1zM9 28h1v1h-1zM12 28h1v1h-1zM13 28h1v1h-1zM14 28h1v1h-1zM16 28h1v1h-1zM17 28h1v1h-1zM19 28h1v1h-1zM20 28h1v1h-1zM21 28h1v1h-1zM23 28h1v1h-1zM25 28h1v1h-1zM28 28h1v1h-1zM29 28h1v1h-1zM34 28h1v1h-1zM35 28h1v1h-1zM40 28h1v1h-1zM1 29h1v1h-1zM2 29h1v1h-1zM4 29h1v1h-1zM9 29h1v1h-1zM12 29h1v1h-1zM16 29h1v1h-1zM18 29h1v1h-1zM20 29h1v1h-1zM28 29h1v1h-1zM29 29h1v1h-1zM30 29h1v1h-1zM32 29h1v1h-1zM35 29h1v1h-1zM0 30h1v1h-1zM1 30h1v1h-1zM2 30h1v1h-1zM5 30h1v1h-1zM6 30h1v1h-1zM10 30h1v1h-1zM11 30h1v1h-1zM12 30h1v1h-1zM15 30h1v1h-1zM17 30h1v1h-1zM20 30h1v1h-1zM21 30h1v1h-1zM23 30h1v1h-1zM25 30h1v1h-1zM26 30h1v1h-1zM28 30h1v1h-1zM31 30h1v1h-1zM33 30h1v1h-1zM35 30h1v1h-1zM37 30h1v1h-1zM40 30h1v1h-1zM3 31h1v1h-1zM4 31h1v1h-1zM7 31h1v1h-1zM9 31h1v1h-1zM14 31h1v1h-1zM18 31h1v1h-1zM19 31h1v1h-1zM20 31h1v1h-1zM22 31h1v1h-1zM26 31h1v1h-1zM27 31h1v1h-1zM28 31h1v1h-1zM30 31h1v1h-1zM31 31h1v1h-1zM32 31h1v1h-1zM34 31h1v1h-1zM35 31h1v1h-1zM36 31h1v1h-1zM0 32h1v1h-1zM1 32h1v1h-1zM3 32h1v1h-1zM4 32h1v1h-1zM6 32h1v1h-1zM7 32h1v1h-1zM9 32h1v1h-1zM10 32h1v1h-1zM11 32h1v1h-1zM15 32h1v1h-1zM16 32h1v1h-1zM23 32h1v1h-1zM24 32h1v1h-1zM25 32h1v1h-1zM28 32h1v1h-1zM29 32h1v1h-1zM32 32h1v1h-1zM33 32h1v1h-1zM34 32h1v1h-1zM35 32h1v1h-1zM36 32h1v1h-1zM37 32h1v1h-1zM40 32h1v1h-1zM8 33h1v1h-1zM11 33h1v1h-1zM12 33h1v1h-1zM17 33h1v1h-1zM19 33h1v1h-1zM20 33h1v1h-1zM24 33h1v1h-1zM25 33h1v1h-1zM28 33h1v1h-1zM29 33h1v1h-1zM30 33h1v1h-1zM32 33h1v1h-1zM36 33h1v1h-1zM37 33h1v1h-1zM40 33h1v1h-1zM0 34h1v1h-1zM1 34h1v1h-1zM2 34h1v1h-1zM3 34h1v1h-1zM4 34h1v1h-1zM5 34h1v1h-1zM6 34h1v1h-1zM8 34h1v1h-1zM9 34h1v1h-1zM12 34h1v1h-1zM16 34h1v1h-1zM19 34h1v1h-1zM20 34h1v1h-1zM21 34h1v1h-1zM22 34h1v1h-1zM23 34h1v1h-1zM27 34h1v1h-1zM28 34h1v1h-1zM31 34h1v1h-1zM32 34h1v1h-1zM34 34h1v1h-1zM36 34h1v1h-1zM37 34h1v1h-1zM38 34h1v1h-1zM40 34h1v1h-1zM0 35h1v1h-1zM6 35h1v1h-1zM11 35h1v1h-1zM16 35h1v1h-1zM17 35h1v1h-1zM20 35h1v1h-1zM22 35h1v1h-1zM23 35h1v1h-1zM24 35h1v1h-1zM25 35h1v1h-1zM27 35h1v1h-1zM30 35h1v1h-1zM31 35h1v1h-1zM32 35h1v1h-1zM36 35h1v1h-1zM37 35h1v1h-1zM0 36h1v1h-1zM2 36h1v1h-1zM3 36h1v1h-1zM4 36h1v1h-1zM6 36h1v1h-1zM9 36h1v1h-1zM10 36h1v1h-1zM11 36h1v1h-1zM12 36h1v1h-1zM14 36h1v1h-1zM16 36h1v1h-1zM17 36h1v1h-1zM20 36h1v1h-1zM21 36h1v1h-1zM22 36h1v1h-1zM23 36h1v1h-1zM25 36h1v1h-1zM27 36h1v1h-1zM29 36h1v1h-1zM30 36h1v1h-1zM31 36h1v1h-1zM32 36h1v1h-1zM33 36h1v1h-1zM34 36h1v1h-1zM35 36h1v1h-1zM36 36h1v1h-1zM37 36h1v1h-1zM38 36h1v1h-1zM40 36h1v1h-1zM0 37h1v1h-1zM2 37h1v1h-1zM3 37h1v1h-1zM4 37h1v1h-1zM6 37h1v1h-1zM9 37h1v1h-1zM12 37h1v1h-1zM14 37h1v1h-1zM16 37h1v1h-1zM19 37h1v1h-1zM22 37h1v1h-1zM24 37h1v1h-1zM27 37h1v1h-1zM31 37h1v1h-1zM35 37h1v1h-1zM36 37h1v1h-1zM37 37h1v1h-1zM38 37h1v1h-1zM39 37h1v1h-1zM0 38h1v1h-1zM2 38h1v1h-1zM3 38h1v1h-1zM4 38h1v1h-1zM6 38h1v1h-1zM8 38h1v1h-1zM10 38h1v1h-1zM11 38h1v1h-1zM12 38h1v1h-1zM13 38h1v1h-1zM15 38h1v1h-1zM19 38h1v1h-1zM23 38h1v1h-1zM24 38h1v1h-1zM26 38h1v1h-1zM27 38h1v1h-1zM29 38h1v1h-1zM30 38h1v1h-1zM31 38h1v1h-1zM32 38h1v1h-1zM33 38h1v1h-1zM36 38h1v1h-1zM40 38h1v1h-1zM0 39h1v1h-1zM6 39h1v1h-1zM13 39h1v1h-1zM15 39h1v1h-1zM16 39h1v1h-1zM17 39h1v1h-1zM18 39h1v1h-1zM19 39h1v1h-1zM20 39h1v1h-1zM22 39h1v1h-1zM23 39h1v1h-1zM24 39h1v1h-1zM27 39h1v1h-1zM28 39h1v1h-1zM30 39h1v1h-1zM31 39h1v1h-1zM32 39h1v1h-1zM33 39h1v1h-1zM34 39h1v1h-1zM37 39h1v1h-1zM0 40h1v1h-1zM1 40h1v1h-1zM2 40h1v1h-1zM3 40h1v1h-1zM4 40h1v1h-1zM5 40h1v1h-1zM6 40h1v1h-1zM8 40h1v1h-1zM9 40h1v1h-1zM11 40h1v1h-1zM12 40h1v1h-1zM16 40h1v1h-1zM20 40h1v1h-1zM23 40h1v1h-1zM24 40h1v1h-1zM28 40h1v1h-1zM31 40h1v1h-1zM32 40h1v1h-1zM36 40h1v1h-1zM37 40h1v1h-1zM38 40h1v1h-1zM40 40h1v1h-1z"/></svg></div>
+          <div>
+            <strong>Escaneá con tu celular</strong>
+            <p>El modelo se abre directo en realidad aumentada.</p>
+          </div>
+        </div>
+
+        <p class="t c m-credit">Un producto de KUKO INDUSTRIES · De Palma · Reynaga Ríos<br>2026</p>
+      </section>
+
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    var root = document.documentElement;
+    var card = document.getElementById('viewer-card');
+    var mv = document.getElementById('viewer');
+    var img = document.getElementById('loader-img');
+    var fill = document.getElementById('bar-fill');
+    var bar = document.getElementById('bar');
+    var pct = document.getElementById('pct');
+    var dots = document.getElementById('dots');
+    var title = document.getElementById('loader-title');
+    var note = document.getElementById('loader-note');
+
+    // ---------- Puntos suspensivos: "." -> ".." -> "..." y repite ----------
+    var dotStep = 0;
+    var dotTimer = setInterval(function () {
+      dotStep = (dotStep + 1) % 3;
+      dots.textContent = '.'.repeat(dotStep + 1);
+    }, 450);
+
+    // ---------- Progreso: barra, porcentaje y paso de gris a color ----------
+    var target = 0;      // progreso real que informa model-viewer (0 a 1)
+    var shown = 0;       // progreso que se muestra, avanza suave hacia el real
+    var loaded = false;
+    var failed = false;
+    var finished = false;
+    var start = performance.now();
+    var lastPct = -1;
+
+    mv.addEventListener('progress', function (e) {
+      target = Math.max(target, e.detail.totalProgress || 0);
+    });
+
+    mv.addEventListener('load', function () {
+      loaded = true;
+      target = 1;
+      checkAR();
+    });
+
+    mv.addEventListener('error', function () {
+      showError('No se pudo cargar el modelo 3D.', 'Recargá la página para volver a intentarlo.');
+    });
+
+    function render(p) {
+      var value = Math.round(p * 100);
+      if (value === lastPct) return;
+      lastPct = value;
+      fill.style.width = value + '%';
+      pct.textContent = value + '%';
+      bar.setAttribute('aria-valuenow', value);
+      img.style.filter = 'grayscale(' + (1 - p).toFixed(3) + ')';
+    }
+
+    function tick(now) {
+      if (finished || failed) return;
+      var elapsed = now - start;
+
+      // mientras no llegan datos, un avance mínimo para que no parezca trabado
+      if (!loaded && target < 0.05) target = Math.max(target, Math.min(0.05, elapsed / 8000));
+
+      var gap = target - shown;
+      if (gap > 0) shown = Math.min(target, shown + Math.max(gap * 0.07, 0.003));
+      render(shown);
+
+      if (loaded && shown >= 0.999 && elapsed > 1200) {
+        finish();
+        return;
+      }
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+
+    function finish() {
+      finished = true;
+      render(1);
+      clearInterval(dotTimer);
+      title.textContent = 'Listo';
+      setTimeout(function () { card.classList.add('is-ready'); }, 350);
+    }
+
+    function showError(main, detail) {
+      failed = true;
+      clearInterval(dotTimer);
+      title.textContent = main;
+      note.textContent = detail;
+      bar.hidden = true;
+      pct.hidden = true;
+      img.style.filter = 'none';
+    }
+
+    setTimeout(function () {
+      if (!loaded && !failed) note.textContent = 'Está tardando más de lo normal. El modelo pesa varios MB.';
+    }, 20000);
+
+    // ---------- Realidad aumentada ----------
+    function setAR(can) {
+      root.classList.toggle('can-ar', can);
+      root.classList.toggle('no-ar', !can);
+    }
+
+    function checkAR() {
+      setAR(Boolean(mv.canActivateAR));
+    }
+
+    if (window.customElements) {
+      customElements.whenDefined('model-viewer').then(function () {
+        setTimeout(checkAR, 400);
+      });
+    }
+
+    // si la librería no cargó en 15 s (sin internet o bloqueada)
+    setTimeout(function () {
+      if (!window.customElements || !customElements.get('model-viewer')) {
+        setAR(false);
+        if (!loaded) showError('No se pudo cargar el visor 3D.', 'Revisá la conexión y recargá la página.');
+      }
+    }, 15000);
+
+    document.querySelectorAll('[data-ar]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (mv.canActivateAR) {
+          mv.activateAR();
+        } else {
+          setAR(false);
+        }
+      });
+    });
+
+    // copiar el enlace para abrirlo en Chrome o Safari
+    var copyBtn = document.getElementById('copy-link');
+    copyBtn.addEventListener('click', function () {
+      var url = location.href;
+      var done = function () { copyBtn.textContent = 'Enlace copiado'; };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(done, function () { prompt('Copiá este enlace:', url); });
+      } else {
+        prompt('Copiá este enlace:', url);
+      }
+    });
+
+    // ---------- Botones de cámara (escritorio) ----------
+    var initialOrbit = '0deg 75deg 105%';
+
+    document.getElementById('cam-reset').addEventListener('click', function () {
+      mv.cameraOrbit = initialOrbit;
+      mv.cameraTarget = 'auto auto auto';
+      mv.fieldOfView = 'auto';
+      if (mv.resetTurntableRotation) mv.resetTurntableRotation();
+    });
+
+    function zoomBy(factor) {
+      if (!mv.getCameraOrbit) return;
+      var o = mv.getCameraOrbit();
+      mv.cameraOrbit = o.theta + 'rad ' + o.phi + 'rad ' + (o.radius * factor) + 'm';
+    }
+    document.getElementById('cam-in').addEventListener('click', function () { zoomBy(0.82); });
+    document.getElementById('cam-out').addEventListener('click', function () { zoomBy(1.22); });
+  })();
+  </script>
+</body>
+</html>
