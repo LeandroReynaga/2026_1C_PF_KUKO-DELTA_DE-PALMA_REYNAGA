@@ -43,4 +43,3 @@ Fotos del robot, renders del modelo 3D, la asignación de pines de la placa, los
 | Archivo | Descripción |
 |---|---|
 | `KUKO_AR/` | Página con el visor 3D y la realidad aumentada, publicada en GitHub Pages: [abrir](https://leandroreynaga.github.io/2026_1C_PF_KUKO-DELTA_DE-PALMA_REYNAGA/Multimedia/KUKO_AR/). |
-| `qr_ar.png` | Código QR que abre esa página en el celular. |

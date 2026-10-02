@@ -206,7 +206,7 @@ tanto el protocolo de comunicación como la matemática del movimiento.
   <a href="https://leandroreynaga.github.io/2026_1C_PF_KUKO-DELTA_DE-PALMA_REYNAGA/Multimedia/KUKO_AR/"><b>🔍 Ver en 3D y Realidad Aumentada</b></a>
 </p>
 <p align="center">
-  <img src="Multimedia/qr_ar.png" alt="Código QR para ver el robot en realidad aumentada" width="160">
+  <img src="Multimedia/KUKO_AR/qr_ar.png" alt="Código QR para ver el robot en realidad aumentada" width="160">
   <br>
   <em>Enlace 1: Haz clic en el render o escanea el QR con el celular para ver el robot en 3D y en realidad aumentada.</em>
 </p>
