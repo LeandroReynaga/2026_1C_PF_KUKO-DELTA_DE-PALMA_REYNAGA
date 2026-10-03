@@ -1985,6 +1985,26 @@ void Robot::updateHoming()
         // espera (no una lectura puntual).
         encoders.calibrarHoming(HOME_ANGLE_M1, HOME_ANGLE_M2, HOME_ANGLE_M3);
 
+        // Chocar, rehomear y volver a chocar contra lo mismo no lo va a
+        // resolver: hay algo fisico que sacar antes de seguir. El robot se
+        // queda en home, frenado y con la cinta parada, hasta que el
+        // operador mande 'R'. La supervision queda desarmada: alguien va a
+        // poner las manos en el brazo, y que eso se lea como otra colision
+        // haria que el robot se mueva solo.
+        if (colisionesSeguidas >= (uint8_t)MAX_COLISIONES_SEGUIDAS)
+        {
+            guard.desarmar();
+
+            Serial.print("[COLISION] ");
+            Serial.print(colisionesSeguidas);
+            Serial.println(" colisiones seguidas sin completar una pieza: hay algo trabado.");
+            Serial.println("[COLISION] Robot detenido en home. Revisar y mandar 'R'.");
+
+            moveIssued = false;
+            state = ERROR;
+            return;
+        }
+
         // Recien aca queda armada la supervision: con la referencia ya
         // promediada y los pasos de los 3 ejes en su valor de home.
         guard.fijarReferencia();
@@ -2793,23 +2813,11 @@ void Robot::dispararColision(uint8_t eje, float errorDeg, float cmdDelta, float 
         Serial.println(")");
     }
 
+    // Si con esta se llega a MAX_COLISIONES_SEGUIDAS, el robot igual pasa
+    // por la pausa y el rehoming: el que se detiene es el final del homing
+    // (updateHoming), asi el brazo queda quieto en home y no apoyado contra
+    // lo que lo freno.
     colisionesSeguidas++;
-
-    if (colisionesSeguidas >= (uint8_t)MAX_COLISIONES_SEGUIDAS)
-    {
-        // Chocar, rehomear y volver a chocar contra lo mismo no lo va a
-        // resolver: hay algo fisico que sacar antes de seguir.
-        conveyor.stop();
-
-        Serial.print("[COLISION] ");
-        Serial.print(colisionesSeguidas);
-        Serial.println(" colisiones seguidas sin completar una pieza: hay algo trabado.");
-        Serial.println("[COLISION] Robot detenido. Revisar y mandar 'R'.");
-
-        moveIssued = false;
-        state = ERROR;
-        return;
-    }
 
     Serial.print("[COLISION] parado ");
     Serial.print(COLLISION_PAUSE_MS / 1000.0f, 1);
@@ -2835,7 +2843,14 @@ void Robot::updateCollisionStop()
     // homing, las piezas ya no estan donde su timestamp dice que estarian.
     // Las que queden sobre la cinta las vuelve a detectar la vision cuando
     // arranque de nuevo.
+    //
+    // startHoming(false) pone colisionesSeguidas en cero, y aca no tiene
+    // que hacerlo: si no, la racha nunca pasaba de 1 y el robot rehomeaba
+    // para siempre contra lo mismo. Solo la cortan una pieza entregada o el
+    // operador con 'R'.
+    const uint8_t seguidas = colisionesSeguidas;
     startHoming(false);
+    colisionesSeguidas = seguidas;
 }
 
 // ============================================================
