@@ -1047,6 +1047,8 @@ class Interfaz:
 
         self.caja_avisada = False
         self._dialogo_caja = None
+        self.bloqueo_avisado = False
+        self._dialogo_bloqueo = None
         self._repeticion = None
 
         # ---------------- Modo teach ----------------
@@ -2176,6 +2178,7 @@ class Interfaz:
         self._guard_y_paro()
         self._modo_y_contadores()
         self._avisar_caja_completa()
+        self._avisar_bloqueo()
         self._latencia()
         self._refrescar_ajustes()
         self._refrescar_paneles()
@@ -2346,6 +2349,71 @@ class Interfaz:
 
         self._dialogo_caja = dialogo
         dialogo.open()
+
+    def _avisar_bloqueo(self) -> None:
+        est = self.estado
+        e = est.e
+
+        if not (e and e.estado is pr.EstadoRobot.ERROR):
+            # Se rearma recien cuando el robot sale de ERROR: si no,
+            # "Revisar" lo cerraria y a la vuelta siguiente se volveria a abrir.
+            if self.bloqueo_avisado and self._dialogo_bloqueo is not None:
+                self._dialogo_bloqueo.close()
+
+            self.bloqueo_avisado = False
+            return
+
+        if self.bloqueo_avisado:
+            return
+
+        # A ERROR se llega por tres caminos: el STOP manual, un homing que no
+        # encuentra los finales y la racha de colisiones seguidas. Lo que los
+        # distingue es el ultimo fallo: MANUAL no avisa (lo pidio el propio
+        # operador), HOMING es un brazo trabado que no deja llegar a home, y
+        # una colision es la racha. Los de encoder no cuentan: no frenan el
+        # robot.
+        frenaron = [f for f in est.rendimiento.lista_fallos() if f.tipo != "ENCODER"]
+
+        if not frenaron or frenaron[-1].tipo not in ("COLISION", "DESCALIBRACION", "HOMING"):
+            return
+
+        self.bloqueo_avisado = True
+
+        if frenaron[-1].tipo == "HOMING":
+            causa = "Falla en el homing"
+        else:
+            param = est.parametros.get("col_max")
+            seguidas = int(param.valor) if param and param.valor is not None else 3
+            causa = f"{seguidas} fallos consecutivos"
+
+        if self._dialogo_bloqueo is None:
+            # Persistente: con el robot bloqueado hay que elegir uno de los
+            # dos botones, no se descarta con un click afuera.
+            with ui.dialog().props("persistent") as dialogo, \
+                    ui.card().style(f"background:{PANEL};color:{TEXTO}"):
+                ui.label("Robot bloqueado").classes("text-lg").style(f"color:{ROJO_STOP}")
+                self._texto_bloqueo = ui.label().style(f"color:{APAGADO};max-width:380px")
+
+                with ui.row().classes("w-full justify-end gap-2"):
+                    ui.button("Revisar", on_click=self._revisar_bloqueo) \
+                        .props("flat dense no-caps")
+                    ui.button("Reanudar",
+                              on_click=lambda: (dialogo.close(), self._paro())) \
+                        .props("dense unelevated no-caps") \
+                        .style(f"background:{CELESTE}!important;color:#0B1220!important")
+
+            self._dialogo_bloqueo = dialogo
+
+        self._texto_bloqueo.text = f"{causa}. A la espera de un operador."
+        self._dialogo_bloqueo.open()
+
+    def _revisar_bloqueo(self) -> None:
+        self._dialogo_bloqueo.close()
+
+        # El robot sigue en ERROR: el boton de STOP ya dice Re-Homing, que
+        # es el mismo 'R' que manda Reanudar.
+        ui.notify("El robot sigue detenido. Para reanudar: Re-Homing",
+                  color="warning")
 
     def _latencia(self) -> None:
         est = self.estado

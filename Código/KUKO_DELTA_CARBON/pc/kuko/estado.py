@@ -221,19 +221,20 @@ class EstadoSistema:
             return Chequeo(ROJO, f"eje {malos[0]}: {self.h.ejes[malos[0] - 1].encoder}"
                                  + (f" (+{len(malos) - 1})" if len(malos) > 1 else ""))
 
-        # Ganancia: 1,00 es el encoder viendo todo el recorrido. Por debajo
-        # de 0,90 se pierden cuentas de verdad; entre 0,90 y 0,97 avisa sin
-        # gritar, porque un valor estable ahi no es lo mismo que un canal
-        # que se esta yendo.
+        # Ganancia: 1,00 es el encoder viendo todo el recorrido. Con el ruido
+        # de los AS5600 analogicos, en marcha normal queda casi siempre entre
+        # 0,90 y 0,97 y a veces un poco por debajo, asi que los umbrales van
+        # con margen: ambar bajo 0,80 y rojo bajo 0,70, que ya no es ruido
+        # sino un eje que no sigue al motor.
         ganancias = [x.ganancia for x in self.h.ejes if x.ganancia]
 
         if ganancias:
             peor = min(ganancias)
 
-            if peor < 0.90:
+            if peor < 0.70:
                 return Chequeo(ROJO, f"ganancia {peor:.2f}: pierde pasos")
 
-            if peor < 0.97:
+            if peor < 0.80:
                 return Chequeo(AMBAR, f"ganancia {peor:.2f} (ideal 1,00)")
 
         estrechos = [i + 1 for i, x in enumerate(self.h.ejes)

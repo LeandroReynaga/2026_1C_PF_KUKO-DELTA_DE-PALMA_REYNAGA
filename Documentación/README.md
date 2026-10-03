@@ -1,6 +1,6 @@
 # Documentación
 
-Documentación formal del proyecto: el brief, el informe técnico, las propuestas y los diagramas de Gantt.
+Documentación formal del proyecto: el brief, el informe técnico, las propuestas, los diagramas de Gantt y la presentación.
 
 ## Contenido
 
@@ -12,3 +12,4 @@ Documentación formal del proyecto: el brief, el informe técnico, las propuesta
 | **Propuesta final** | [`Propuesta_final.pdf`](Propuesta/Propuesta_final.pdf) | Propuesta definitiva del *KUKO Delta Carbon*. |
 | **Diagrama de Gantt inicial** | `Diagrama_de_Gantt_inicial` · [`.pdf`](Diagrama%20de%20Gantt/Diagrama_de_Gantt_inicial.pdf) · [`.docx`](Diagrama%20de%20Gantt/Diagrama_de_Gantt_inicial.docx) · [`.xlsx`](Diagrama%20de%20Gantt/Diagrama_de_Gantt_inicial.xlsx) | Planificación de tareas al inicio del proyecto. |
 | **Diagrama de Gantt final** | `Diagrama_de_Gantt_final` · [`.pdf`](Diagrama%20de%20Gantt/Diagrama_de_Gantt_final.pdf) · [`.docx`](Diagrama%20de%20Gantt/Diagrama_de_Gantt_final.docx) · [`.xlsx`](Diagrama%20de%20Gantt/Diagrama_de_Gantt_final.xlsx) | Tareas a lo largo del tiempo, en su versión final. |
+| **Presentación** | `Presentación` · [`.pdf`](Presentaci%C3%B3n/Presentaci%C3%B3n.pdf) · [`.pptx`](Presentaci%C3%B3n/Presentaci%C3%B3n.pptx) | Presentación final del proyecto, 23 diapositivas. El `.pptx` incluye los GIF animados; el `.pdf` es la versión estática. |
